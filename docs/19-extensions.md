@@ -54,7 +54,12 @@ The manifest is the declarative half — the role Kong's `schema.lua` plays. It 
 
 A bad manifest fails **the extension**, never the session.
 
-**Permissions are capability declarations.** They scope what `mcode.fs.*` and `mcode.spawn` will do on the extension's behalf. They are load-bearing because the VM boundary removes every other route to the filesystem and the process table — an extension cannot open a file except through `mcode.fs.*`. They are still not a guarantee: a bug in our own `mcode.fs.*` implementation is outside the VM boundary (`12` §Layer 3).
+**Permissions are capability declarations**, and `18` §Capability model holds the exact mapping from each permission to the host functions it gates. Two properties matter here:
+
+- **Default deny.** Absent or empty means no gated function is callable; the extension loads and runs with the unprivileged surface only. A denial returns `nil, err`, never throws.
+- **Checked at call time, against the caller.** Not at load, not against a session setting. An extension that calls `mcode.fs.write` without `fs_write` gets a denial it can handle, and the same check applies when its *tool* runs, because tool execution re-enters through the same host functions.
+
+They are load-bearing because the VM boundary removes every other route to the filesystem and the process table — an extension cannot open a file except through `mcode.fs.*`. They are still not a guarantee: a bug in our own `mcode.fs.*` implementation is outside the VM boundary (`12` §Layer 3).
 
 ## Loading lifecycle
 
@@ -108,7 +113,6 @@ public:
     // extension actually gone.
     virtual auto unload( const extension_id& id ) -> status = 0;
 
-    // Tool and command calls. `args_json` is the tool's raw arguments.
     virtual auto invoke( const extension_id& id, std::string_view entry, std::string_view args_json )
         -> result<std::string> = 0;
 

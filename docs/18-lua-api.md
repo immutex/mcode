@@ -76,7 +76,7 @@ Our resolver is ~80 lines, resolves only inside the extension root, executes no 
 | `mcode.context.add_instructions(text, opts?)` | contribute to the system prompt; **budgeted and counted** (`19`) | Neovim `before_agent_start`-style rewrite, but budgeted |
 | `mcode.ext.name` | the calling extension's own name, as a string | Needed for self-attribution without a `debug` API that we removed |
 
-**That is 22 rows: 25 callable names and 3 fields, and v1 is closed.** `require` is deliberately *not* in this table: Luau treats it as a language-level global, so the host injects it as one. It is a capability all the same, and it is listed under "Extension layout" above. Anything beyond this — string helpers, path manipulation, table utilities — belongs in a pure-Luau companion library, **not** the C-exposed surface. Neovim's `vim.*` utility creep is the cautionary case.
+**That is 22 rows: 25 callable names and 3 fields, and v1 is closed.** `require` is deliberately *not* in this table — Luau treats it as a language-level global, so the host injects it as one. It is a capability all the same, and it is listed under "Extension layout" above. Anything beyond this — string helpers, path manipulation, table utilities — belongs in a pure-Luau companion library, **not** the C-exposed surface. Neovim's `vim.*` utility creep is the cautionary case.
 
 Deliberate omissions, each for a stated reason:
 
@@ -89,7 +89,54 @@ Deliberate omissions, each for a stated reason:
 | `mcode.session.fork` | Deferred. Branching is a host concern until an extension actually needs speculative work; shipping it now freezes a signature nobody has used |
 | Anything async | v1 hooks are synchronous with a budget. A coroutine-based `on` is an open question, not a v1 commitment |
 
-**What "frozen" costs.** Every one of these is addable later — `api_version` is additive-only and `mcode.capabilities` exists for feature detection. The reverse is not true: an entry shipped and later found wrong can only be deprecated, never removed. That asymmetry is why the bar for v1 is "proven need", not "probably useful".
+**The asymmetry is the argument.** Every cut entry is addable later — `api_version` is additive-only, and `capabilities` exists for feature detection. The reverse does not hold: an entry shipped and later found wrong can only be deprecated, never removed. So the v1 bar is "proven need", not "probably useful".
+
+## Capability model
+
+**Default deny.** The manifest declares permissions; absent means none. Every gated entry is checked at call time against the *calling* extension's manifest — never the loading extension's, and never a session-wide setting.
+
+| Permission | Gates | Denied means |
+|---|---|---|
+| *(none)* | `api_version`, `capabilities`, `ext.name`, `log.*`, `notify`, `cfg.get`, `on`, `off`, `emit`, `defer`, `timer.*`, `tool.register`, `tool.unregister`, `cmd.register`, `skill.register`, `require`, `session.snapshot` | — always available |
+| `fs_read` | `fs.read` | `nil, "permission denied"` |
+| `fs_write` | `fs.write` | `nil, "permission denied"` |
+| `net` | `net.get`, `net.search` | `nil, "permission denied"` |
+| `spawn` | `spawn` | `nil, "permission denied"` |
+| `mcp` | `mcp.register` | `nil, "permission denied"` |
+| `context` | `context.add_instructions` | `nil, "permission denied"` |
+| `session_fork` | `session.fork` | `nil, "permission denied"` |
+
+**A denied call is environmental failure, not a contract violation** — it returns `nil, err`, matching `fs.read` on a missing file. A permission check that throws would turn a policy decision into an error path the extension cannot handle gracefully.
+
+`tool.register` is unprivileged on purpose. A tool is a *declaration*: it lands in the registry and, when the model calls it, the call runs through the same permission engine as a built-in (`12` §Decision table). Gating registration would be redundant and would push the check to the wrong layer. What a tool may *do* is gated by the extension's other permissions, not by its right to exist.
+
+### Enforcement primitives
+
+Named, because "the host checks it" is not an implementation:
+
+| Concern | Primitive |
+|---|---|
+| Globals and libraries readonly; safe-env for constant folding | `luaL_sandbox`, called **after** the API surface is registered |
+| Per-extension private globals | `luaL_sandboxthread` on a dedicated thread |
+| Thread lifetime across reload | `lua_ref` / `lua_unref` |
+| Memory ceiling and per-extension accounting (`B3`) | a custom `lua_Alloc` counting bytes, refusing past the limit |
+| Time budget, hang kill | `lua_callbacks()->interrupt`, plus a host watchdog on the wall clock |
+| Host userdata destructors that must not re-enter | `lua_newuserdatadtor` |
+
+### Every entry is bounded
+
+The interrupt cannot preempt *inside* a host call, so an unbounded entry defeats the kill switch (`12` §Layer 3). Each entry states a ceiling:
+
+| Class | Entries | Bound |
+|---|---|---|
+| Constant time | everything except the rows below | No I/O, no input-proportional allocation; returns immediately |
+| Filesystem | `fs.read`, `fs.write` | Byte cap (32 MiB default); workspace-scoped path resolution |
+| Network | `net.get`, `net.search` | Connect + total timeout; response byte cap; egress allowlist |
+| Process | `spawn` | Wall-clock timeout, killed on expiry; stdout/stderr caps |
+| Session | `session.fork` | Append-only; O(1) in history length |
+| Host-mediated | `mcp.register`, `context.add_instructions` | Validated and stored; no execution, no I/O |
+
+**A new entry without a stated bound is a defect, not an oversight.** The bound is part of the frozen surface: it is what the 50 ms veto budget (`18` §Events and hooks) and the per-extension CPU accounting are computed from.
 
 ## Events and hooks
 
@@ -190,8 +237,7 @@ What the permission system enforces for extensions: `mcode.fs.*` and `mcode.spaw
 - https://raw.githubusercontent.com/neovim/neovim/master/runtime/doc/lua.txt — API levels, `vim.schedule`, result-or-message, bridge copy semantics, autocmd nesting
 - https://raw.githubusercontent.com/neovim/neovim/master/runtime/doc/lua-guide.txt — layering, interrupts, user commands
 - https://raw.githubusercontent.com/neovim/neovim/master/MAINTAIN.md — deprecation cadence
-- https://wezterm.org/config/lua/wezterm/on.html — ordered callbacks, `false` short-circuit
-- https://wezterm.org/config/files.html — config reload semantics
+- https://wezterm.org/config/lua/wezterm/on.html + /config/files.html — ordered callbacks, `false` short-circuit, reload semantics
 - https://raw.githubusercontent.com/mpv-player/mpv/master/DOCS/man/lua.rst — `register_event`, `observe_property` coalescing, `add_hook` priority, thread-per-script
 - https://awesomewm.org/apidoc/ — signals, `gears.protected_call`, error loop guard
 - https://www.hammerspoon.org/go/ — GC lifetime footguns, `hs.showError`
