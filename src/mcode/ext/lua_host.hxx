@@ -29,6 +29,7 @@ namespace mcode {
 			std::chrono::steady_clock::time_point deadline{ };
 			bool armed = false;
 			bool expired = false;
+			std::uint64_t breaches = 0;
 		};
 
 	}
@@ -46,8 +47,16 @@ namespace mcode {
 		// back edges and calls -- not per instruction, and never inside a host
 		// function.
 		std::chrono::milliseconds time_limit{ 0 };
+
+		// Resolves a require path against the extension root. Returning an empty
+		// optional is a load error; the host never falls back to the filesystem
+		// at large.
+		std::function< std::optional< std::string >( std::string_view module_path ) > module_loader;
 	};
 
+	// One VM per extension. Two extensions share no mutable state: not globals,
+	// not the allocator, not the watchdog. That is what makes the memory ceiling
+	// and the time budget attributable rather than aggregate.
 	class lua_host {
 	public:
 		~lua_host( );
@@ -60,10 +69,9 @@ namespace mcode {
 
 		[[nodiscard]] static auto create( lua_host_options options = { } ) -> result< lua_host >;
 
-		// The mcode table becomes readonly at the first call to any of the
-		// execution entry points: Luau enforces readonly on every C API write
-		// path, so there is no host-side bypass. Register the whole API surface
-		// up front -- which is what docs/18 freezes it for.
+		// The mcode table becomes readonly at the first call to any execution
+		// entry point: Luau enforces readonly on every C API write path, so there
+		// is no host-side bypass. Register the whole API surface up front.
 		auto register_host_function( std::string_view name, host_function function ) -> status;
 		auto set_global_string( std::string_view name, std::string_view text ) -> status;
 
@@ -72,19 +80,26 @@ namespace mcode {
 
 		[[nodiscard]] auto eval_to_string( std::string_view expression ) -> result< std::string >;
 
-		// Discards the extension thread and installs a fresh sandboxed one. The
-		// VM's shared global state survives; host registrations the extension
-		// made must be dropped by the caller.
-		auto reset_thread( ) -> status;
+		// Calls a Lua function by name with one string argument. Used for hook
+		// dispatch; returns the raw result string.
+		[[nodiscard]] auto call_global( std::string_view name, std::string_view argument )
+			-> result< std::string >;
+
+		// Discards the thread's stack and call frames. The extension's own globals
+		// survive, so the caller must also drop whatever the extension registered
+		// with the host.
+		auto reset( ) -> status;
 
 		[[nodiscard]] auto sealed( ) const noexcept -> bool { return sealed_; }
-		[[nodiscard]] auto valid( ) const noexcept -> bool { return state_ != nullptr; }
+		[[nodiscard]] auto valid( ) const noexcept -> bool { return thread_ != nullptr; }
 		[[nodiscard]] auto raw( ) noexcept -> lua_State* { return thread_; }
+		[[nodiscard]] auto name( ) const noexcept -> std::string_view { return extension_name_; }
 
 		[[nodiscard]] auto version_string( ) const -> std::string;
 		[[nodiscard]] auto bytes_allocated( ) const noexcept -> std::uint64_t;
 		[[nodiscard]] auto peak_bytes_allocated( ) const noexcept -> std::uint64_t;
 		[[nodiscard]] auto memory_refusals( ) const noexcept -> std::uint64_t;
+		[[nodiscard]] auto time_breaches( ) const noexcept -> std::uint64_t;
 		[[nodiscard]] auto time_expired( ) const noexcept -> bool;
 
 	private:
@@ -103,6 +118,7 @@ namespace mcode {
 		std::unique_ptr< detail::allocator_state > allocator_;
 		std::unique_ptr< detail::watchdog_state > watchdog_;
 		std::unique_ptr< std::map< std::string, host_function, std::less<> > > host_functions_;
+		std::unique_ptr< std::map< std::string, std::string, std::less<> > > modules_;
 	};
 
 }

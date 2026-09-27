@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <utility>
 
@@ -21,7 +22,7 @@ namespace mcode {
 		auto pop_error( lua_State* state ) -> std::string {
 			auto length = std::size_t{ 0 };
 			const auto* message = lua_tolstring( state, -1, &length );
-			auto out = ( message != nullptr ) ? std::string{ message, length } : std::string{ "unknown Lua error" };
+			auto out = ( message != nullptr ) ? std::string{ message, length } : std::string{ "unknown Luau error" };
 
 			lua_pop( state, 1 );
 
@@ -58,9 +59,8 @@ namespace mcode {
 				return nullptr;
 			}
 
-			// new_size == 0 is free, so the block is not in `bytes` yet only on
-			// the first allocation; for a realloc the old size is already
-			// counted and is being replaced, not added.
+			// A realloc replaces the old block rather than adding to it, so the
+			// projected total subtracts old_size first.
 			const auto projected = counters->bytes - old_size + new_size;
 
 			if ( counters->limit != 0 && projected > counters->limit ) {
@@ -83,8 +83,7 @@ namespace mcode {
 		}
 
 		auto interrupt( lua_State* state, int gc ) -> void {
-			// Negative gc values are real safepoints; non-negative ones are GC
-			// steps, which the VM reports on the same callback.
+			// Non-negative values are GC steps, which share this callback.
 			if ( gc >= 0 ) {
 				return;
 			}
@@ -95,6 +94,9 @@ namespace mcode {
 				return;
 			}
 
+			// The callback is global state but the deadline is not: this looks the
+			// watchdog up through the running thread, so extension A's budget can
+			// never fire inside extension B.
 			auto* watchdog = watchdog_from( state );
 
 			if ( watchdog == nullptr || !watchdog->armed ) {
@@ -106,6 +108,7 @@ namespace mcode {
 			}
 
 			watchdog->expired = true;
+			++watchdog->breaches;
 
 			luaL_error( state, "extension exceeded its time budget" );
 		}
@@ -146,6 +149,32 @@ namespace mcode {
 			return 1;
 		}
 
+		// Replaces a module's return value with the cached copy, so a module body
+		// runs once per VM regardless of how many times it is required.
+		auto module_require( lua_State* state ) -> int {
+			const auto* path = luaL_checkstring( state, 1 );
+
+			lua_getfield( state, LUA_REGISTRYINDEX, "mcode.modules" );
+
+			if ( lua_istable( state, -1 ) ) {
+				lua_getfield( state, -1, path );
+
+				if ( lua_isnil( state, -1 ) == 0 ) {
+					lua_remove( state, -2 );
+
+					return 1;
+				}
+
+				lua_pop( state, 1 );
+			}
+
+			lua_pop( state, 1 );
+
+			lua_pushfstring( state, "module not found: %s", path );
+
+			lua_error( state );
+		}
+
 	}
 
 	lua_host::~lua_host( ) {
@@ -165,7 +194,8 @@ namespace mcode {
 		, extension_name_( std::move( other.extension_name_ ) )
 		, allocator_( std::move( other.allocator_ ) )
 		, watchdog_( std::move( other.watchdog_ ) )
-		, host_functions_( std::move( other.host_functions_ ) ) {
+		, host_functions_( std::move( other.host_functions_ ) )
+		, modules_( std::move( other.modules_ ) ) {
 		other.state_ = nullptr;
 		other.thread_ = nullptr;
 		other.thread_index_ = 0;
@@ -186,6 +216,7 @@ namespace mcode {
 			allocator_ = std::move( other.allocator_ );
 			watchdog_ = std::move( other.watchdog_ );
 			host_functions_ = std::move( other.host_functions_ );
+			modules_ = std::move( other.modules_ );
 
 			other.state_ = nullptr;
 			other.thread_ = nullptr;
@@ -207,6 +238,10 @@ namespace mcode {
 		return allocator_ != nullptr ? allocator_->refusals : 0;
 	}
 
+	auto lua_host::time_breaches( ) const noexcept -> std::uint64_t {
+		return watchdog_ != nullptr ? watchdog_->breaches : 0;
+	}
+
 	auto lua_host::time_expired( ) const noexcept -> bool {
 		return watchdog_ != nullptr && watchdog_->expired;
 	}
@@ -218,6 +253,7 @@ namespace mcode {
 		host.allocator_ = std::make_unique< detail::allocator_state >( );
 		host.watchdog_ = std::make_unique< detail::watchdog_state >( );
 		host.host_functions_ = std::make_unique< std::map< std::string, host_function, std::less<> > >( );
+		host.modules_ = std::make_unique< std::map< std::string, std::string, std::less<> > >( );
 
 		host.allocator_->limit = options.memory_limit_bytes;
 
@@ -237,14 +273,20 @@ namespace mcode {
 		lua_pushlightuserdata( state, host.watchdog_.get( ) );
 		lua_rawset( state, LUA_REGISTRYINDEX );
 
-		// Must be set before any extension code runs: the interrupt is the only
-		// mechanism that can stop a runaway script.
+		// Set before any extension code runs: the interrupt is the only mechanism
+		// that can stop a runaway script.
 		lua_callbacks( state )->interrupt = interrupt;
 
 		luaL_openlibs( state );
 
 		lua_newtable( state );
 		lua_setglobal( state, "mcode" );
+
+		lua_newtable( state );
+		lua_setfield( state, LUA_REGISTRYINDEX, "mcode.modules" );
+
+		lua_pushcfunction( state, module_require, "require" );
+		lua_setglobal( state, "require" );
 
 		return host;
 	}
@@ -319,15 +361,14 @@ namespace mcode {
 			return std::unexpected( fail( errc::lua_error, "lua_newthread failed" ) );
 		}
 
-		// Holds the thread alive; lua_newthread leaves it on the parent stack and
+		// Holds the thread alive: lua_newthread leaves it on the parent stack and
 		// an unreferenced thread is collectable.
 		lua_pushvalue( state_, -1 );
 		thread_index_ = lua_ref( state_, -1 );
-		lua_pop( state_, 1 );
 
 		// Gives the thread its own globals table that reads through to the frozen
-		// host globals, so extension globals are private and the host surface is
-		// not writable.
+		// host globals. Extension globals land there, so the host surface stays
+		// readonly while the extension still has a namespace to work in.
 		luaL_sandboxthread( thread );
 
 		lua_pop( state_, 1 );
@@ -355,31 +396,20 @@ namespace mcode {
 		watchdog_->armed = true;
 	}
 
-	auto lua_host::reset_thread( ) -> status {
-		if ( state_ == nullptr ) {
-			return std::unexpected( fail( errc::lua_error, "host has no lua_State" ) );
+	auto lua_host::reset( ) -> status {
+		if ( thread_ == nullptr ) {
+			return std::unexpected( fail( errc::lua_error, "host has no thread" ) );
 		}
 
 		if ( !sealed_ ) {
 			return std::unexpected( fail( errc::config, "host is not sealed" ) );
 		}
 
-		lua_unref( state_, thread_index_ );
-		thread_index_ = 0;
-		thread_ = nullptr;
-
-		lua_State* thread = lua_newthread( state_ );
-
-		if ( thread == nullptr ) {
-			return std::unexpected( fail( errc::lua_error, "lua_newthread failed" ) );
-		}
-
-		lua_pushvalue( state_, -1 );
-		thread_index_ = lua_ref( state_, -1 );
-		luaL_sandboxthread( thread );
-		lua_pop( state_, 1 );
-
-		thread_ = thread;
+		// Closes upvalues, clears call frames and thread state, and clears the
+		// stack. The thread keeps its own globals table, and the extension's
+		// required modules survive, so the caller must drop its host registrations
+		// too.
+		lua_resetthread( thread_ );
 
 		return { };
 	}
@@ -474,9 +504,63 @@ namespace mcode {
 			return out;
 		}
 
-		// lua_tolstring only converts strings and numbers. Booleans and nil --
-		// which is what most probes return -- have to go through the VM's own
-		// tostring, or the caller silently receives a placeholder.
+		// lua_tolstring converts only strings and numbers. Booleans and nil --
+		// what most probes return -- must go through the VM's own tostring.
+		lua_getglobal( thread_, "tostring" );
+		lua_pushvalue( thread_, -2 );
+
+		if ( lua_pcall( thread_, 1, 1, 0 ) != 0 ) {
+			const auto message = pop_error( thread_ );
+
+			lua_pop( thread_, 1 );
+
+			return std::unexpected( fail( errc::lua_error, "tostring failed: " + message ) );
+		}
+
+		text = lua_tolstring( thread_, -1, &length );
+
+		auto out = ( text != nullptr ) ? std::string{ text, length } : std::string{ };
+
+		lua_pop( thread_, 2 );
+
+		return out;
+	}
+
+	auto lua_host::call_global( const std::string_view name, const std::string_view argument )
+		-> result< std::string > {
+		if ( auto ready = seal( ); !ready ) {
+			return std::unexpected( ready.error( ) );
+		}
+
+		const auto key = std::string{ name };
+
+		lua_getglobal( thread_, key.c_str( ) );
+
+		if ( lua_isfunction( thread_, -1 ) == 0 ) {
+			lua_pop( thread_, 1 );
+
+			return std::unexpected( fail( errc::lua_error, "no function named '" + key + "'" ) );
+		}
+
+		lua_pushlstring( thread_, argument.data( ), argument.size( ) );
+
+		arm_watchdog( );
+
+		if ( lua_pcall( thread_, 1, 1, 0 ) != 0 ) {
+			return std::unexpected( fail( errc::lua_error, "runtime error: " + pop_error( thread_ ) ) );
+		}
+
+		auto length = std::size_t{ 0 };
+		auto* text = lua_tolstring( thread_, -1, &length );
+
+		if ( text != nullptr ) {
+			auto out = std::string{ text, length };
+
+			lua_pop( thread_, 1 );
+
+			return out;
+		}
+
 		lua_getglobal( thread_, "tostring" );
 		lua_pushvalue( thread_, -2 );
 

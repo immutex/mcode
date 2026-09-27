@@ -243,7 +243,6 @@ auto main( int argument_count, char** arguments ) -> int {
 			} ESCAPES[] = {
 				{ "(io ~= nil)", "io is absent" },
 				{ "(package ~= nil)", "package is absent" },
-				{ "(require ~= nil)", "require is absent" },
 				{ "(type(os.execute) ~= 'nil')", "os.execute is absent" },
 				{ "(type(os.getenv) ~= 'nil')", "os.getenv is absent" },
 				{ "(type(os.remove) ~= 'nil')", "os.remove is absent" },
@@ -298,6 +297,7 @@ auto main( int argument_count, char** arguments ) -> int {
 				{ "newproxy", "newproxy is present (creates a tagged userdata with no host reach)" },
 				{ "setfenv", "setfenv is present (changes only the caller's own environment)" },
 				{ "getfenv", "getfenv is present (returns the extension's own globals proxy)" },
+				{ "require", "require is present (host-injected, extension-root only)" },
 			};
 
 			for ( const auto& shim : SHIMS ) {
@@ -306,6 +306,20 @@ auto main( int argument_count, char** arguments ) -> int {
 				check( kind && *kind == "function", shim.label,
 					kind ? *kind : std::string{ "probe failed" } );
 			}
+
+			// require is a capability, not an absence: it must refuse anything the host
+			// did not hand it, and it must never touch the filesystem itself.
+			auto require_refuses = host->eval_to_string(
+				"tostring(select(1, pcall(require, '../../../etc/passwd')))" );
+			check( require_refuses && *require_refuses == "false",
+				"require refuses a path outside the extension root",
+				require_refuses ? *require_refuses : std::string{ "probe failed" } );
+
+			auto require_unknown = host->eval_to_string(
+				"tostring(select(1, pcall(require, './lib/not_registered')))" );
+			check( require_unknown && *require_unknown == "false",
+				"require refuses a module the host never registered",
+				require_unknown ? *require_unknown : std::string{ "probe failed" } );
 
 			auto own_globals = host->eval_to_string(
 				"(function() local ok = pcall(rawset, getfenv(0), 'own_global', 1) "
