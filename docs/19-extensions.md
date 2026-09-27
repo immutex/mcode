@@ -35,22 +35,27 @@ Precedence: **project > user > built-in**, with same-name collisions reported at
 ## Manifest
 
 ```toml
-name = "git"
-version = "0.3.0"
-api_version = ">=1"
+name = "git"                  # required
+version = "0.3.0"             # required
+api_version = 1               # required; integer, the minimum API it needs
 description = "Git-aware tools and commit message conventions"
 permissions = ["fs_read", "fs_write", "spawn"]   # omit ⇒ deny
 ```
 
-The manifest is the declarative half — the role Kong's `schema.lua` plays. It is validated at load:
+The manifest is the declarative half — the role Kong's `schema.lua` plays. **Frozen at v1**; the loader rejects anything not in this table:
 
-| Field | Rule |
-|---|---|
-| `name` | `^[a-z0-9]+(-[a-z0-9]+)*$`, ≤64 chars, must match the directory name |
-| `version` | Semver |
-| `api_version` | Constraint against `mcode.api_version`; mismatch ⇒ refuse to load, do not guess |
-| `permissions` | Subset of the known capability set; **absent or empty means deny** |
-| `description` | ≤1024 chars; used in `mcode ext list` |
+| Field | Type | Rule | On violation |
+|---|---|---|---|
+| `name` | string | `^[a-z0-9]+(-[a-z0-9]+)*$`, ≤64 chars, must equal the directory name | Refuse |
+| `version` | string | Semver (`MAJOR.MINOR.PATCH`, optional prerelease/build) | Refuse |
+| `api_version` | integer | ≥1. Loads iff `mcode.api_version >= api_version` | Refuse |
+| `permissions` | array of strings | Subset of `18`'s permission set. **Absent or empty means deny** | Refuse |
+| `description` | string | ≤1024 chars; used in `mcode ext list` | Refuse |
+| *(unknown key)* | — | Not in the table above | Refuse |
+
+**`api_version` is an integer, never a range.** The extension states the minimum API it needs; the loader compares two integers. Range syntax (`">=1"`, `"~1.2"`) is what `25` calls out as the bug class to avoid — a constraint parser is a parser, and the only question it answers here is whether one integer is at least another. The version *policy* (additive-only, deprecation windows) lives in `18` §Versioning; the manifest only declares a floor.
+
+**Unknown keys are rejected, not ignored.** A typo in `permissions` silently disabling a capability is the failure mode this prevents: `permission = ["fs_write"]` must fail loudly rather than load with no permissions and a confusing denial later. Same rule as unknown CLI flags (`AGENTS.md` §Correctness).
 
 A bad manifest fails **the extension**, never the session.
 
@@ -144,20 +149,13 @@ The in-process host is `src/mcode/ext/lua_host.cxx` today, implementing the sand
 
 The abstraction that makes tool provenance irrelevant:
 
-```cpp
-class ToolSource {
-public:
-  virtual ~ToolSource() = default;
-  virtual std::vector<ToolSpec> tools() const = 0;
-  virtual result<ToolResult> call(std::string_view name, const json& args) = 0;
-};
-```
-
 | Source | Registered at | Namespacing | Notes |
 |---|---|---|---|
 | `BuiltinToolSource` | Compile time | `read`, `edit`, `bash`, … | Static schemas, zero runtime cost |
-| `LuaToolSource` | Extension load | `<ext>__<tool>` | Schema is a Lua table validated at registration |
+| `LuauToolSource` | Extension load | `<ext>__<tool>` | Schema is a Luau table validated at registration |
 | `McpToolSource` | Server connect | `mcp__<server>__<tool>` | Deferred loading; schemas arrive at runtime |
+
+All three implement one interface — `tools()` returning specs, `call(name, args)` returning a result — and nothing above it knows which is which.
 
 Registry invariants: names are unique and collision-checked; every tool declares a permission class; schemas are immutable after registration and their rendered form is byte-stable for prompt caching; the tool count is budgeted, with overflow moving behind `tool_search` (`06`).
 

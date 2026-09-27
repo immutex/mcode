@@ -51,7 +51,7 @@ The `[registry]` block extends `ext.toml` (`19`). **The loader ignores it entire
 ```toml
 name = "git"
 version = "0.3.0"            # semver, enforced by the index
-api_version = ">=1"
+api_version = 1                # integer floor, never a range (`19`)
 permissions = ["fs_read", "spawn"]
 
 [registry]                    # index-only; the loader never reads this
