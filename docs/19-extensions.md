@@ -178,14 +178,16 @@ There is no "append arbitrary text to every prompt" API. Ungoverned context grow
 | Manifest invalid | Skip extension; report in `mcode ext doctor` |
 | `api_version` mismatch | Skip; name the required version |
 | `init.luau` errors | Log with traceback, attributed; skip extension; session continues |
-| Handler errors repeatedly | Per-extension error counter → **quarantine** after N consecutive failures (configurable); other extensions unaffected |
-| Handler exceeds its wall-clock budget | Detach the handler, log, continue (`18`) |
-| Extension hangs | Contained: the host interrupt fires at 8 opcodes plus a wall-clock watchdog (`12` §Layer 3). A call-free straight-line block is the one case that runs to completion first |
+| Handler errors repeatedly | Per-extension error counter → **quarantine after 5 consecutive failures**; other extensions unaffected. Clears on reload, explicit enable, or 60 s clean (`18` §Failure isolation) |
+| Handler exceeds its wall-clock budget | The VM interrupt raises at the next safepoint; the handler is detached, logged, and counted (`18` §How a handler is protected) |
+| Extension hangs | Contained: the interrupt fires at 8 opcodes (`12` §Layer 3) against a per-extension deadline. A call-free straight-line block, or a long host call, is the residual case |
 | Extension OOMs | Contained by the `lua_Alloc` ceiling — all VM memory routes through it |
 
-`mcode ext doctor` aggregates per-extension health: load status, registration counts, error counts, last error with traceback, declared vs used permissions. Extensions may supply a `health()` function. This is the `:checkhealth` analog, and it exists because attribution must be automatic — Neovim's missing notify-source spawned an entire third-party tool to answer "who called this?"
+**The interrupt callback is global state, not per-extension.** `lua_callbacks()->interrupt` is shared across every thread, so a single deadline would let extension A's watchdog fire inside extension B's execution. The callback receives the *running* thread as its `lua_State*`; it must resolve that to the owning extension and check that extension's deadline, never a host-wide one (`18` §How a handler is protected).
 
-Disabling requires no file edits: a config-level disable list plus `mcode.ext.disable(name)` at runtime.
+`mcode ext doctor` aggregates per-extension health: load status, registration counts, error counts, last error with traceback, declared vs used permissions, bytes allocated against the ceiling. Extensions may supply a `health()` function. This is the `:checkhealth` analog, and it exists because attribution must be automatic — Neovim's missing notify-source spawned an entire third-party tool to answer "who called this?"
+
+Disabling requires no file edits: a config-level disable list plus `mcode ext disable <name>` on the CLI. Note there is no `mcode.ext.disable` in the extension API (`18` §API surface) — an extension disabling another is a capability with no use case, and it is a user action, not an API call.
 
 ## Hot reload
 

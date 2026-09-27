@@ -181,7 +181,71 @@ Two distinct paths, matching the Lua community guideline ("an exception that is 
 
 **Errors never propagate into the loop.** An extension error is logged and the session continues — mpv (thread per script), AwesomeWM (`protected_call`), and Neovim (pcall around callbacks) all agree.
 
-Attribution must be automatic. Kong's per-plugin log prefix is the gold standard; Neovim's missing notify-source spawned an entire third-party tool to answer "who called this?".
+### How a handler is protected
+
+Every host→extension call goes through `lua_pcall` **with a message handler** installed beneath the callee, so the traceback is captured at the point of failure rather than after unwinding:
+
+```cpp
+lua_pushcfunction( thread, traceback_handler, "traceback" );   // index: handler
+const int handler_index = lua_gettop( thread );
+lua_pushvalue( thread, function_index );                       // function
+lua_pushlstring( thread, payload_json.data(), payload_json.size() );
+const int outcome = lua_pcall( thread, 1, 1, handler_index );
+lua_remove( thread, handler_index );
+```
+
+`traceback_handler` calls `debug.traceback`, which is one of the two `debug` functions Luau retains (`12` §Layer 3). Without the handler, `lua_pcall` returns the bare error string and the stack is already gone — which is the difference between `file:line` and "attempt to index nil".
+
+**The interrupt is per-thread; the callback is not.** `lua_callbacks()->interrupt` lives on the shared global state and fires for whichever thread is running, passing that thread as `L`. A single global deadline would therefore let extension A's watchdog fire inside extension B. The handler must resolve `L` to its owning extension and consult **that** extension's deadline:
+
+```cpp
+static void interrupt( lua_State* thread, int gc ) {
+    if ( gc >= 0 ) return;                        // GC steps share this callback
+    auto* watchdog = watchdog_for( thread );      // thread -> extension, via the registry
+    if ( watchdog == nullptr || !watchdog->armed ) return;
+    if ( std::chrono::steady_clock::now() < watchdog->deadline ) return;
+    watchdog->expired = true;
+    luaL_error( thread, "extension exceeded its time budget" );
+}
+```
+
+Two consequences that are easy to get wrong:
+
+- **Granularity is safepoints, not instructions.** The interrupt fires at 8 opcodes (`12` §Layer 3) — loop back edges, calls, returns. It cannot count instructions, so the budget is wall-clock and checked at safepoints. A 50 ms budget means "checked at the next safepoint after 50 ms", not "stopped at 50 ms".
+- **`luaL_error` unwinds as a normal error**, so the breach surfaces to the caller as a failed `lua_pcall` — indistinguishable from any other handler error, which is what makes `pcall` the containment mechanism rather than a special case.
+
+**The budget cannot preempt a host function.** If `mcode.spawn` is running, the VM is not executing, so no safepoint is reached. This is why every entry states a bound (`18` §Every entry is bounded): the extension's own code is interruptible, the host's is not.
+
+### Attribution
+
+Format, fixed because it is grepped and asserted:
+
+```
+[extname] file:line: message
+```
+
+| Piece | Source |
+|---|---|
+| `[extname]` | The extension's manifest `name`, from the registry, never from the error text |
+| `file:line` | From `debug.traceback`, with the `[string "..."]` prefix rewritten to the extension-relative path |
+| `message` | The error value, `tostring`'d if it is not a string |
+
+Tracebacks are normalized before display: newlines collapsed, control characters stripped, absolute host paths rewritten to extension-relative ones. Raw Lua tracebacks have produced rendering bugs in multiple hosts, and leaking host paths into model-visible text is both noise and a small information leak.
+
+**Attribution is automatic and non-optional.** Kong's per-plugin log prefix is the gold standard; Neovim's missing notify-source spawned an entire third-party tool to answer "who called this?". The extension name comes from the registry, so a handler cannot forge another extension's attribution.
+
+### Failure isolation
+
+| Failure | Behavior |
+|---|---|
+| `init.luau` throws | Extension skipped, traceback logged; session continues. Named in `mcode ext doctor` |
+| Handler throws | `pcall` contains it; subscription kept; counter incremented |
+| Handler exceeds its budget | Watchdog breach → detached, logged, counter incremented |
+| Counter reaches 5 consecutive | **Quarantine**: every handler for that extension is detached |
+| Quarantined extension is called again | Returns a value-level failure naming the quarantine; does not re-run |
+| Host function fails | Returns `nil, err` (environmental) or raises (contract), per the table above |
+
+Quarantine clears on `/reload`, on an explicit `mcode ext enable`, or after 60 s with no further errors. It is per-extension and never session-fatal.
 
 ## Trust model
 
