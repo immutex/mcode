@@ -25,7 +25,7 @@ Everything else — tool names, loop shape, permission axes, TUI idioms — is d
 | Direct third-party dependencies | ≤ 12, with **size as the binding constraint** | Each dep is a build, audit, and size liability; the count is a review heuristic, not the goal |
 | Always-loaded tool schema | ≤ 3K tokens (core ≤2.5K; ≤3.5K with default extensions) | Tool-set size degrades selection accuracy (`06`) |
 | Harness-added time-to-first-token | ≤ 5 ms | The harness must never be the latency bottleneck |
-| Extension load cost | **linear, ≤1 ms for the first, ≤55 µs each after** | Registration only; work is deferred (`19`). Measured: 0.37 ms for 1, 2.72 ms for 50 (`27`) |
+| Extension load cost | **linear, ≤1 ms for the first, ≤250 µs each after** | Registration only; work is deferred (`19`). Measured: 0.42 ms for 1, 5.5 ms for 50, ~110 µs marginal (`28`) |
 
 These are engineering constraints, not aspirations. A change that breaks one is a regression.
 

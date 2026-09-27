@@ -62,6 +62,7 @@ Rules for this directory:
 26. `16-roadmap.md` — milestones M0–M8, exit criteria, risk register.
 27. `26-first-batch.md` — **the current work plan**: the gate decisions, the measurement spine, and M0.
 28. `27-a1-vm-spike.md` — the VM spike: measurements and the Luau decision.
+29. `28-b-measurements.md` — the measurement spine: load, memory, dispatch.
 
 **If you only read three:** `01`, `03`, `21`.
 
@@ -173,5 +174,6 @@ This index synthesizes the docs in this directory; each carries its own primary 
 - https://luau.org/ + https://luau.org/sandbox/ — Luau overview and the capability boundary
 - https://github.com/luau-lang/luau — source, CMake build, `lua_resetthread`
 - `docs/27-a1-vm-spike.md` — the spike that chose it
+- `docs/28-b-measurements.md` — load, memory, and dispatch measurements
 - https://maki.sh/docs/plugins/ — Lua-extension precedent in a Rust coding agent
 - https://github.com/kfcafe/imp — Lua-extension precedent

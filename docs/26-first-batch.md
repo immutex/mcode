@@ -101,8 +101,8 @@ Nothing in this batch is judged without numbers. The spine is built first becaus
 | Binary size | ≤ 25 MB | `01` budget; `14` has estimates, no measurement |
 | **Extension load, per ext** | **≤ 1 ms** | New. "Loads fast" needs a number |
 | **20 extensions loaded** | **≤ 10 ms** | New. Proves the constant in `01`'s load budget |
-| **Baseline RSS per loaded ext** | **≤ 64 KB** | New |
-| **Per-extension ceiling** | **8 MB default, enforced** | New. RAM efficiency is also containment |
+| **Allocated bytes per loaded ext** | **≤ 512 KB** | Revised by `28`: measured 344 KB mean / 376 KB peak. The original 64 KB came from A1's *shared-VM* probe; one VM per extension is ~313 KB of fixed cost, and the isolation is deliberate (`25b0dea`) |
+| **Per-extension ceiling** | **8 MB default, enforced** | Unchanged. RAM efficiency is also containment |
 | **Hook dispatch overhead** | **≤ 0.5 ms per vetoable event** | New. Synchronous hooks consume `01`'s ≤5 ms TTFT budget directly — a 3 ms hook chain blows it |
 
 Allocator routing is the mechanism for the ceiling and for attribution: the host passes a custom allocator, counts per-extension bytes, and refuses past the limit. That is both the efficiency instrument and the memory-exhaustion control `12` lists as uncontainable in-process.

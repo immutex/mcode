@@ -51,3 +51,7 @@ if(MCODE_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()
+
+# Measurement spine (docs/26 track B). Links the real extension host so the
+# numbers describe the shipped code, not a copy.
+add_subdirectory(tools/bench)
