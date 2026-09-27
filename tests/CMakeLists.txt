@@ -7,6 +7,7 @@ add_executable(mcode_tests
     test_registry.cxx
     test_sse.cxx
     test_workspace.cxx
+    test_model_types.cxx
 )
 
 target_link_libraries(mcode_tests

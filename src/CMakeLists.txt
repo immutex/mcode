@@ -12,6 +12,8 @@ add_library(mcode_core STATIC
 
     mcode/ext/lua_host.cxx
 
+    mcode/model/types.cxx
+
     mcode/fs/workspace.cxx
 
     mcode/net/sse.cxx
