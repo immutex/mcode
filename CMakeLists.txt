@@ -6,7 +6,7 @@ endif()
 
 project(mcode
     VERSION ${MCODE_VERSION}
-    DESCRIPTION "Extensible C++23 coding-agent harness with a LuaJIT extension layer"
+    DESCRIPTION "Extensible C++23 coding-agent harness with a Luau extension layer"
     LANGUAGES C CXX
 )
 
@@ -43,7 +43,7 @@ find_package(Boost CONFIG REQUIRED)
 find_package(mimalloc CONFIG REQUIRED)
 find_package(simdutf CONFIG REQUIRED)
 find_package(unordered_dense CONFIG REQUIRED)
-find_package(luajit CONFIG REQUIRED)
+find_package(luau CONFIG REQUIRED)
 
 add_subdirectory(src)
 

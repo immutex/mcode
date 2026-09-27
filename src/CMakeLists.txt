@@ -60,7 +60,8 @@ target_link_libraries(mcode_core
         yyjson::yyjson
         simdutf::simdutf
         unordered_dense::unordered_dense
-        luajit::luajit
+        luau::vm
+        luau::compiler
     PRIVATE
         Boost::process
         Boost::boost

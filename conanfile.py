@@ -1,9 +1,9 @@
 """mcode dependency manifest (Conan 2).
 
-LuaJIT is not resolved from Conan Center: that recipe is frozen at 2.1.0-beta3
-(2017) and does not build against a modern MSVC. Build the local recipe first:
+Luau is not resolved from Conan Center: upstream publishes no version tags, so
+the pin is a commit and the recipe is ours. Build it first:
 
-    conan create conan/recipes/luajit --profile conan/profiles/windows-msvc --build=missing
+    conan create conan/recipes/luau --profile conan/profiles/windows-msvc --build=missing
 
 Boost is NOT header-only -- Boost.Process v2 ships compiled sources.
 """
@@ -15,7 +15,7 @@ from conan.tools.cmake import CMakeDeps, CMakeToolchain, cmake_layout
 class McodeConan(ConanFile):
     name = "mcode"
     version = "0.0.1"
-    description = "Extensible C++23 coding-agent harness with a LuaJIT extension layer"
+    description = "Extensible C++23 coding-agent harness with a Luau extension layer"
     license = "Apache-2.0"
     package_type = "application"
 
@@ -57,7 +57,7 @@ class McodeConan(ConanFile):
         "mimalloc/*:shared": False,
         "simdutf/*:shared": False,
         "yyjson/*:shared": False,
-        "luajit/*:shared": False,
+        "luau/*:shared": False,
     }
 
     def requirements(self):
@@ -71,7 +71,7 @@ class McodeConan(ConanFile):
         self.requires("mimalloc/3.5.1")
         self.requires("simdutf/9.0.0")
         self.requires("unordered_dense/5.0.1")
-        self.requires("luajit/2.1.0-mcode.1")
+        self.requires("luau/0.0.0-mcode.c0e346ed")
 
     def build_requirements(self):
         self.test_requires("catch2/3.16.0")

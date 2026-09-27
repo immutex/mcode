@@ -105,14 +105,21 @@ The removals are structural, not a library denylist, and the VM flag that makes 
 | Property | Mechanism | Evidence |
 |---|---|---|
 | No filesystem, no process execution, no native module loading | `io.` and `package.` absent; `os.` reduced to `clock`/`date`/`difftime`/`time` | `probe_io_reachable=0`, `probe_os_execute_reachable=0` |
-| No host reflection | `debug.` reduced to `traceback`/`info`; `dofile`/`loadfile` absent | A7 must still probe `debug.info` |
+| No host reflection | `debug.` reduced to `traceback`/`info`; `dofile`/`loadfile`/`load`/`loadstring`/`collectgarbage`/`string.dump` absent | 10 absence probes, all passing |
+| No C-API write bypass | `readonly` is checked on **every** write path (`lua_setfield`, `lua_rawset`, `lua_rawsetfield`, `lua_rawseti`), so the host cannot write past it either | source-verified; `rawset`/`setmetatable` probes refused |
 | No bytecode | `loadstring` rejects bytecode; `string.dump`/`load` absent | `probe_loadstring_reachable=0` |
-| Globals cannot be monkey-patched | `_G`, every library table, and the string metatable are readonly via a VM-internal flag | `probe_global_write_escaped=0`, `probe_setmetatable_escaped=0` |
+| Globals cannot be monkey-patched | `_G`, every library table, and the string metatable are readonly via a VM-internal flag | `rawset`/`setmetatable` on `_G`, `string`, and `mcode` all refused |
 | No finalizer reentrancy or use-after-finalize | `__gc` does not exist; host-only destructors run via `lua_newuserdatadtor` before the block is freed | API inspection |
 | Runaway scripts stop | `lua_callbacks()->interrupt` | source-verified below |
 | Memory is bounded and attributable | custom `lua_Alloc`; `lua_setmemcat` categories | API inspection |
 
-Measured: 0 of 5 escapes in `27`. These are probes, not proofs.
+**Measured: 25 escape probes, 0 escapes** (`mcode` smoke test, `src/main.cxx`). Probes, not proofs.
+
+### What is *not* removed
+
+Three Lua 5.1 base functions survive, verified present: **`newproxy`**, **`setfenv`**, **`getfenv`**. They are not escalations — `newproxy` creates a tagged userdata with no host reach, and `setfenv`/`getfenv` operate only on the caller's own environment — but a claim that the base library is stripped would be false, so they are asserted-present in the smoke test rather than assumed gone.
+
+`luaL_sandboxthread` gives each extension a **writable globals proxy** whose metatable's `__index` points at the frozen host globals. Reads fall through to the host surface; writes land in the extension's own namespace. An extension can therefore shadow a host name (e.g. `mcode`) for itself and nobody else. Self-harm, not escalation — but it means **the host must never read its API surface back out of an extension's globals.**
 
 ### The interrupt guarantee, precisely
 

@@ -109,7 +109,12 @@ Allocator routing is the mechanism for the ceiling and for attribution: the host
 
 ## Starting point
 
-The scaffold already contains a LuaJIT host (`src/mcode/ext/lua_host.cxx`, ~270 lines) exercising the VM lifecycle, host-function bridge, and instruction budget. **It is superseded by A2/A5**, not extended: the VM lifecycle, sandbox setup, allocator routing, and interrupt handling all change. Treat it as a worked reference for the host-function calling convention (`lua_pcall` boundaries, `value, err` vs `error(msg, 2)`) and rewrite the rest.
+The scaffold's LuaJIT host was **replaced, not extended** (`A5`): the VM lifecycle, sandbox setup, allocator routing, and interrupt handling all changed. The rewrite is in `src/mcode/ext/lua_host.cxx` and carries a 29-probe boundary suite that runs as part of the `mcode` smoke test.
+
+Two results from that work that the plan did not anticipate:
+
+1. **Sealing is a one-way door.** Luau checks `readonly` on every C API write path, so `luaL_sandbox` permanently closes the host API surface. The surface must be complete before the first line of extension code runs. This is a stronger argument for `C1`'s frozen 22 entries than forward-compatibility was.
+2. **Three Lua 5.1 shims survive** — `newproxy`, `setfenv`, `getfenv`. None is an escalation, but the smoke test asserts their presence rather than pretending they are gone.
 
 ## Tasks
 
