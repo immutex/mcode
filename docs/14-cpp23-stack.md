@@ -1,6 +1,6 @@
 # C++23 Stack
 
-> TL;DR: C++23 features are safe to adopt selectively (skip modules, skip `flat_map`); the runtime stack is LuaJIT + yyjson + **boost::asio** + Beast + Boost.Process v2 + fmt + spdlog + mimalloc + simdutf + unordered_dense under Conan 2; realistic static binary ~3–5 MB without TLS, ~5–9 MB with it.
+> TL;DR: C++23 features are safe to adopt selectively (skip modules, skip `flat_map`); the runtime stack is Luau + yyjson + **boost::asio** + Beast + Boost.Process v2 + fmt + spdlog + mimalloc + simdutf + unordered_dense under Conan 2; realistic static binary ~3–5 MB without TLS, ~5–9 MB with it.
 
 ## Language features
 
@@ -35,7 +35,7 @@
 
 | Component | Choice | Why | Rejected |
 |---|---|---|---|
-| Scripting | **LuaJIT 2.1** (commit-pinned, vendored) | ~0.5 MB, native MSVC, 2–15× a stock Lua interpreter (`17`) | Lua 5.4 (no FFI, slower), Luau (fallback if untrusted plugins), QuickJS (MSVC friction) |
+| Scripting | **Luau** (commit-pinned, vendored) | 978.5 KB linked, ~17 KB RSS per extension, and the only option with a designed capability boundary (`17`, `27`). CMake, no external deps, `LUAU_STATIC_CRT=ON` | LuaJIT (smaller but no boundary — cannot make `_G` readonly or remove `io`/`os`), Lua 5.4 (same), QuickJS (MSVC friction) |
 | JSON | **yyjson 0.13** | Fastest dynamic-DOM parser (1.1–1.8 GB/s `[VENDOR]`), mutable DOM via `mut_copy`, JSON Pointer/Patch/Merge-Patch, one `.c`, ANSI C, ~50–100 KB | **glaze** (compile-time typed — wrong for runtime-arriving tool schemas), **nlohmann** (81 MB/s, ~15× slower roundtrip), **rapidjson** (stale) |
 | JSON (bulk) | **simdjson — not yet** | Only pays for multi-MB documents with known schema; padded-buffer ceremony and 89 MB/s on out-of-order keys make it wrong for tool payloads | Revisit for bulk file ingestion only |
 | Async I/O | **boost::asio** (from Boost 1.91) | Same API as standalone Asio, and it is the one Beast and Process v2 are written against. Taking standalone Asio *as well* would put two Asio implementations and two incompatible `io_context` types in one binary, so Boost's Asio is the single one. Mature C++20 coroutines (`co_spawn`, `awaitable`); one `io_context` + threads + strands | **standalone Asio** (rejected: duplicates boost::asio, which Beast and Process v2 already require), **libuv** (wrong abstraction level), **io_uring** (Linux-only) |
@@ -48,9 +48,9 @@
 | Unicode | **simdutf 9.2** | UTF-8 validation, UTF-8↔UTF-16 transcode for Win32 wide APIs, base64 for data URLs. Trimmed amalgamation. Node/Chromium/ghostty-proven | Hand-rolled UTF-8 (error-prone) |
 | State storage | **SQLite + FTS5 — not yet** | JSONL session files first (`09`, `16`); SQLite only when persistent search actually hurts | Premature |
 | Build | **CMake + Ninja** | Ecosystem ubiquity, presets, Conan toolchain integration | Meson (better config language, second-class vcpkg/Conan toolchain), xmake |
-| Deps | **Conan 2.32** | Lockfiles and reproducibility (vcpkg has neither), `CMakeToolchain` emits presets, `CMakeDeps` generates `find_package` configs | vcpkg (better LuaJIT freshness, no lockfiles) |
+| Deps | **Conan 2.32** | Lockfiles and reproducibility (vcpkg has neither), `CMakeToolchain` emits presets, `CMakeDeps` generates `find_package` configs | vcpkg (no lockfiles) |
 
-**LuaJIT packaging caveat:** Conan Center is pinned at `2.1.0-beta3` (2017) and vcpkg tracks the rolling branch. Either carry a private Conan recipe that pins a `v2.1` **commit** (`17`), or vendor the source with a thin CMake shim around `msvcbuild.bat`/`make`. Decide once; do not depend on Conan Center for it.
+**Luau packaging:** upstream ships CMake with no external dependencies, so the private Conan recipe in `conan/recipes/luau/` is a thin wrapper that pins a **commit** (`17`). Two build variants matter: `Luau.VM` alone (bytecode in, no parser) or `Luau.VM` + `Luau.Compiler` (source in). `A5` measures both; the VM-only variant is a real size lever.
 
 ## Streaming SSE
 
@@ -93,7 +93,7 @@ ConPTY requires **synchronous** I/O on dedicated threads — overlapped I/O dead
 
 | Component | Estimate |
 |---|---|
-| LuaJIT (static, GC64) | 0.8–1.2 MB |
+| Luau (static, VM + compiler) | 978.5 KB measured (`27`) |
 | Asio + Beast instantiated code | 0.8–2.0 MB |
 | fmt + spdlog (compiled) | 0.3–0.6 MB |
 | simdutf (trimmed) + yyjson + unordered_dense | 0.2–0.5 MB |
@@ -113,8 +113,8 @@ TLS is the single biggest variable and decides whether the ≤25 MB budget (`01`
 - **`std::generator` is single-shot**; libc++ lacks it entirely.
 - **`move_only_function` invocation on an empty target is UB** (strong precondition, no throw).
 - **unordered_dense invalidates references on insert**, not just iterators. Never hold a pointer into it across a mutation.
-- **LuaJIT's own allocator ignores mimalloc** unless built with `LUAJIT_USE_SYSMALLOC` or given a custom `lua_Alloc`. Route it explicitly if you want accounting.
-- **Static LuaJIT on Windows:** mixed mode is unsupported; C modules bind to `lua51.dll`. Choose static or DLL consistently.
+- **The VM's allocator is ours to set.** Luau routes every allocation through `lua_Alloc`, which is how the per-extension ceiling and `ext doctor` attribution work. Back it with mimalloc and count in the shim.
+- **`LUAU_STATIC_CRT=ON` is required to match our `/MT`.** Mismatching the CRT across the VM and the host is a link error at best and a heap-corruption bug at worst.
 - **Static glibc pulls NSS/DNS machinery** (6–15 MB) and breaks the resolver; musl lands 2–7 MB with no external deps. On Windows/macOS this does not apply.
 - **macOS arm64 binaries must be signed** — ad-hoc is sufficient, but post-link tools (`strip`, `install_name_tool`) invalidate the signature, so re-sign last in the pipeline (`24`).
 - **Two TLS stacks** if libcurl and Asio/Beast both land with different backends. Pick one.
@@ -122,7 +122,7 @@ TLS is the single biggest variable and decides whether the ≤25 MB budget (`01`
 ## Open questions
 
 - TLS backend: Beast + OpenSSL (2–4 MB) versus libcurl (one dependency, proxies and HTTP/2 free). This decides the binary budget.
-- Is Conan's LuaJIT staleness worth a private recipe, or is vendoring the source simpler?
+- Does the VM-only (precompiled bytecode) variant save enough to justify the signing requirement and losing source review? `A5` measures it.
 - ~~Do we need Boost at all if we take standalone Asio + reproc?~~ **Resolved: keep Boost.** Beast (HTTP/SSE) and Boost.Process v2 both require `boost::asio`, so Boost is a dependency regardless of the subprocess choice, and adding standalone Asio on top would duplicate it. Note for implementers: **Boost.Process v2 is not header-only** — it ships compiled sources, so Boost must be built with `header_only=False`.
 - Does `std::print` alone suffice once spdlog's `use_std_fmt` matures, letting us drop fmt?
 - ConPTY on Windows ARM64: verified path?
@@ -152,6 +152,6 @@ TLS is the single biggest variable and decides whether the ≤25 MB budget (`01`
 - https://raw.githubusercontent.com/gabime/spdlog/v1.x/README.md — async queue memory, sinks
 - https://docs.conan.io/2/reference/tools/cmake/cmaketoolchain.html — CMakeToolchain
 - https://docs.conan.io/2/reference/tools/cmake/cmakedeps.html — CMakeDeps
-- https://conan.io/center/recipes/luajit — stale LuaJIT recipe
+- https://github.com/luau-lang/luau — CMake build, no external dependencies, `LUAU_STATIC_CRT`
 - https://learn.microsoft.com/en-us/windows/console/creating-a-pseudoconsole-session — ConPTY synchronous I/O
 - https://www.dag.inf.usi.ch/wp-content/uploads/cgo25.pdf — profile-guided layout gains

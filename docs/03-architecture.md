@@ -121,7 +121,7 @@ Registry invariants:
 
 ## Extension model
 
-**LuaJIT is the plugin ABI.** There is no C++ plugin interface, no `dlopen`, and no hand-maintained C ABI. The C++ core exposes a small, stable, versioned API to Lua; everything higher-level lives in Lua.
+**Luau is the plugin ABI.** There is no C++ plugin interface, no `dlopen`, and no hand-maintained C ABI. The C++ core exposes a small, stable, versioned API to Luau; everything higher-level lives in Luau.
 
 | Mechanism | Unit | Discovery | Cost |
 |---|---|---|---|
@@ -136,7 +136,7 @@ Extensions add tools, commands, hooks, context, and skills — all through the s
 Two deliberate omissions:
 
 - **No C++ plugin ABI.** Version-skewed C++ ABIs are a maintenance tax and a crash surface. Lua is versionable, writable without a compiler, and reloadable.
-- **No in-process sandbox for untrusted code.** LuaJIT's own author states VM-level sandboxing of untrusted code is not realistic and that `ffi` makes it a fiction. Extensions are trusted code, gated by a hash-pinned trust grant; untrusted extensions do not run in-process at all (`12`).
+- **The extension VM is a capability boundary, not an OS sandbox.** It removes `io`/`package`, most of `os`/`debug`, bytecode, and `_G` writes, so an extension reaches the host only through the API — but it runs in-process and does not survive a VM engine bug. Untrusted extensions do not run in-process at all (`12`).
 
 Details: `18` (API surface), `19` (lifecycle and discovery), `20` (event delivery).
 

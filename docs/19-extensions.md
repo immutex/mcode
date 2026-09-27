@@ -54,7 +54,7 @@ The manifest is the declarative half — the role Kong's `schema.lua` plays. It 
 
 A bad manifest fails **the extension**, never the session.
 
-**Permissions are capability declarations, not a sandbox.** They scope what `mcode.fs.*` and `mcode.spawn` will do on the extension's behalf. An extension with `ffi` can bypass them entirely (`12` §Layer 3). They reduce blast radius and make intent reviewable; they are not a security boundary, and the docs must say so.
+**Permissions are capability declarations.** They scope what `mcode.fs.*` and `mcode.spawn` will do on the extension's behalf. They are load-bearing because the VM boundary removes every other route to the filesystem and the process table — an extension cannot open a file except through `mcode.fs.*`. They are still not a guarantee: a bug in our own `mcode.fs.*` implementation is outside the VM boundary (`12` §Layer 3).
 
 ## Loading lifecycle
 
@@ -117,7 +117,8 @@ There is no "append arbitrary text to every prompt" API. Ungoverned context grow
 | `main.lua` errors | Log with traceback, attributed; skip extension; session continues |
 | Handler errors repeatedly | Per-extension error counter → **quarantine** after N consecutive failures (configurable); other extensions unaffected |
 | Handler exceeds its wall-clock budget | Detach the handler, log, continue (`18`) |
-| Extension hangs or OOMs | **Not containable in-process** — requires the untrusted-tier subprocess (`12`) |
+| Extension hangs | Contained: the host interrupt fires at 8 opcodes plus a wall-clock watchdog (`12` §Layer 3). A call-free straight-line block is the one case that runs to completion first |
+| Extension OOMs | Contained by the `lua_Alloc` ceiling — all VM memory routes through it |
 
 `mcode ext doctor` aggregates per-extension health: load status, registration counts, error counts, last error with traceback, declared vs used permissions. Extensions may supply a `health()` function. This is the `:checkhealth` analog, and it exists because attribution must be automatic — Neovim's missing notify-source spawned an entire third-party tool to answer "who called this?"
 
@@ -125,14 +126,16 @@ Disabling requires no file edits: a config-level disable list plus `mcode.ext.di
 
 ## Hot reload
 
-**You cannot unload Lua state.** `package.loaded[name] = nil` + `require` re-executes the file, but old closures, upvalues, timers, registered callbacks, JIT traces, and cdata from the previous incarnation remain reachable and keep running.
+**Re-requiring in place is wrong.** `package.loaded[name] = nil` + `require` re-executes the file, but old closures, upvalues, timers, and registered callbacks from the previous incarnation stay reachable and keep running — the stale-closure bug class WezTerm documents and Neovim's guide warns about.
 
 | Command | Semantics | Cost |
 |---|---|---|
-| `/reload <ext>` | Clear the extension's registrations (tools, commands, hooks, timers), `package.loaded[name] = nil`, re-run `main.lua` in a **fresh `lua_State`** | Milliseconds; the only correct option |
-| `/reload` (all) | Rebuild every extension's state | Milliseconds; prefer this to partial reloads |
+| `/reload <ext>` | Unregister everything the extension registered (tools, commands, hooks, timers), then **`lua_resetthread`** its sandboxed thread and re-run `main.lua` | Milliseconds; the correct option |
+| `/reload` (all) | Reset and re-run every extension | Milliseconds; prefer this to partial reloads |
 
-Reloading in a fresh state per extension is the honest implementation. Reusing the state and re-requiring produces exactly the stale-closure bug class that WezTerm documents and Neovim's guide warns about. Document that reload does **not** reclaim memory from abandoned states — LuaJIT's allocator does not return freed pages to the OS (`17`).
+`lua_resetthread` is what makes this clean: it closes upvalues, clears call frames and thread state, and clears the stack — a genuinely fresh thread, not a re-`require` over stale closures (`12` §Layer 3).
+
+**Two limits.** The VM's shared global state persists across a reset (interned strings, readonly library tables), so an extension is only truly gone once its thread is reset *and* its host registrations are dropped. And `lua_resetthread` **sets `L->finalizers = nullptr` without running them**, so any host userdata destructor still queued for that thread is skipped and the resource leaks — drain finalizers before resetting.
 
 ## Distribution
 
@@ -140,27 +143,27 @@ Extensions are directories in a git repository. Install is `mcode ext install gi
 
 Discovery is an **index, not a registry** — no artifact hosting, no accounts, no review gate. Trust comes from the runtime hash-pinned grant above, not from listing. Full design, trust model, manifest `[registry]` block, and the docs site: `25`.
 
-The honest consequence: **installing an extension is equivalent to running its author's code with your privileges.** Say that plainly next to the install instructions. This is the posture Neovim, mpv, WezTerm, and Hammerspoon take, and pretending otherwise would be worse than the risk itself.
+The honest consequence: **installing an extension means granting its author every capability the API exposes, bounded by the VM boundary and the manifest.** Say that plainly next to the install instructions. This is the posture Neovim, mpv, WezTerm, and Hammerspoon take, and pretending otherwise would be worse than the risk itself.
 
-If untrusted distribution ever becomes a goal, it requires the untrusted tier (out-of-process host or Luau) — not a Lua-level sandbox (`12`).
+If untrusted distribution ever becomes a goal, it requires the process tier — the `19` extension-host seam exists so that is an addition, not a redesign (`12`).
 
 ## Traps
 
 - **Auto-loading project extensions.** A `git clone` plus one run would execute attacker code. The trust gate is not optional.
-- **Calling permissions a sandbox.** `ffi` bypasses them. Call them capability scoping.
+- **Calling the VM boundary a sandbox.** It is an in-process capability boundary and upstream does not claim it is formally proven. Say "capability boundary."
 - **Doing work in `main.lua`.** Registration must be cheap; heavy work belongs behind an event.
 - **Reloading by re-requiring in the same state.** Stale closures keep running.
 - **Silent name collisions.** Report them; do not let one extension shadow another.
 - **Ungoverned context injection.** Budget it in the harness or the prompt grows without limit.
-- **Assuming an error counter makes extensions safe.** It makes them *survivable*; only a process boundary makes them *contained*.
+- **Assuming an error counter makes extensions safe.** It makes them *survivable*; only the process tier makes a hostile extension *contained*.
 - **Unbounded `mcode.on` registrations.** An extension that subscribes in a loop degrades every event dispatch; cap registrations per extension and report overages in doctor.
 
 ## Open questions
 
-- Per-extension `lua_State` (isolation, cost) versus one shared state (cheap, no isolation)? Leaning per-extension: it makes `/reload` correct and bounds error blast radius.
-- Is a fresh `lua_State` per reload worth the memory it abandons, or should we offer a full-process restart path for heavy reload cycles?
+- Per-extension sandboxed thread (isolation, cost) versus one shared thread (cheap, no isolation)? Leaning per-extension: it makes `/reload` correct and bounds error blast radius. Measure the cost in `B2`.
+- Does `lua_resetthread` reclaim enough that per-reload memory growth stays flat across hundreds of reloads? Measure; the abandoned-finalizer leak is the risk.
 - Quarantine threshold: how many consecutive handler errors, and is recovery automatic or manual?
-- Do project extensions get a reduced API surface (no `ffi`, no network) even after a trust grant, as defense in depth?
+- Do project extensions get a reduced API surface (no network) even after a trust grant, as defense in depth?
 - Should `ext.toml` support declaring required host capabilities (e.g. "needs MCP") so load can fail early with a clear message?
 
 ## Sources
@@ -177,6 +180,6 @@ If untrusted distribution ever becomes a goal, it requires the untrusted tier (o
 - https://maki.sh/docs/plugins/ — Lua extension precedent, `plugin.toml` permissions, `/reload`
 - https://github.com/kfcafe/imp — Lua extension precedent
 - https://openresty.org/ — `lua_code_cache off` true-unload cost
-- https://luajit.org/faq.html — sandboxing stance
 - https://blog.openresty.com/en/luajit-plus/ — allocator page retention
-- https://www.lua.org/manual/5.4/manual.html — `package.loaded` semantics
+- https://github.com/luau-lang/luau/blob/master/VM/src/lstate.cpp — `lua_resetthread` semantics and the skipped-finalizer trap
+- https://luau.org/sandbox/ — the VM boundary

@@ -106,17 +106,17 @@ Attribution must be automatic. Kong's per-plugin log prefix is the gold standard
 
 ## Trust model
 
-**Extensions are trusted code.** LuaJIT's own FAQ states that VM-level sandboxing of untrusted code is not realistic and that process-level isolation is the only promising approach — and `ffi` makes VM-level confinement a fiction regardless (`12` §Lua trust boundary).
+**Extensions are semi-trusted code with a bounded reach.** The VM removes `io`, `package`, most of `os` and `debug`, bytecode, and write access to `_G`, so an extension cannot reach the host except through the API below. That is a real boundary — but it is a **capability boundary, not an OS sandbox**, and it does not survive a VM engine bug (`12` §Layer 3 owns the limits).
 
-The honest position, and the one every mature Lua host takes (Neovim, WezTerm, Hammerspoon, Emacs, mpv):
+The position, and the one every mature Lua host converges on (Neovim, WezTerm, Hammerspoon, Emacs, mpv):
 
 | Tier | Source | What we do |
 |---|---|---|
-| **Trusted** | User-installed under `~/.config/mcode/extensions/` | Load in-process. Full API. The permission system still gates *tool* execution, not extension code |
+| **Trusted** | User-installed under `~/.config/mcode/extensions/` | Load in-process, own sandboxed thread. Full API surface. The permission system still gates *tool* execution, not extension code |
 | **Semi-trusted** | Project-local `.mcode/extensions/` | **Load only after explicit project-trust confirmation**, with a diff of what would load. A cloned repo must never auto-execute code |
-| **Untrusted** | Marketplace / third-party bundles | **Not supported in v1.** If it ever is: out-of-process host or Luau, not LuaJIT in-process |
+| **Untrusted** | Marketplace / third-party bundles | **Not supported in v1.** The `19` extension-host seam exists so it can be added as a subprocess without a redesign |
 
-What the permission system *does* still enforce for extensions: `mcode.fs.*` and `mcode.spawn` are checked against the extension's declared manifest permissions and the session's sandbox/approval policy. This is a **convenience and blast-radius control, not a security boundary** — an extension can bypass it via `ffi`. Document that plainly rather than implying a guarantee we cannot make.
+What the permission system enforces for extensions: `mcode.fs.*` and `mcode.spawn` are checked against the extension's declared manifest permissions and the session's sandbox/approval policy. Because the VM boundary removes every other route to the filesystem and the process table, this **is** load-bearing rather than decorative — an extension with no declared `fs_write` has no way to write a file. It is still blast-radius control, not a guarantee: a host-side bug in our own `mcode.fs.*` implementation is outside the VM boundary entirely.
 
 ## Versioning and stability
 
@@ -132,12 +132,12 @@ What the permission system *does* still enforce for extensions: `mcode.fs.*` and
 |---|---|
 | Raw C++ pointers or light userdata as **stored** handles | Light userdata is not GC-managed. Use integer ids backed by a host-side `luaL_ref` registry; unregistration is `luaL_unref` |
 | Full userdata with `__gc` for host-managed lifetimes | Finalizer reentrancy and use-after-finalize crash class. `__gc` only for mirrors of Lua-owned resources, with a finalized flag |
-| An FFI/`cdef` surface as the API | C→Lua FFI callbacks cost ~135 cycles vs ~5 for a Lua→C call (27×); unversionable, undebuggable. Classic `lua_CFunction`s only |
+| A native-call surface as the API | A C→Lua callback costs far more than a Lua→C call; unversionable, undebuggable. Classic `lua_CFunction`s only, and no `ffi` exists to expose |
 | Live references to internal state | Copy plain data out (Neovim marshals by copy across the bridge for exactly this reason) |
 | The event loop, threads, or raw I/O | `mcode.defer` / `mcode.timer` / `mcode.spawn` only. The loop stays single-threaded |
 | Blocking primitives (`os.execute`, synchronous HTTP) | Everything long-running goes through `spawn`/`timer` with cancellation |
 | Per-event raw internals (buffers, provider streams) | Typed plain-data payloads only |
-| `_G` pollution | Each extension loads with a restricted environment; no `package.seeall`-style escapes |
+| `_G` pollution | `_G` and the library tables are readonly by the VM; each extension also loads on its own sandboxed thread |
 
 ## Failure UX
 
@@ -169,7 +169,6 @@ What the permission system *does* still enforce for extensions: `mcode.fs.*` and
 - https://github.com/openresty/lua-nginx-module — phase model, `ngx.get_phase`
 - https://www.lua.org/pil/8.3.html — error-handling guideline
 - https://www.lua.org/manual/5.4/manual.html — registry, `luaL_ref`, finalizer hazards
-- https://luajit.org/ext_ffi_semantics.html — FFI semantics
+- https://luau.org/sandbox/ — what the VM removes, readonly globals, interrupt
 - https://maki.sh/docs/plugins/ — Lua extension precedent, `plugin.toml` permissions
 - https://github.com/kfcafe/imp — Lua extension precedent, blocking hooks
-- https://luajit.org/faq.html — VM-level sandboxing stance

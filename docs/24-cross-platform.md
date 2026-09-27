@@ -174,7 +174,7 @@ The reasoning: prompts are English, so model behavior is anchored in English; tr
 ## Open questions
 
 - macOS 13 vs 14 as the floor: 13 keeps older hardware, 14 has a better `sandbox_init` story. Needs a decision at M1.
-- Windows arm64: is LuaJIT's support there solid enough for a tier-1 claim, or does arm64 stay x64-emulated for now?
+- Windows arm64: Luau is portable C++ with an MSVC build, so arm64 is a toolchain question rather than a VM one. Does it earn a tier-1 claim at M0, or stay x64-emulated for now?
 - Should the macOS sandbox use `sandbox-exec` (documented-but-deprecated, warns) or `sandbox_init_with_parameters` (undocumented, clean)? Leaning the latter, with `sandbox-exec` as a fallback probe.
 - Does the loopback egress proxy work under AppContainer on Windows without granting a broad capability? If not, Tier 1 may be the only honest Windows sandbox.
 - APFS normalization specifics need verification before the path-handling code is written.

@@ -1,161 +1,121 @@
-# Lua Runtime
+# Extension Runtime
 
-> TL;DR: Embed LuaJIT 2.1 (rolling release, commit-pinned) as the extension VM with **JIT off by default** — measured 2.1× faster for C-boundary-heavy CLI workloads — one `lua_State` per thread, custom allocator routed to mimalloc, and no pretence that the VM is a security boundary.
+> TL;DR: **Luau** is the extension VM — chosen over LuaJIT because it is the only in-process runtime with a designed, adversarially-tested capability boundary, and because it measured faster and smaller on every axis that matters (`27`). JIT is not involved; the VM is created lazily; `ffi` does not exist.
 
-## Why LuaJIT
+## The decision
 
-The extension layer is the product differentiator: a native binary with a scripting ecosystem nobody else in this space has. LuaJIT is the only runtime that combines (a) a ~0.5 MB VM, (b) native MSVC support, (c) 2–15× the throughput of a stock Lua interpreter, and (d) an FFI that makes C-level extension work practical.
+`27` records the spike. Summary, Windows x64 / MSVC 19.44, 50 extensions:
 
-| Candidate | Size added | MSVC | Perf vs LuaJIT | Sandbox | Verdict |
-|---|---|---|---|---|---|
-| **LuaJIT 2.1** | ~0.4–0.6 MB lib | native (`msvcbuild.bat`), full C++ exception interop | baseline | none at VM level (`12`) | **Chosen** |
-| Lua 5.4.9 / 5.5.1 | ~0.2–0.3 MB | first-class | 2–15× slower interpreted | moderate | Rejected: no FFI, slower, no reason to give up perf |
-| Luau 0.740 | larger (VM + compiler + analysis) | supported (VS2017+) | ≈ LuaJIT interpreter; optional non-tracing JIT | **best** — designed sandbox, no bytecode loading, no `__gc` | Rejected for now; **the fallback if untrusted plugin distribution becomes a goal** |
-| QuickJS-ng | ~370 KB claimed `[VENDOR]` | historically rough (MSVC issues) | ≈ PUC Lua interpreter | good | Rejected: MSVC friction, slower, wrong language for the ecosystem |
-| Wasm3 / WAMR | ~64 KB (wasm3) | yes | interpreter tier | strongest | Rejected: extension authors must target Wasm; kills the ergonomics story |
-| V8 | tens of MB | yes | faster aggregate | strong | Rejected: violates the entire size thesis |
+| Axis | LuaJIT (FFI removed, JIT off) | **Luau** | Note |
+|---|---|---|---|
+| Linked probe | 854.0 KB | 978.5 KB | +124.5 KB — the honest price of the boundary |
+| Load, 1 extension | 1.19 ms | **0.37 ms** | budget ≤1 ms |
+| Per-extension, 50 | 46.9 µs | 54.5 µs | both ~18× under budget |
+| C-boundary loop | 3.40 ms | 3.91 ms | ~15% behind |
+| RSS, 50 extensions | 1396 KB | **856 KB** | ~17 KB/ext, budget ≤64 KB |
+| Sandbox conformance | **cannot pass** | **passes all 5** | the decision's real basis |
 
-Evidence for the scripting-in-a-coding-agent bet: **Maki** (Rust, MIT) embeds **Luau** with an API that deliberately mirrors Neovim (`vim.fs`, `vim.uv`, `vim.keymap`), `plugin.toml` capability manifests, and `/reload` hot-swap. Luau is *not* LuaJIT — different dialect, different JIT (optional, non-tracing), no FFI — so it is an architectural precedent, not a language one. **imp** (Rust) embeds Lua via `mlua` as its stable extension path with `before_tool_call` hooks that can block. Both are small projects. No mainstream harness ([CC], Codex, opencode, Pi, Goose) embeds a scripting language — they are all JS/TS-on-a-runtime where the runtime *is* the extension language. mcode would be the first serious harness with a native core plus a scripting ecosystem.
+LuaJIT cannot pass the conformance probes because it has no mechanism to produce them: no readonly `_G`, no way to remove `io`/`os`/`package`/`debug`, and no supported way to bound a runaway script (`LUA_MASKCOUNT` does not fire under JIT, per `17`'s superseded evaluation below). Removing `ffi` closes native-code execution but leaves the rest open.
 
-## Version pinning (non-obvious, get this right)
+**The trade is +124.5 KB of binary for a boundary that exists.**
 
-LuaJIT uses **rolling releases**: no tarballs, no binaries, **no git tags**. The version is `2.1.<unix-timestamp-of-last-commit>`, shown by `luajit -v`.
+## Why Luau
 
-Consequences:
-- Pin a **commit hash** of the `v2.1` branch, never a version string. Record the timestamp version alongside it.
-- `v2.1` is the "Production" branch with no breaking changes. The old `master` is pinned to v2.0.
-- The `2.1.0-beta3` label is stale (2017) and still appears in benchmarks and packaging. Do not treat it as current.
-- **Conan Center is stale** at `luajit/2.1.0-beta3`; vcpkg tracks the rolling branch. Either vendor the source with a thin CMake shim around `msvcbuild.bat`/`make`, or carry a private Conan recipe that pins the commit.
-- OpenResty's `luajit2` is a synchronized downstream (not a hard fork) with extra APIs (`table.clone`, `lua_resetthread`) and tuned JIT defaults. Use upstream unless those specific APIs are needed.
+The requirement is that extensions must not be able to do harm. That forfeits LuaJIT's two advantages before the comparison starts: `ffi` must go (it is a one-line native-code escape), and the JIT is off by default anyway (`17` below, measured 2.1× penalty on C-boundary-heavy glue — the workload a coding-agent extension layer *is*).
 
-Bus factor is 1 (Mike Pall). Mitigation: the diff surface per commit is tiny, the branch is stable by policy, and a downstream fork exists. Vendor the source tree so builds never depend on upstream availability.
+What remains is size and Lua familiarity. Neither outweighs a boundary that is designed, fuzzed, and exercised at Roblox scale.
 
-## Platform support
+**RAM efficiency points the same way.** The only formally stronger boundary is a separate process — a second address space, an IPC channel, and a supervisor, which is the VS Code extension-host model and the reason VS Code is heavy. In-process Luau is the lighter of the two viable answers, and `27` confirms it is also lighter than LuaJIT in RSS.
 
-| Platform | Status |
+## What the boundary actually guarantees
+
+From `luau.org/sandbox` (verbatim scope):
+
+| Property | Mechanism |
 |---|---|
-| Windows x64 / x86 / **ARM64** | Supported. `src/msvcbuild.bat` for MSVC; x64→ARM64 cross via `vcvarsall.bat x64_arm64` |
-| Linux x64 / ARM64 | Supported |
-| macOS 10.4+ / Apple Silicon | Supported; needs `MACOSX_DEPLOYMENT_TARGET` |
-| iOS | JIT disabled by platform policy — interpreter only |
-| RISC-V | No JIT in 2.1; "(TBA)" |
+| No filesystem, no process execution, no native module loading | `io.` and `package.` removed entirely; `os.` reduced to `clock`/`date`/`difftime`/`time` |
+| No reflection into the host | `debug.` reduced to `traceback`/`info`; `dofile`/`loadfile` removed |
+| No bytecode | `loadstring` rejects bytecode, `string.dump` and `load` are gone |
+| Globals cannot be monkey-patched | `_G`, every library table, and the string metatable are readonly via a VM feature unreachable from scripts — assignments, `rawset`, and `setmetatable` all fail |
+| No finalizer reentrancy or use-after-finalize | `__gc` does not exist; host-only tag-based destructors (`lua_newuserdatadtor`) run before the block is freed |
+| Runaway scripts terminate | A host interrupt that "any Luau code is guaranteed to call … eventually (in practice … at any function call or at any loop iteration)" |
+| Memory ceiling | Configurable from the host |
 
-Two Windows-specific facts that shape the build:
-
-- **Lua errors are implemented with SEH** on Windows x64. Every `lua_pcall` error path is a Windows exception. Catching Lua errors with C++ `catch(...)` requires `/EHa` (which also catches access violations — an unwanted side effect). Prefer the `lua_pcall` boundary and do not throw C++ exceptions through Lua frames.
-- **JIT machine code must be allocated within ±1 GB of the VM code** (branch range). Failures surface as "failed to allocate mcode memory" plus trace-flush churn. Default `sizemcode=64` KB per area, `maxmcode=2048` KB total.
-
-**GC64 is default on all 64-bit ports** and mandatory on ARM64. It lifts the old ~2 GB low-address ceiling to 128 TB, at a measured cost of **+8–11% RSS with no CPU change** (OpenResty, `[VENDOR]`). Bytecode format differs between GC64 and non-GC64 and between 32/64-bit — relevant only if we ever ship precompiled bytecode across platforms. We ship x64/arm64 GC64 only.
-
-## Dialect: what extension authors get
-
-Baseline is **Lua 5.1 plus backports**. Set expectations explicitly in the extension docs, because the gaps bite:
-
-| Available | Missing |
-|---|---|
-| `goto`/labels, `\x`/`\z` escapes, `load` with env (5.2) | 64-bit **integer subtype** — all numbers are doubles (exact to 2^53) |
-| `\u{XX}` escapes, `table.move`, `coroutine.isyieldable` (5.3) | `//` floor division |
-| LuaJIT 3.0 syntax **backported into 2.1**: `&& \|\| !`, ternary `?:`, safe-nav `?.`, `??`, compound assignment (`+=`, `..=`), `continue`, `const`, digit separators | 5.3 bitwise operator syntax (use the `bit.*` library, 32-bit ops) |
-| `bit.*` (Lua BitOp), FFI for 64-bit cdata arithmetic | `utf8` library |
-| Fully resumable VM (yield across `pcall`, iterators, metamethods) | `<close>` / to-be-closed variables (5.4) |
-| `table.new`, `table.clear`, 64-bit `io.*` offsets, `xpcall` with args | `math.type`, `string.pack` 5.3 semantics, `_ENV` |
-
-Practical rule for the extension guide: **Lua 5.1 + LuaJIT idioms work; Lua 5.4-era copy-paste does not.** Ship a short porting note.
-
-## JIT policy: off by default
-
-This is the counterintuitive decision, and it is evidence-backed.
-
-LuaJIT's warmup is genuinely cheap — `hotloop=56` iterations before tracing, and compilation is "microsecond to millisecond range" per the official docs. So warmup is not the problem.
-
-The problem is **trace-flush churn from C-boundary-heavy code**. A measured embedding (DHCP loop with C callbacks) ran **1.274 s with JIT on versus 0.603 s with `jit.off()` — 2.1× faster without the JIT**, because C-side metatable and userdata operations caused constant trace aborts and full machine-code cache flushes. Metatable operations from C in hot paths are a known trace-abort source.
-
-A coding-agent extension layer is exactly that workload: small Lua glue scripts orchestrating calls into C (filesystem, process, HTTP, tools), not long numeric loops.
-
-**Policy:**
-
-| Path | JIT | Rationale |
-|---|---|---|
-| One-shot CLI commands, config eval, single extension invocation | **off** | Measured faster; process may live <10 s; no warmup to amortize |
-| Long-lived loops — watch mode, server mode, bulk transforms | **on** | Where tracing pays; expose as a per-extension manifest flag |
-| Instruction-budget-enforced paths | **off (forced)** | `LUA_MASKCOUNT` hooks do not fire in JIT-compiled code (below) |
-
-The interpreter alone is already 2–15× a stock Lua 5.4 interpreter (n-body 14.9×, spectral-norm >19×, binarytrees 2.8×), so the performance story does not depend on the JIT.
-
-**Interlock with resource limits:** `LUA_MASKCOUNT` hooks **do not fire inside JIT-compiled traces** unless LuaJIT is built with `-DLUAJIT_ENABLE_CHECKHOOK`, which is explicitly unsupported and "may be quite expensive in tight loops." So any extension running under an instruction budget must run interpreted. `jit.off()` default and budget enforcement are therefore the same decision, not two.
+**The limit, stated plainly:** upstream says "since the entire stack is implemented in C++, the sandboxing isn't formally proven." That is the honest position. This is a designed, in-process capability boundary that reduces blast radius — **not an OS sandbox and not a guarantee.** `12` owns the full statement; `A4` keeps the process tier reachable as a later upgrade rather than a redesign. Never describe this as a sandbox in user-facing text.
 
 ## Embedding shape
 
-- `luaL_newstate()` + `luaL_openlibs(L)`, then **remove** what extensions must not have (`12`, `18`).
-- **Custom allocator** via `lua_newstate(lua_Alloc, void*)` routed to mimalloc, with an optional hard ceiling for budget enforcement. Note LuaJIT otherwise uses its own bundled dlmalloc-derived allocator; `LUAJIT_USE_SYSMALLOC` switches it to the system allocator, and mimalloc override does not otherwise touch Lua's heap.
-- Register host functions with `lua_pushcclosure` / `luaL_setfuncs` / `luaL_newlib`.
-- **userdata for owned objects, lightuserdata for borrows.** Light userdata is a raw pointer value and is *not* GC-managed — use it only for non-owned handles.
-- Store callbacks with `luaL_ref(L, LUA_REGISTRYINDEX)`, not repeated `lua_getglobal`.
-- **Every host→Lua entry point is wrapped in `lua_pcall`.** An unprotected OOM aborts the process with `PANIC: unprotected error in call to Lua API`.
-- Optional: install one global C-function wrapper via `luaJIT_setmode(..., LUAJIT_MODE_WRAPCFUNC)` so C++ exceptions crossing Lua frames are caught in a trampoline. Exactly one wrapper is allowed.
+- **Two build variants.** `Luau.VM` alone (bytecode in, no parser) or `Luau.VM` + `Luau.Compiler` (source in). `A5` measures both; the VM-only variant is a real size lever, and precompiled bytecode must be signed because the VM trusts its compiler.
+- **CMake, no external dependencies** beyond the STL/CRT. MSVC 2017+, gcc-7+, clang-7+. `LUAU_STATIC_CRT=ON` matches our `/MT`.
+- **Ordering constraint, learned the hard way:** register host globals **before** `luaL_sandbox`. Sandboxing makes `_G` readonly, and `lua_setglobal` on a readonly table raises outside a `pcall` — which surfaces as a bare process abort with no message.
+- Per-extension isolation: `lua_newthread` + `luaL_sandboxthread` per extension; the thread value sits on the parent stack and must be popped after use.
+- **Memory ceiling and accounting** via a custom allocator, which is also how `mcode ext doctor` attributes bytes per extension (`B3`).
+- **Every host→Lua entry point goes through `lua_pcall`.** An unprotected error aborts the process.
+- **Every exposed C++ function must be bounded in time.** The interrupt cannot preempt inside a single long-running host call, so an unbounded host function defeats the kill switch.
 
-**Threading:** a `lua_State` is **not thread-safe; one VM per OS thread.** Coroutines are cooperative fibers *within* one state, not OS threads. The rule: either drive all Lua from the event-loop thread (simplest, correct), or give each worker thread its own state with no shared objects. Extension work that must be concurrent goes to a subprocess or a separate state — never a shared state.
+**Threading:** one VM per OS thread; a `lua_State` is not thread-safe. Either drive all Lua from the loop thread, or give each worker its own state with no shared objects.
 
-**Async bridge:** because the VM is fully resumable, an extension can call an async C function that records the current coroutine, yields, and is resumed by the Asio completion handler **on the same thread**. This is the sanctioned pattern; it does not require threads.
+## Dialect: what extension authors get
+
+Luau is **Lua 5.1-based** with 5.2/5.3 features backported and its own additions. This is a different dialect from LuaJIT's, so `17`'s superseded "LuaJIT 3.0 syntax backports" section does **not** apply.
+
+| Available | Missing (vs Lua 5.4) |
+|---|---|
+| Gradual typing with a real inference engine; `luau-analyze` lints and type-checks | `//` floor division, `utf8` library, `<close>` / to-be-closed variables |
+| `continue`, compound assignment (`+=`, `..=`), string interpolation | 64-bit integer subtype (numbers are doubles, exact to 2^53) |
+| `table.clone`, `table.freeze`, `string.split`, vector library | `io`, `package`, most of `os` and `debug` — by design |
+| `require` with a host-controlled resolver | `loadstring` on bytecode, `string.dump` |
+
+**Practical rule for the extension guide: Lua 5.1 + Luau idioms work; Lua 5.4-era copy-paste does not.** `C5` ships a `.d.luau` definition file so `luau-analyze` type-checks extension code.
 
 ## Memory
 
 | Item | Value |
 |---|---|
-| Library code | ~0.4–0.6 MB (Pall: "a couple hundred kilobytes" for vanilla Lua; LuaJIT ≈ 2× that) |
-| Minimum runtime data | ~300 KB (Pall); hello-world peak RSS **2.4 MB** whole-process |
-| JIT code cache | `sizemcode=64` KB per area, `maxmcode=2048` KB total; exceeding it causes flush churn |
-| GC64 overhead | +8–11% RSS, no CPU cost (`[VENDOR]`, OpenResty) |
+| VM + compiler, linked | 978.5 KB (`27`, probe binary including our host code) |
+| RSS, 50 extensions | 856 KB delta ⇒ ~17 KB per extension |
+| Peak RSS | 4376 KB |
 
-LuaJIT's built-in allocator **never returns freed pages to the OS** (OpenResty measured 71% of a 512 MB RSS held by it). Irrelevant for a CLI — process exit reclaims everything — but it is a real consideration if a long-lived server mode ever ships, which is another argument for routing through mimalloc via `lua_newstate`.
-
-Introspection for a `/ext` diagnostic view: `collectgarbage("count")`, `jit.status()`, `luajit -jv` (trace events), `-jdump`, and the built-in low-overhead statistical profiler (`-jp`).
+Allocator routing matters more than for LuaJIT: Luau's memory is ours to count and cap, which is what makes the per-extension ceiling enforceable rather than advisory.
 
 ## Traps
 
-- **Pinning a version string instead of a commit.** There are no tags. A recipe that says `2.1.0-beta3` is pinning a 2017 snapshot.
-- **Assuming the JIT is free.** For C-boundary-heavy glue it is a measured 2.1× *penalty*. Default it off and enable per-extension.
-- **Expecting instruction hooks to fire under JIT.** They do not, without an unsupported build flag. Budget enforcement requires interpreted execution.
-- **Throwing C++ exceptions through Lua frames.** Undefined. Use `lua_pcall` boundaries and the optional global wrapper.
-- **One `lua_State` shared across threads.** Not thread-safe. One state per thread, or single-threaded.
-- **Treating the VM as a sandbox.** LuaJIT's own FAQ states VM-level sandboxing of untrusted code is not realistic and process-level isolation is the only promising approach. See `12`.
-- **Compiling with `/EHa` reflexively.** It is needed only to catch Lua errors via `catch(...)`, and it also swallows access violations.
-- **Static-linking LuaJIT on Windows with mixed modes.** "Mixed mode is not supported on Windows. And static mode doesn't work well. C modules cannot be loaded, because they bind to `lua51.dll`." Choose static *or* DLL, consistently.
-- **Lua 5.4 copy-paste.** No integers, no `//`, no `utf8`, no `<close>`. Write the porting note.
-- **Metatable operations from C in hot paths.** They abort traces and flush the code cache — the mechanism behind the JIT penalty above.
+- **Calling it a sandbox.** It is a capability boundary. `12` owns the wording; user-facing text never says "sandbox."
+- **`luaL_sandbox` before registering host globals.** Process abort, no message.
+- **Unbounded host functions.** The interrupt cannot preempt inside one, so the kill switch is only as good as the shortest bounded call.
+- **Forgetting `luaL_sandboxthread` per extension thread.** Isolation is per-thread and opt-in.
+- **Expecting Lua 5.4 semantics.** No integers, no `//`, no `utf8`, no `<close>`.
+- **Bytecode from an untrusted source.** The VM trusts its compiler; signing is mandatory if bytecode ever ships.
+- **Treating `debug.traceback`/`info` as harmless.** They are retained for diagnostics; confirm they leak nothing about host internals (`A7`).
+- **Leaving the compiler linked when bytecode is precompiled.** Wasted size, and it re-admits a parser that untrusted source could reach.
 
 ## Open questions
 
-- Does the JIT-off default hold for extension-heavy sessions (many small scripts, long-lived process)? The 2.1× measurement was one C-callback workload; re-measure with real extensions.
-- Is per-extension JIT opt-in the right granularity, or should it be per-function via `jit.off(fn)`?
-- Do we ship precompiled extension bytecode (`luajit -b`)? It cuts parse cost and doubles as an integrity check, but bytecode is not portable across GC64/arch and loading untrusted bytecode is a crash vector.
-- Does `LUAJIT_ENABLE_CHECKHOOK` become viable if we ever need budget enforcement under JIT? It is unsupported and costs in tight loops.
-- Bus factor 1 on upstream: at what point does OpenResty's `luajit2` become the safer default?
+- **Is the interrupt enough for CPU budgeting?** Luau has no `LUA_MASKCOUNT` equivalent. Measure interrupt latency; if it is coarse, a host-side wall-clock kill is the backstop.
+- **Per-extension thread vs one shared sandboxed thread?** safeenv may make a shared thread sufficient, which would cut load cost. Measure in `B2`.
+- **VM-only (precompiled bytecode) vs VM + compiler?** `A5` measures the delta. Bytecode needs signing and makes extensions unreviewable as source.
+- **Does `debug.info` leak host state?** `A7` probes it.
+
+## Superseded: the LuaJIT evaluation (2026-09, kept for the record)
+
+**This section is DISPROVED as a decision.** LuaJIT was chosen on FFI, JIT throughput, and size. The "extensions must not be able to do harm" requirement forfeits the first two, and `27` measured the third. Kept so the reasoning is not re-proposed.
+
+- **Why it was chosen:** ~0.5 MB VM, native MSVC support, 2–15× a stock Lua interpreter, and an FFI that made C-level extension work practical.
+- **Version pinning:** LuaJIT uses rolling releases — no tags. Pin a `v2.1` **commit**, never a version string; `2.1.0-beta3` is a 2017 snapshot. Conan Center is stale at that label.
+- **JIT policy, measured:** a DHCP loop with C callbacks ran 1.274 s with JIT on versus 0.603 s with `jit.off()` — **2.1× faster without the JIT**, because C-side metatable and userdata operations abort traces and flush the code cache. Instruction hooks (`LUA_MASKCOUNT`) do not fire under JIT without an unsupported build flag, so budget enforcement and JIT are mutually exclusive. Our `27` measurements reproduce this: the JIT-on boundary loop (5.38 ms) is slower than JIT-off (3.40 ms).
+- **FFI removal, verified:** `LUAJIT_DISABLE_FFI` sets `LJ_HASFFI 0`, which removes `luaopen_ffi` from `lib_init.c` and compiles out the bytecode cdata-literal reader (`lj_bcread.c:239`), rejecting any `BCDUMP_F_FFI` chunk (`:405`). This **corrects `12`'s claim** that a bytecode cdata literal re-initializes FFI — true for runtime hiding (`ffi = nil`), false for compile-time removal.
+- **FFI removal does not build alone:** dynasm is invoked with a separate flag set (`DASMFLAGS`) that still contains `-D FFI`, so `buildvm_arch.h` references `CTState`/`CCallState` while the C side has `LJ_HASFFI=0` — a hard compile error. FFI must come out of `XCFLAGS` **and** `DASMFLAGS` together.
+- **GC64** is default on 64-bit ports at +8–11% RSS `[VENDOR]`.
+- **Bus factor 1** (Mike Pall); OpenResty's `luajit2` is a synchronized downstream.
 
 ## Sources
 
-- https://luajit.org/luajit.html — overview, license, platform badges
-- https://luajit.org/status.html — branches, rolling-release policy, OS/CPU matrix
-- https://luajit.org/install.html — MSVC build, GC64 default, static/DLL caveat
-- https://luajit.org/extensions.html — dialect, 5.2/5.3 backports, 3.0 syntax backports, resumable VM, C++ exception interop table
-- https://luajit.org/faq.html — VM-level sandboxing stance, bytecode danger
-- https://luajit.org/ext_c_api.html — `luaJIT_setmode`, WRAPCFUNC wrapper
-- https://luajit.org/ext_ffi_semantics.html — FFI semantics (C99 parser, cdata conversions)
-- https://luajit.org/ext_ffi_tutorial.html — FFI library loading
-- https://github.com/LuaJIT/LuaJIT/commits/v2.1/ — activity (Sep 2026 commits)
-- https://github.com/LuaJIT/LuaJIT/issues/1092 — 3.0 scope
-- https://github.com/LuaJIT/LuaJIT/issues/1475 — 3.0 syntax extensions
-- https://github.com/LuaJIT/LuaJIT/issues/779 — CHECKHOOK, `LUA_MASKCOUNT` guidance
-- https://github.com/LuaJIT/LuaJIT/issues/781 — Windows x64 SEH, mcode ±1 GB, `/EHa`
-- https://github.com/LuaJIT/LuaJIT/issues/391 — minimum memory numbers
-- https://github.com/openresty/luajit2 — downstream fork scope
-- https://blog.openresty.com/en/luajit-gc64-mode/ — 2 GB ceiling, GC64 cost
-- https://blog.openresty.com/en/luajit-plus/ — allocator RSS retention
-- https://marek.vavrusa.com/embedding-luajit/ — `jit.off()` 2.1× measurement, metatable trace flushes
-- https://programming-language-benchmarks.vercel.app/lua-vs-c — LuaJIT vs 5.4.7 numbers
-- https://luau.org/performance/ — Luau interpreter/JIT characteristics
-- https://github.com/microsoft/vcpkg/master/ports/luajit/vcpkg.json — rolling-branch tracking
-- https://conan.io/center/recipes/luajit — stale Conan Center version
-- https://maki.sh/docs/plugins/ — Lua extension precedent (Luau, Neovim-mirroring API)
-- https://github.com/kfcafe/imp — Lua extension precedent (`mlua`)
-- https://sol2.readthedocs.io/en/latest/threading.html — one state per thread
+- `docs/27-a1-vm-spike.md` — the measurements, probes, and reproduction
+- https://luau.org/sandbox/ — library removals, bytecode removal, readonly globals, `__gc` removal, interrupt mechanism, memory limits, upstream caveat
+- https://github.com/luau-lang/luau — CMake build, no external dependencies, MSVC 2017+/gcc-7+/clang-7+, `luau_compile`/`luau_load` split, `luaL_sandbox`/`luaL_sandboxthread`/`lua_newuserdatadtor`, MIT plus attribution request
+- https://luajit.org/faq.html — process-level sandboxing stance, bytecode danger (superseded section)
+- https://marek.vavrusa.com/embedding-luajit/ — the `jit.off()` 2.1× measurement (superseded section)
+- https://blog.openresty.com/en/luajit-gc64-mode/ — GC64 cost (superseded section)
+- https://luajit.org/status.html — rolling releases, commit pinning (superseded section)
+- https://github.com/LuaJIT/LuaJIT/issues/779 — `LUA_MASKCOUNT` under JIT (superseded section)
+- https://www.corsix.org/content/malicious-luajit-bytecode — the cdata-literal escape (superseded section)

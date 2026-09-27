@@ -1,8 +1,8 @@
 # mcode — Design Docs
 
-> TL;DR: mcode is a lightweight, extensible C++23 CLI coding-agent harness with a **scripting VM as its extension layer** — a native core for speed and a scripting ecosystem for reach. Read `01` for the thesis, `03` for the shape, `26` for the current work plan, then the topic you're building.
+> TL;DR: mcode is a lightweight, extensible C++23 CLI coding-agent harness with **Luau as its extension layer** — a native core for speed and a scripting ecosystem for reach. Read `01` for the thesis, `03` for the shape, `26` for the current work plan, then the topic you're building.
 >
-> **The extension VM is under review.** `17` chose LuaJIT; the requirement that extensions must not be able to do harm forfeits LuaJIT's FFI and JIT advantages, and `26` proposes Luau. Treat `17`, `12` §Layer 3, `18`, and `19` as *the LuaJIT-era design* until `26`'s A2 lands.
+> **The extension VM is Luau**, chosen over LuaJIT on measured size, load time, RSS, and — decisively — a capability boundary LuaJIT cannot provide (`27`). `12` §Layer 3 owns what that boundary does and does not guarantee.
 
 ## What these docs are
 
@@ -39,7 +39,7 @@ Rules for this directory:
 11. `10-subagents.md` — fan-out rules, isolation, I/O contract, merge strategy.
 
 **Extensibility (the differentiator)**
-12. `17-lua-runtime.md` — LuaJIT status, dialect, JIT policy, embedding, alternatives.
+12. `17-lua-runtime.md` — the extension VM, its boundary, dialect, and embedding shape.
 13. `18-lua-api.md` — the extension API surface, hooks, error conventions, trust tiers.
 14. `19-extensions.md` — layout, manifest, lifecycle, tool sources, reload, distribution.
 15. `20-events.md` — event representation, dispatch, threading, log coupling, Lua bridging.
@@ -61,12 +61,12 @@ Rules for this directory:
 25. `22-config-and-cli.md` — config scopes, CLI surface, exit codes, concurrency.
 26. `16-roadmap.md` — milestones M0–M8, exit criteria, risk register.
 27. `26-first-batch.md` — **the current work plan**: the gate decisions, the measurement spine, and M0.
+28. `27-a1-vm-spike.md` — the VM spike: measurements and the Luau decision.
 
 **If you only read three:** `01`, `03`, `21`.
 
 > **Before starting any work, read `26-first-batch.md`.** It supersedes `16`'s
-> ordering for the first batch: the extension VM is an open decision, and `16`
-> assumes it is settled.
+> ordering for the first batch.
 
 ## Decisions at a glance
 
@@ -74,9 +74,9 @@ Rules for this directory:
 |---|---|---|
 | 1 | Single process; threads + one event loop. No coroutine graph, no daemon | `03` |
 | 2 | Append-only JSONL event log is the source of truth; state is a projection | `03` |
-| 3 | **A scripting VM is the plugin ABI** — no C++ plugin interface, no `dlopen`. **VM under review: `26` proposes Luau over LuaJIT** | `01`, `17`, `19`, `26` |
-| 4 | ~~JIT off by default (measured 2.1× faster for C-boundary-heavy glue); per-extension opt-in~~ **Moot if `26` A2 adopts Luau** | `17`, `26` |
-| 5 | **Extensions must not be able to do harm.** LuaJIT-era: "trusted code; VM sandboxing is impossible with `ffi` reachable". `26` A1–A3 reopens this | `12`, `19`, `26` |
+| 3 | **Luau is the plugin ABI** — no C++ plugin interface, no `dlopen`. Chosen over LuaJIT on measured size, load, RSS, and boundary (`27`) | `01`, `17`, `19`, `27` |
+| 4 | **No JIT in the extension VM.** Luau has no tracing JIT; the interrupt is the only execution control | `17` |
+| 5 | **Extensions cannot reach the host except through the capability API.** Luau's boundary: no `io`/`package`, reduced `os`/`debug`, no bytecode, readonly globals, no `__gc`, host interrupt, memory ceiling. Not an OS sandbox and not formally proven | `12`, `17`, `27` |
 | 6 | **Project extensions are inert until a hash-pinned trust grant** — never auto-execute on clone | `12`, `19` |
 | 7 | One tool registry; built-ins, Lua, MCP, and skills all flatten into it | `03`, `06` |
 | 8 | **8 core tools** (file primitives + `bash` + `ask_user` + `tool_search`); everything else is a Lua extension | `06`, `23` |
@@ -92,7 +92,7 @@ Rules for this directory:
 | 18 | Custom ANSI renderer; inline transcript + bounded diffed live region | `13` |
 | 19 | **Events**: closed tagged union, per-kind subscriber lists, sync dispatch, mutex queue | `20` |
 | 20 | Extension API: ~18 entry points, integer handles, `value, err` / `error(msg, 2)` | `18` |
-| 21 | Stack: LuaJIT, yyjson, **boost::asio**, Beast, Boost.Process v2, fmt, spdlog, mimalloc, simdutf, unordered_dense, Conan 2 | `14` |
+| 21 | Stack: **Luau**, yyjson, **boost::asio**, Beast, Boost.Process v2, fmt, spdlog, mimalloc, simdutf, unordered_dense, Conan 2 | `14` |
 | 22 | **Size is the binding constraint** (~3–5 MB without TLS); dependency count is a review heuristic | `01`, `14` |
 | 23 | Target MCP 2025-06-18 core with a `_meta` choke point for the stateless revision | `07` |
 | 24 | **System prompt ~1,200 words**, named sections, one source of truth per rule, lint-gated | `21` |
@@ -119,7 +119,7 @@ Rules for this directory:
 | 45 | **No completion tool**; "done" = model ends its turn, and the harness runs a **config-owned** verification command (never model-chosen) | `06`, `11` |
 | 46 | Extension disablement: any scope may disable; only user scope may enable; project cannot disable `task` without an explicit opt-in | `22`, `23` |
 | 47 | Prompt sections are assembled from the **effective tool set** — a rule referencing an unloaded tool is omitted, never dangling | `21` |
-| 48 | Repo-local extensions are **semi-trusted after a hash-pinned grant** (in-process, no `ffi`); the out-of-process untrusted tier is a v1 non-goal | `12`, `18` |
+| 48 | Repo-local extensions are **semi-trusted after a hash-pinned grant** (in-process, same VM boundary as trusted); the out-of-process untrusted tier is a v1 non-goal | `12`, `18` |
 | 49 | Sessions **branch by lineage**, not by copying the log; `seq` stays global and monotonic | `04`, `20` |
 
 ## Known disagreements (deliberately unresolved or resolved-by-argument)
@@ -131,7 +131,7 @@ Rules for this directory:
 | Code-as-action vs JSON tool calls | CodeAct: +20pp, 30% fewer steps. Native tool-calling improved since. | `06` |
 | Grep/glob vs embeddings for code retrieval | Anthropic: agentic search. RAG camps: embeddings. Evidence is mixed. | `05`, `09` |
 | Agentless vs agentic | Agentless: cheaper, competitive in 2024. Agentic won on hard tasks. | `04`, `11` |
-| **LuaJIT vs Luau** | LuaJIT: faster, FFI, but no sandbox. Luau: designed sandbox, no FFI, optional non-tracing JIT. **Resolution:** LuaJIT now; Luau is the documented fallback if untrusted plugin distribution becomes a goal. | `17`, `12` |
+| ~~LuaJIT vs Luau~~ | **Resolved 2026-09 in favour of Luau** — measured faster on load and RSS, and the only one of the two with a capability boundary. `27` | `17`, `27` |
 | **JIT on or off** | JIT: 2–15× on numeric loops. Measured 2.1× *slower* on C-boundary-heavy glue, and instruction hooks do not fire under JIT. **Resolution:** off by default, on per-extension. | `17` |
 | **Core vs extension line** | Maki ships all 21 builtins as Lua plugins; Neovim ships LSP in Lua; VS Code ships ~90 built-in extensions. Against: Zed forbids extensions from adding agent tools; SWE-agent's authors deprecated their own custom ACI. **Resolution:** invariant-bearing primitives stay core; everything user-facing is an extension, via four explicit tests. | `06`, `23` |
 | **Review-gated vs open registry** | Zed/Raycast/Homebrew gate on human review; Obsidian abandoned it after admitting updates were never re-reviewed. **Resolution:** open publishing + automated per-version screening + runtime trust. | `25` |
@@ -170,7 +170,8 @@ This index synthesizes the docs in this directory; each carries its own primary 
 - https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills — SKILL.md progressive disclosure
 - https://research.trychroma.com/context-rot — context degradation with input length
 - https://manus.im/blog/Context-Engineering-for-AI-Agents-Lessons-from-Building-Manus — KV-cache discipline
-- https://luajit.org/luajit.html + /status.html — LuaJIT overview and release model
-- https://luajit.org/faq.html — process-level sandboxing stance
+- https://luau.org/ + https://luau.org/sandbox/ — Luau overview and the capability boundary
+- https://github.com/luau-lang/luau — source, CMake build, `lua_resetthread`
+- `docs/27-a1-vm-spike.md` — the spike that chose it
 - https://maki.sh/docs/plugins/ — Lua-extension precedent in a Rust coding agent
 - https://github.com/kfcafe/imp — Lua-extension precedent

@@ -94,17 +94,17 @@
 
 **Exit criteria:** the suite runs in CI in <10 min; a deliberate prompt regression is detected.
 
-### M5 — Lua runtime (weeks 18–22)
-**Goal:** a Lua script can extend the harness without recompiling it.
+### M5 — Extension runtime (weeks 18–22)
+**Goal:** a Luau script can extend the harness without recompiling it.
 
 | Deliverable | Notes |
 |---|---|
-| LuaJIT vendored + CMake shim | Commit-pinned `v2.1`; `msvcbuild.bat` on Windows (`17`) |
+| Luau vendored + CMake shim | Commit-pinned `c0e346ed`; CMake, no external deps, `LUAU_STATIC_CRT=ON` (`17`). Decision made in `27`, before M0 rather than at M5 |
 | VM lifecycle | `lua_newstate` with allocator routed to mimalloc; **JIT off by default** |
 | Extension loader | Discovery, manifest validation, `api_version` check, restricted env (`19`) |
 | Core API surface | ~18 entry points from `18`: `tool.register`, `cmd.register`, `on`/`off`, `emit`, `defer`, `timer`, `log`, `cfg`, `spawn`, `fs`, `session.snapshot` |
 | `LuaToolSource` | Lua tools land in the same registry as built-ins |
-| Event→Lua bridge | Classic `lua_CFunction` on the loop thread, `pcall` per hook, veto convention (`20`) |
+| Event→Luau bridge | Classic `lua_CFunction` on the loop thread, `lua_pcall` per hook, veto convention (`20`) |
 | Error containment | pcall boundaries, per-extension error counter, quarantine |
 | `/reload` | Fresh `lua_State` per extension; stale-closure semantics documented |
 | **First bundled extensions** | `task`, `fs-extra` (`todo`), `skills`, `memory` — the ones whose subsystems already exist. They land **in M5, after the loader**, not later: they are the dogfooding that proves the API before the ecosystem depends on it. Exit criterion: **the disable-all test** (`23`) — every first-party extension disabled produces a working, less capable agent. If it does not, something became core by accident |
@@ -126,7 +126,7 @@
 **Exit criteria:** a cloned repo containing a malicious extension cannot execute code; the grant flow shows exactly what will load.
 
 ### M7 — Skills, MCP, and dogfooding (weeks 26–30)
-**Goal:** the remaining subsystems exist, and Lua has displaced real C++ features.
+**Goal:** the remaining subsystems exist, and Luau has displaced real C++ features.
 
 | Deliverable | Notes |
 |---|---|
@@ -159,9 +159,9 @@
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| LuaJIT bus factor 1 (Mike Pall) | Supply risk | Pin a commit; vendor the source tree; OpenResty's synced downstream is the fallback (`17`) |
+| VM supply risk | Supply risk | Luau is maintained by Roblox with a public repo and CI. Pin a commit and vendor the source tree; the risk is materially lower than LuaJIT's bus factor of one, but it is not zero (`17`) |
 | Extension ecosystem never bootstraps | The differentiator is unproven | Dogfood at M7 by building real capability only in Lua; if the API cannot express it, fix the API — do not add C++ features back |
-| Lua extensions mistaken for a sandbox | Security incident | Docs state the trust model plainly; project extensions inert by default; the word "sandbox" never appears next to "Lua" (`12`) |
+| The VM boundary mistaken for a sandbox | Security incident | Docs state the limits plainly; project extensions inert by default; the word "sandbox" never appears next to "extension VM" (`12`) |
 | C++23 modules not portable | Build complexity | Do not depend on modules (`14`) |
 | Windows sandbox genuinely hard | Security gap | M1 ships the interface + fail-closed approvals; restricted-token enforcement lands M6. **Open question carried in `24`**: whether the loopback egress proxy works under AppContainer decides if Tier 2 is viable, or whether Tier 1 is the only honest Windows sandbox |
 | MCP spec churn (stateless rewrite) | Rework | Isolate behind a `_meta` choke point; pin a revision (`07`) |
@@ -194,7 +194,5 @@
 - https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2026-07-28/changelog.mdx — MCP stateless rewrite
 - https://en.cppreference.com/w/cpp/compiler_support/23 — C++23 feature support across compilers
 - https://luajit.org/status.html — rolling releases, commit pinning
-- https://luajit.org/faq.html — sandboxing stance
-- https://github.com/LuaJIT/LuaJIT/issues/1092 — 3.0 status and bus-factor context
 - https://maki.sh/docs/plugins/ — Lua extension precedent (dogfooding model)
 - Docs `04`, `05`, `06`, `11`, `12`, `13`, `14`, `17`, `18`, `19`, `20` (each carries its own primary sources)

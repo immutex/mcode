@@ -79,7 +79,7 @@ Neovim's own cross-thread handoff is `uv_mutex_lock` + queue + `uv_async_send`. 
 
 Producers call `bus.post(Event)`: lock, push, notify, unlock. Bounded at ~4096 pending with block-on-full (backpressure to the producer, never a drop).
 
-**Never call into Lua from a worker thread.** LuaJIT states are not thread-safe. All hook dispatch happens on the loop thread after the queue drain.
+**Never call into Luau from a worker thread.** `lua_State`s are not thread-safe. All hook dispatch happens on the loop thread after the queue drain. The one exception is the interrupt callback, which is documented as safe to set from an arbitrary thread (`12`).
 
 ## Log coupling
 
@@ -104,10 +104,10 @@ The OpenTelemetry logs model validates the split: fixed envelope fields for what
 | Delivery | Push a pre-sized table (`lua_createtable(L, 0, 6)`) + `lua_pcall` with a `luaL_traceback` message handler | Standard, debuggable, versionable |
 | Veto | Hook returns `{veto = "reason"}` (bare `false` accepted as sugar) | Explicit; carries the reason that gets surfaced to the model; anything else passes |
 | Hook error | Log + pass (fail-open for capability) | Config may make `Pre*` hooks fail-closed |
-| Thread | Loop thread only | LuaJIT states are not thread-safe |
+| Thread | Loop thread only | `lua_State`s are not thread-safe |
 | Cost | ~1 table alloc + N pushes + 1 pcall per hooked event | Microseconds at ≤100 hooked events/sec |
 
-LuaJIT's docs are explicit that callbacks are slow ("neither the C compiler nor LuaJIT can inline or optimize across the language barrier") and recommend pull-style APIs over push-style. That warning bites at millions of calls per second; at our rate the cost is noise. It does imply two things: **do not batch or coalesce Lua hook delivery** until measurement says otherwise, and **do expose a pull-style `mcode.session_events(i)`** for extensions that want to scan history rather than react to it.
+C→Lua callbacks are the expensive direction of the boundary — the host cannot inline across it. That warning bites at millions of calls per second; at our rate the cost is noise. It does imply two things: **do not batch or coalesce Luau hook delivery** until measurement says otherwise, and **do expose a pull-style `mcode.session_events(i)`** for extensions that want to scan history rather than react to it.
 
 FFI callbacks are rejected outright: a hard cap of 500–1000 simultaneous callbacks, permanent callbacks created by implicit conversion, and a documented risk of the VM panicking with `"bad callback"` when a JIT-compiled C call re-enters Lua.
 
@@ -143,9 +143,7 @@ FFI callbacks are rejected outright: a hard cap of 500–1000 simultaneous callb
 - https://bearcats.nl/simple-message-queue/ — queue implementations, `atomic_wait` mapping
 - https://opentelemetry.io/docs/specs/otel/logs/data-model/ — envelope vs attributes split
 - https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/ — ordering guarantees, `$/` forward compatibility
-- https://raw.githubusercontent.com/LuaJIT/LuaJIT/v2.1/doc/ext_ffi_semantics.html — callback cost, callback cap, "bad callback" panic
-- https://raw.githubusercontent.com/LuaJIT/LuaJIT/v2.1/doc/extensions.html — C++ exception interop
-- https://luajit.org/ext_c_api.html — `luaJIT_setmode` wrapper
+- https://luau.org/sandbox/ — hook dispatch constraints, interrupt safety
 - https://www.lua.org/manual/5.4/manual.html — `luaL_ref`, `lua_createtable`, GC modes, `LUA_MINSTACK`
 - https://raw.githubusercontent.com/mpv-player/mpv/master/DOCS/man/lua.rst — event registration and coalescing
 - https://wezterm.org/config/lua/wezterm/on.html — ordered callbacks, `false` short-circuit

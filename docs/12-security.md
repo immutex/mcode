@@ -1,6 +1,6 @@
 # Security Model
 
-> TL;DR: Two independent layers — a deterministic permission engine (what the agent *asks* to do) and an OS sandbox (what a running process *can* do) — plus a third: a Lua trust boundary that admits the extension VM is not a sandbox at all and isolates untrusted extensions by process.
+> TL;DR: Two independent layers — a deterministic permission engine (what the agent *asks* to do) and an OS sandbox (what a running process *can* do) — plus a third: the extension VM's capability boundary, which narrows what a loaded extension can reach. The third is **not an OS sandbox** and is never called one in user-facing text.
 
 ## Threat model
 
@@ -9,7 +9,7 @@
 | T1 | Malicious extension the user installed | Extension author | Full user-level compromise under the trusted tier |
 | T2 | Prompt-injected agent writes a malicious extension | Injected instructions | Persistence across sessions — boot-level persistence |
 | T3 | **Malicious repo ships `.mcode/extensions/`** | Repo author | One `git clone` + one run = code execution |
-| T4 | Engine bugs (LuaJIT / Lua CVEs) | — | Not mitigated by any Lua-level sandbox |
+| T4 | Engine bugs (Luau VM memory-safety defects) | — | Not mitigated by the capability boundary — the residual risk of any in-process VM |
 | T5 | Prompt injection via repo content, web, tool output | Content author | Exfiltration, destructive actions |
 | T6 | Malicious MCP server | Server operator | Tool poisoning, confused deputy |
 
@@ -57,8 +57,8 @@ Decides *before* a tool call. Rule evaluation: `deny` → `ask` → `allow`, fir
 | Git push (force: deny unless flagged) | ask | no | sandboxed |
 | `rm`/`rmdir` in workspace | ask | no | sandboxed |
 | Delete outside workspace, `sudo`, registry | deny | — | — |
-| **Lua extension load** | **ask + hash-pinned trust grant** | per file, hash-verified each load | trusted tier in-process; untrusted in subprocess |
-| **Lua `mcode.spawn` / `mcode.fs.*`** | checked against the manifest's declared permissions | per extension | see Layer 3 |
+| **Extension load** | **ask + hash-pinned trust grant** | per file, hash-verified each load | sandboxed thread in-process; untrusted tier would be a subprocess |
+| **`mcode.spawn` / `mcode.fs.*`** | checked against the manifest's declared permissions | per extension | see Layer 3 |
 | YOLO | explicit flag + typed confirmation per session | no | still sandboxed unless `--no-sandbox` (double flag) |
 
 **How the two gate inputs compose.** A permission decision is:
@@ -92,63 +92,80 @@ Mechanics:
 
 **Secrets hygiene:** deny-read list enforced in both the sandbox and the file tools; env scrubbing for spawned processes (pass a known-safe minimal env, never inherit wholesale); redact secret-shaped strings from logs and transcripts.
 
-## Layer 3 — Lua trust boundary
+## Layer 3 — Extension VM boundary
 
-**The extension VM is not a security boundary, and must never be described as one.**
+**The extension VM is a capability boundary, not an OS sandbox.** It runs in the agent process, in the same address space, with the same privileges. It narrows the question from *"an extension can do anything the user can"* to *"an extension can do only what the host API exposes."* It does not survive a VM engine bug, and upstream does not claim it is formally proven. **Never describe it as a sandbox in user-facing text.**
 
-This is not a limitation we are choosing; it is a property of LuaJIT, stated by its author:
+`17` owns why the VM is Luau and `27` the measurements. This section owns what the boundary does and does not contain.
 
-- LuaJIT FAQ: *"In general, the only promising approach is to sandbox Lua code at the process level and not the VM level."* Also: *"loading untrusted bytecode is not safe! It's trivial to crash the Lua or LuaJIT VM with maliciously crafted bytecode… there's no bytecode verification on purpose."*
-- FFI semantics doc: *"the FFI library is **not safe for use by untrusted Lua code**. If you're sandboxing untrusted Lua code, you definitely don't want to give this code access to the FFI library or to *any* cdata object."*
-- Kong ships a LuaJIT sandbox and still documents it as *"protection against trivial attackers or unintentional modification of the Kong global environment."*
+### What it contains
 
-### Why `ffi` ends the argument
+The removals are structural, not a library denylist, and the VM flag that makes globals readonly is unreachable from script. Verified against Luau `c0e346ed`:
 
-`ffi.C` binds to the process's global symbol namespace — on Windows that includes `kernel32.dll`; on POSIX libc, libm, libdl. `ffi.cdef` declares any C prototype at runtime, `ffi.load` opens any DLL/SO, and `ffi.cast` plus `VirtualProtect`/`mprotect` gives arbitrary native code execution from pure Lua.
+| Property | Mechanism | Evidence |
+|---|---|---|
+| No filesystem, no process execution, no native module loading | `io.` and `package.` absent; `os.` reduced to `clock`/`date`/`difftime`/`time` | `probe_io_reachable=0`, `probe_os_execute_reachable=0` |
+| No host reflection | `debug.` reduced to `traceback`/`info`; `dofile`/`loadfile` absent | A7 must still probe `debug.info` |
+| No bytecode | `loadstring` rejects bytecode; `string.dump`/`load` absent | `probe_loadstring_reachable=0` |
+| Globals cannot be monkey-patched | `_G`, every library table, and the string metatable are readonly via a VM-internal flag | `probe_global_write_escaped=0`, `probe_setmetatable_escaped=0` |
+| No finalizer reentrancy or use-after-finalize | `__gc` does not exist; host-only destructors run via `lua_newuserdatadtor` before the block is freed | API inspection |
+| Runaway scripts stop | `lua_callbacks()->interrupt` | source-verified below |
+| Memory is bounded and attributable | custom `lua_Alloc`; `lua_setmemcat` categories | API inspection |
 
-So `ffi.cdef[["int system(const char*);"]] ffi.C.system("…")` is a one-liner. **With `ffi` reachable, Lua-level sandboxing is impossible. Period.**
+Measured: 0 of 5 escapes in `27`. These are probes, not proofs.
 
-Worse, hiding `ffi` is not sufficient: a bytecode chunk containing a cdata literal **re-initializes the FFI library on load even if `ffi` was never registered** — a documented full escape from a no-stdlib, no-ffi sandbox to native code execution.
+### The interrupt guarantee, precisely
 
-And the empirical record agrees. Luanti shipped a mod sandbox and had to fix CVE-2026-40959: *"attackers [can] escape the Lua sandbox through crafted mods when LuaJIT is used"* → RCE. Factorio's Lua bytecode verifier was bypassed repeatedly until upstream removed the verifier entirely, saying it *"seems useless to make a promise that we can't seem to deliver."* Redis's CVE-2022-0543 was a packaging slip that left `package.loadlib` reachable, yielding `os.execute` at CVSS 10.0.
+Upstream documents the interrupt as firing "at any function call or at any loop iteration". **Verified from `lvmexecute.cpp@c0e346ed`:** `VM_INTERRUPT()` appears at exactly eight opcodes — `LOP_CALL`, `LOP_CALLFB`, `LOP_FASTPCALL`, `LOP_RETURN`, `LOP_FORNLOOP`, `LOP_FORGLOOP`, `LOP_JUMPBACK`, `LOP_JUMPX`.
+
+Both directions matter:
+
+- **Any loop is interruptible.** `while true do end` compiles to `JUMPBACK`; `for` to `FORNLOOP`/`FORGLOOP`; recursion to `CALL`. Strictly better than LuaJIT, where `LUA_MASKCOUNT` does not fire under JIT at all.
+- **A long straight-line basic block is not.** A function body with a million statements and no call, loop, or return runs to completion before the next safepoint. The interrupt is not per-instruction, so it **cannot be used for instruction counting** — CPU accounting counts safepoints, not work.
+
+The interrupt is also the only callback safe to set from another thread (`lua.h`: "interrupt is safe to set from an arbitrary thread but all other callbacks [are not]"), which is what makes a watchdog possible.
+
+**The kill switch is only as good as the shortest unbounded host call.** The interrupt cannot preempt *inside* a C++ host function, so every function the host exposes must be bounded in time.
 
 ### Trust tiers
 
-| Capability | Untrusted (repo-shipped / not yet trusted) | Semi-trusted (user-granted, fenced) | Trusted (user-installed) |
+| Capability | Untrusted (repo-shipped, untrusted) | Semi-trusted (user-granted) | Trusted (user-installed) |
 |---|---|---|---|
-| Runs in | **separate process**, own LuaJIT VM, Job Object / rlimits | agent process, own `lua_State`, `jit.off()` | agent process, JIT on |
-| `ffi` | never reachable; bytecode disabled | no | yes |
-| `io` / `os` / `package` / `debug` / `load` | no — host-injected capability API only | host wrappers, scoped paths | full stdlib |
-| Bytecode loading | rejected (`load(..., "t")`) | rejected | allowed |
-| Budget | OS wall-clock + kill | count hook with `jit.off()` (10–20% tax) | cooperative |
-| Memory ceiling | OS Job Object / rlimit | allocator or GC polling | none |
+| Runs in | **separate process**, own VM, Job Object / rlimits | agent process, own sandboxed thread | agent process, own sandboxed thread |
+| `ffi` | does not exist | does not exist | does not exist |
+| `io` / `package` / `os.execute` / full `debug` / `loadstring` | absent — host capability API only | absent | absent |
+| Globals readonly | yes | yes | yes |
+| Bytecode | rejected | rejected | allowed, **signed only** |
+| Budget | OS wall-clock + kill | interrupt + host watchdog | interrupt + watchdog |
+| Memory ceiling | OS Job Object / rlimit | `lua_Alloc` ceiling | ceiling, advisory |
 | Network | deny by default, per-call prompt | allowlist | full |
-| Error containment | process crash = that extension only | `pcall` per hook | `pcall` per hook |
-| Hot reload | restart the extension process | new `lua_State` | `package.loaded[name]=nil` + re-require (stale closures are a known limitation) |
-| Trust grant | explicit prompt + persisted **hash-pinned** trust DB; view-then-trust, no one-key allow | this tier *is* the grant | install action = grant |
+| Error containment | process crash = that extension only | `lua_pcall` per hook | `lua_pcall` per hook |
+| Hot reload | restart the extension process | new sandboxed thread | new sandboxed thread |
+| Trust grant | prompt + hash-pinned trust DB; view-then-trust, no one-key allow | this tier *is* the grant | install action = grant |
 
-**v1 ships the trusted and semi-trusted tiers only.** The untrusted tier (out-of-process, for a marketplace) is out of scope; if it ever becomes a goal the answer is a process boundary or Luau — never LuaJIT in-process.
+**The boundary is identical across all three tiers** — that is what choosing Luau bought. What differs is the *host capability API* handed to the extension and, for untrusted, the process boundary on top.
+
+**v1 ships the trusted and semi-trusted tiers.** The untrusted tier stays a documented non-goal; `19` keeps the extension-host seam so it can be added without a redesign.
 
 ### Repo-shipped extensions (T3)
 
-A cloned repository must never auto-execute code. The rule:
+A cloned repository must never auto-execute code.
 
-1. **Never auto-load repo-local extensions.** `.mcode/extensions/` in a project is inert until the user grants trust. Once granted, a project extension runs at the **semi-trusted tier**: in-process, in its own `lua_State`, with `jit.off()` and no `ffi` — not the out-of-process untrusted tier, which v1 does not ship (`12` §Layer 3).
-2. The grant is **per-file and hash-pinned**: show what will load, hash it at grant time, verify the hash at every load. (Neovim's 0.12 release hardened exactly this after their `:trust` TOCTOU note.)
+1. **Never auto-load repo-local extensions.** `.mcode/extensions/` is inert until the user grants trust. Once granted, a project extension runs at the **semi-trusted tier**: in-process, own sandboxed thread, same boundary as a user-installed extension — not the out-of-process tier, which v1 does not ship.
+2. The grant is **per-file and hash-pinned**: show what will load, hash it at grant time, verify at every load. (Neovim 0.12 hardened exactly this after their `:trust` TOCTOU note.)
 3. Reject bytecode, symlinks, and absolute-path escapes in manifests.
-4. Repo-local extensions run at the **semi-trusted tier** — granted, in-process, `ffi`-free, `jit.off()`, manifest permissions enforced. The out-of-process untrusted tier is a documented non-goal for v1.
-5. `--no-extensions` exists and is honored for headless/CI runs.
+4. `--no-extensions` exists and is honored for headless/CI runs.
 
 Note T2 (prompt-injected agent writes an extension): the agent has disk write access by design, so it can drop a file into the extensions directory. Mitigations are the trust gate above plus keeping the *user* extension directory (`~/.config/mcode/extensions/`) outside the workspace so the permission engine's workspace-write rules do not cover it.
 
 ### Hot reload and hang handling
 
-- **You cannot unload Lua state.** `package.loaded[name] = nil` + `require` merely re-executes the file; old closures, upvalues, timers, callbacks, JIT traces, and cdata from the previous incarnation stay reachable and keep running.
-- True unload requires a **new VM** (OpenResty's `lua_code_cache off` does this per request and pays an order-of-magnitude penalty) or a **process restart**.
-- **Errors are containable** via `lua_pcall`/`pcall` boundaries per hook.
-- **Infinite loops and OOM are not containable in-process.** Instruction-count hooks do not fire under JIT, and OOM surfaces as `PANIC: unprotected error in call to Lua API`, which terminates the process. Redis accepts this too: it does not kill scripts mid-run, it freezes and offers `SCRIPT KILL` / `SHUTDOWN NOSAVE`.
-- Practical consequence: per-extension `lua_State` buys *error* isolation only. Hang and OOM isolation require the extension-host subprocess.
+Materially better than the LuaJIT-era design, because `lua_resetthread` exists:
 
+- **A sandboxed thread can be truly reset.** `lua_resetthread` closes upvalues, clears call frames and thread state, and clears the stack — a genuinely clean thread, not a re-`require` over stale closures and live JIT traces.
+- **The VM's global state still persists.** Reset does not unload code reachable from the shared global state (interned strings, readonly library tables). Truly unloading an extension means dropping its thread *and* unregistering anything it registered with the host.
+- **Trap: `lua_resetthread` sets `L->finalizers = nullptr` without running them** (`lstate.cpp:170`). Host userdata destructors still queued for that thread are silently skipped and the resource leaks. Drain finalizers before reset.
+- **Errors are containable** via `lua_pcall` per hook. **Hangs** via the interrupt plus a host watchdog. **OOM** via the allocator ceiling, since all VM memory routes through `lua_Alloc` — this is where Luau is materially better than LuaJIT, whose FFI allocations bypassed GC accounting entirely.
 ## What sandboxing does NOT protect against
 
 Explicit, so nobody over-trusts it:
@@ -163,19 +180,19 @@ Explicit, so nobody over-trusts it:
 8. **Sandbox escape via OS/kernel 0-days** and via legacy configurations.
 9. **Host-side helpers crossing the boundary** — our own file-write and fetch implementations must enforce policy themselves.
 10. **Social engineering of the approval prompt** — the human is the last and most fallible line.
-11. **`ffi` in any reachable form** — arbitrary memory R/W, arbitrary C calls, native code execution.
-12. **Bytecode loading** — no verifier exists by design; escape and VM crash.
-13. **LuaJIT/Lua engine bugs** — CVE-2024-25176/77/78 (parser/GC), Redis CVE-2025-49844 (UAF in the parser, CVSS 9.9, 13 years old), CVE-2025-46817/46818.
-14. **CPU exhaustion under JIT** — only a process-level kill works.
-15. **Memory exhaustion beyond a ceiling that cannot be reliably set** — FFI allocations bypass GC accounting entirely.
-16. **C-stack exhaustion and "bad callback" VM PANIC** via FFI callback re-entry — process-fatal, not catchable.
-17. **In-process data theft** — anything in the agent process can read agent state, env-var API keys, and other extensions' tables. Taint labels shape behavior; they do not confine code.
+11. **A VM memory-safety defect.** The boundary is a property of the VM's implementation, not a proof. A defect in Luau is a full escape from the agent process — the same residual risk any in-process VM carries. This is the reason the untrusted tier stays a documented non-goal (`19`).
+12. **Unsigned bytecode.** The VM trusts its compiler. Bytecode skips the parser and the sandbox-installation step, so it is accepted only from signed sources.
+13. **Host functions the extension calls.** Every capability is a host C++ function. Its own bugs — a path check that forgets symlinks, a spawn that does not scrub the environment — are outside the VM boundary entirely. The boundary narrows *reach*, not *correctness*.
+14. **CPU exhaustion in a long straight-line block.** The interrupt fires at eight opcodes (`12` §Layer 3), not per instruction, so a call-free loop body still yields and is killed, but a huge basic block without a call, branch, or return runs to completion first. Per-extension CPU accounting counts safepoints, not work.
+15. **C-stack exhaustion.** Deep non-tail recursion hits the host stack; `lua_checkstack`/`LUAI_MAXCSTACK` bound it, but the failure mode is an abort, not a catchable error.
+16. **In-process data theft from other extensions.** Extensions share one VM global state; readonly tables stop *mutation*, not *reads* of anything the host put there. Never place a secret in a global.
+17. **Host state reachable through the capability API.** Anything the host exposes — a tool that reads arbitrary paths, a spawn that inherits env — is a capability the extension legitimately holds. Taint labels shape behavior; they do not confine code.
 18. **TOCTOU on trust grants** — hash at grant *and* at load.
-19. **Accidental global-state corruption** — hygiene, not security.
+19. **Accidental global-state corruption** — readonly globals prevent most of it; the rest is hygiene, not security.
 
 ## Traps
 
-- **Calling the Lua sandbox "security."** Every project that tried it documents that it stops only accidents. Say "hygiene" or do not ship it.
+- **Calling the extension boundary "a sandbox."** It is an in-process capability boundary, not an OS sandbox, and upstream does not claim it is formally proven. Say "capability boundary" or do not ship the claim.
 - **Prefix rules as security.** Documented-bypassable; treat the rule engine as UX and the sandbox as the boundary.
 - **Auto-allow without a sandbox.** Auto-approval is safe *because* it is sandbox-scoped.
 - **Command-substitution blindness.** `echo $(git clean -f)` hides a destructive subcommand inside a read-looking one.
@@ -198,17 +215,14 @@ Explicit, so nobody over-trusts it:
 
 ## Sources
 
-- https://luajit.org/faq.html — process-level sandboxing stance, bytecode danger
-- https://luajit.org/ext_ffi_semantics.html — FFI is not safe for untrusted code; no memory safety
-- https://luajit.org/ext_ffi_api.html — `ffi.C` symbol namespaces, `ffi.load`, `ffi.cast`
-- https://luajit.org/extensions.html — `load` modes ("t" = source only)
-- https://www.corsix.org/content/malicious-luajit-bytecode — full sandbox escape via bytecode cdata literal
+- https://luau.org/sandbox/ — library removals, bytecode rejection, readonly globals, `__gc` removal, interrupt, memory limits, upstream caveat
+- https://github.com/luau-lang/luau/blob/master/VM/src/lvmexecute.cpp — `VM_INTERRUPT()` at exactly 8 opcodes (source-verified)
+- https://github.com/luau-lang/luau/blob/master/VM/src/lstate.cpp — `lua_resetthread` clears call frames, upvalues, stack; skips queued finalizers
+- `docs/27-a1-vm-spike.md` — the conformance probes and measurements
+- https://github.com/LuaJIT/LuaJIT/issues/779 — `LUA_MASKCOUNT` does not fire under JIT
 - https://github.com/Kong/kong/blob/master/kong.conf.default — `untrusted_lua` tiers, sandbox warning
 - https://github.com/kong/kong-lua-sandbox — whitelist env, instruction quota
 - https://redis.io/docs/latest/develop/programmability/ — sandbox scope, busy-reply threshold, SCRIPT KILL
-- https://www.ubercomp.com/posts/2022-01-20_redis_on_debian_rce — CVE-2022-0543 `package.loadlib` → `os.execute`
-- https://memorycorruption.net/posts/rce-lua-factorio/ — bytecode verifier bypass; upstream removing the verifier
-- https://github.com/luanti-org/luanti/security/advisories/GHSA-g596-mf82-w8c3 — CVE-2026-40959 LuaJIT sandbox escape
 - https://neovim.io/doc/user/lua/ — `vim.secure`, trust DB, TOCTOU note
 - https://raw.githubusercontent.com/mpv-player/mpv/master/DOCS/man/lua.rst — thread-per-script, endless-loop behavior
 - https://wezterm.org/config/files.html — config re-evaluation semantics

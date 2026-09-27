@@ -1,6 +1,6 @@
 # AGENTS.md
 
-mcode — C++23 coding-agent harness. LuaJIT is the extension layer.
+mcode — C++23 coding-agent harness. Luau is the extension layer.
 **Spec: `docs/00-index.md`.** Where code and docs disagree, the docs win.
 
 ## Layout
@@ -13,7 +13,7 @@ mcode — C++23 coding-agent harness. LuaJIT is the extension layer.
 | `tests/` | Catch2 unit tests |
 | `cmake/` | Warning set, per-platform target config |
 | `conan/profiles/` | Per-platform Conan profiles |
-| `conan/recipes/luajit/` | Private LuaJIT recipe — Conan Center's is unusable |
+| `conan/recipes/luau/` | Private Luau recipe — upstream ships CMake, so this is a thin wrapper |
 | `scripts/` | `bootstrap.ps1` / `bootstrap.sh` |
 | `.github/workflows/ci.yml` | Three-platform CI matrix |
 
