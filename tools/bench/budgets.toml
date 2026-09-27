@@ -1,0 +1,44 @@
+# Benchmark budgets and gate kinds.
+#
+# Two kinds, because the two families of metric behave differently (docs/28):
+#
+#   ceiling   value must be <= limit. A budget from docs/01 or docs/26.
+#             Used where the number is a hard design constraint.
+#
+#   baseline  value must be within `tolerance` of `expected`. A regression gate.
+#             Only usable on metrics that are deterministic across runs.
+#
+# Measured variance on a quiet Windows x64 machine, 5 consecutive runs:
+#   memory metrics (allocator counters)  0.0%   -- exactly deterministic
+#   timing metrics                      26-131%  -- unusable as a tight gate
+#
+# So memory gets baseline gates at 5%, and timing gets ceiling gates against
+# the documented budget with a wide safety factor. A 10% regression gate on a
+# timing metric would fail on noise, which is worse than no gate: it trains
+# people to ignore the gate.
+
+[memory]
+# Deterministic. Gate these tightly.
+ext_bytes_mean = { kind = "baseline", expected = 352736, tolerance = 0.05 }
+ext_bytes_peak = { kind = "baseline", expected = 385456, tolerance = 0.05 }
+bare_vm_bytes = { kind = "baseline", expected = 320016, tolerance = 0.05 }
+
+[budgets]
+# The documented budgets, enforced as ceilings.
+ext_bytes_mean = { kind = "ceiling", limit = 524288 }
+ext_bytes_peak = { kind = "ceiling", limit = 524288 }
+
+[timing]
+# Not deterministic. Gate against the budget, not against the last run.
+#
+# load_per_ext_us: docs/01 allows <=1 ms for the first extension; the marginal
+# cost is far lower. Gating at 250 us leaves 4x over the measured ~110 us.
+load_per_ext_us = { kind = "ceiling", limit = 250 }
+
+# 20 extensions must load inside docs/26's 10 ms budget.
+load_total_ms = { kind = "ceiling", limit = 10 }
+
+# docs/26 allows 0.5 ms per vetoable event. Gating at 50 handlers against the
+# full budget would pass even a 100x regression, so this gates at 10% of it.
+dispatch_handlers_50_us_per_call = { kind = "ceiling", limit = 50 }
+dispatch_handlers_10_us_per_call = { kind = "ceiling", limit = 10 }

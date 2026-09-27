@@ -83,6 +83,29 @@ The budget stays at ≤0.5 ms because the risk it guards is not handler count �
 | `26` B3 acceptance | `ext doctor` shows bytes per extension | Met — `bytes_allocated()` per host is exact |
 | `26` B4 acceptance | dispatch budget | Met, 138× margin at 50 handlers |
 
+## B5 — budget gates
+
+`tools/bench/budgets.toml` declares the gates; `tools/bench/gate.py` enforces them. CI runs `mcode_bench 20 8 20000 | gate.py` on every platform and uploads the raw output as an artifact.
+
+**Two gate kinds, because the two metric families behave differently.** Five consecutive runs on a quiet machine:
+
+| Metric family | Run-to-run spread | Gate kind |
+|---|---|---|
+| Memory (`ext_bytes_*`, `bare_vm_bytes`) | **0.0%** — exactly deterministic | `baseline`, 5% tolerance |
+| Timing (load, dispatch) | **26–131%** | `ceiling` against the documented budget |
+
+**A 10% regression gate on timing would be unusable.** The plan proposed one tolerance for all metrics; the measurement says that would fail on noise, and a gate that fails on noise trains people to ignore it. So timing is gated against the budget it must satisfy, with a safety factor — `load_per_ext_us` at 250 µs against a measured ~110 µs, `dispatch_handlers_50` at 50 µs against the 500 µs budget (10%, so a 100× regression still trips).
+
+**A metric may carry both kinds.** `ext_bytes_mean` is both a deterministic baseline (5%) and a documented ceiling (512 KB). An early version of the gate used `setdefault` and silently kept only the first rule, dropping the ceiling — fixed, and the fix is why the gate now reports nine checks instead of seven.
+
+Verified by fault injection:
+
+| Injected | Result |
+|---|---|
+| 20% inflation of `ext_bytes_mean` | `FAIL ext_bytes_mean: 423283 is +20.0% from the baseline` |
+| `load_per_ext_us` 900, `load_total_ms` 42, `dispatch_handlers_50` 120 | all three ceilings breached, exit 1 |
+| Garbage input | exit 2, "no metrics found" — an unparseable run is not a pass |
+
 ## Open questions
 
 - **Does the reduced stdlib set pay off?** Measure before adopting; it is the only lever with real headroom.

@@ -149,6 +149,25 @@ jobs:
           [ -f "$executable" ] || executable="build/Release/src/mcode.exe"
           "$executable"
 
+      # docs/26 B5. Gates the measurement spine against tools/bench/budgets.toml.
+      # Memory metrics are deterministic and gated tightly; timing metrics vary
+      # 26-131% run to run, so they are gated against the documented budget with
+      # a wide safety factor rather than against the last run (docs/28).
+      - name: Benchmark budget gate
+        shell: bash
+        run: |
+          executable="build/Release/tools/bench/mcode_bench"
+          [ -f "$executable" ] || executable="build/Release/tools/bench/mcode_bench.exe"
+          "$executable" 20 8 20000 | tee bench-output.txt | python3 tools/bench/gate.py
+
+      - name: Upload benchmark output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-output-${{ matrix.name }}
+          path: bench-output.txt
+          if-no-files-found: ignore
+
       - name: Platform-specific tests
         run: ctest --preset ${{ matrix.preset }} -L platform --output-on-failure
 
