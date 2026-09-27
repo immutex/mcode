@@ -125,7 +125,7 @@ Registry invariants:
 
 | Mechanism | Unit | Discovery | Cost |
 |---|---|---|---|
-| **Lua extension** | directory with `ext.toml` + `main.lua` | filesystem scan of user/project roots, trust-gated | ~0.5 MB VM once; ~0 ms per extension when `main.lua` only registers (`19`) |
+| **Lua extension** | directory with `ext.toml` + `init.luau` | filesystem scan of user/project roots, trust-gated | ~0.5 MB VM once; ~0 ms per extension when `init.luau` only registers (`19`) |
 | **Skill** | directory with `SKILL.md` | filesystem scan, precedence-ordered | ~30 tokens in prompt until invoked (`08`) |
 | **MCP server** | process (stdio) or URL (HTTP) | config + `server/discover` | process spawn; schema tokens (`07`) |
 | **Hook** | Lua function via `mcode.on` | registered at extension load | one `pcall` per event (`20`) |
@@ -175,7 +175,7 @@ src/
   core/       agent · context · events · session · workspace
   model/      model_client.hxx · openai_compatible/
   tools/      tool.hxx (ToolDef, ToolSource) · registry · executor · filesystem/ · shell/
-  lua/        runtime/ (VM, allocator, JIT policy) · bindings/ · api/ · loader/
+  ext/        runtime/ (VM, allocator, interrupt, budget) · bindings/ · api/ · loader/
   skills/     SKILL.md discovery (`08`)
   mcp/        client/ · transport/ · tool_source/
   network/    Asio io_context, Beast HTTP/SSE, egress proxy
@@ -188,8 +188,8 @@ extensions/   first-party Lua extensions (dogfooding)
 
 Boundaries that matter more than the tree:
 
-- `core/agent` includes **only** `model_client.hxx`, `context`, `registry`, `events`, `session`. If a change to `mcp/` or `lua/` requires touching `core/agent`, the abstraction is wrong.
-- `lua/` and `mcp/` are peers, not layers: both implement `ToolSource` and both subscribe to events.
+- `core/agent` includes **only** `model_client.hxx`, `context`, `registry`, `events`, `session`. If a change to `mcp/` or `lib/` requires touching `core/agent`, the abstraction is wrong.
+- `lib/` and `mcp/` are peers, not layers: both implement `ToolSource` and both subscribe to events.
 - `terminal/` is a **subscriber**, never a dependency of anything below it.
 
 ## Undo and rollback

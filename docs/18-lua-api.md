@@ -1,30 +1,51 @@
-# Lua Extension API
+# Luau Extension API
 
-> TL;DR: One top-level `mcode` table with ~18 entry points, two-level namespacing, integer ids (never C++ pointers) as handles, `value, err` for environmental failure and `error(msg, 2)` for contract violation, and veto-capable hooks that run synchronously on the loop thread under a 50 ms budget.
+> TL;DR: One top-level `mcode` table with **22 entries, frozen at `mcode.api_version = 1`**, two-level namespacing, integer ids (never C++ pointers) as handles, `value, err` for environmental failure and `error(msg, 2)` for contract violation, and veto-capable hooks that run synchronously on the loop thread under a 50 ms budget.
+>
+> **Frozen means frozen.** The surface must be complete before the VM is sealed, because `luaL_sandbox` makes the `mcode` table readonly and Luau enforces readonly on every C API write path — there is no host bypass. Adding an entry after sealing is impossible, not merely discouraged (`12` §Layer 3).
 
 ## Design constraints
 
 | Constraint | Value | Why |
 |---|---|---|
-| Top-level entry points | ≤ ~20 | Every exposed name is a forward-compatibility commitment forever. Kong's PDK scales via namespaces, not a wide root |
+| Top-level entry points | **22, frozen** | Every exposed name is a forward-compatibility commitment forever, and sealing makes it physically irreversible. Kong's PDK scales via namespaces, not a wide root |
 | Namespacing | two-level from day one (`mcode.tool.register`) | Flat modules (`mp.*`, `hs.*`) work to ~40 names then sprout domain prefixes anyway |
 | Private namespace | `mcode._*` reserved, undocumented, no stability guarantee | Neovim's `nvim__x` precedent |
 | Versioning | integer `mcode.api_version` + `mcode.capabilities` set | Feature detection beats version sniffing (Neovim `api_level`, Kong `version_num`) |
 | Change policy | additive-only post-1.0; never rename | Neovim's `vim.loop`→`vim.uv` rename broke downstream distros |
-| Handles | integer ids backed by host-side `luaL_ref` | Pointers leak lifetime; see "What not to expose" |
+| Handles | integer ids backed by host-side `lua_ref` | Pointers leak lifetime; see "What not to expose" |
+| Boundedness | **every entry returns within a stated budget** | The VM interrupt cannot preempt inside a host call, so an unbounded entry defeats the kill switch (`12` §Layer 3) |
+| Dialect | **Luau, Lua 5.1-based** — no `//`, no `utf8` table, no 64-bit integers, no `<close>` | `17`. Lua 5.4-era copy-paste does not run |
 
 ## Extension layout
 
 ```
 .mcode/extensions/<name>/
   ext.toml        # manifest: name, version, api_version, permissions, description
-  main.lua        # top-level script, run once at load; registers via mcode.*
-  lua/            # require-able modules, resolved relative to the extension first
+  init.luau       # top-level script, run once at load; registers via mcode.*
+  lib/            # modules, reached through the host-injected require
 ```
 
-**Top-level script, not `return { setup = ... }`.** Registration is inherently side-effectful; a returned table would need a second interpretation pass and a documented call convention for no benefit. Every mature Lua host converges here — mpv (`main.lua`), AwesomeWM (`rc.lua`), Hammerspoon (`init.lua`). WezTerm's return-a-table works because it has exactly one consumer (config); we have many (tools, commands, hooks, timers).
+**`.luau`, not `.lua`.** Every file the host parses is `.luau`, so `luau-analyze` picks it up without configuration and the dialect is stated by the extension. The name is `init.luau`, matching upstream Luau's module convention — one name in one place, rather than `main.lua` in the docs and `init.luau` in the code.
 
-**`main.lua` must be cheap.** It registers and returns; heavy work goes behind `mcode.on("session.start")` or a first tool call. This is the lazy-loading discipline that keeps startup in single-digit milliseconds (lazy.nvim evidence: registration must be sub-millisecond).
+**Top-level script, not `return { setup = ... }`.** Registration is inherently side-effectful; a returned table would need a second interpretation pass and a documented call convention for no benefit. Every mature host converges here — mpv (`main.lua`), AwesomeWM (`rc.lua`), Hammerspoon (`init.lua`). WezTerm's return-a-table works because it has exactly one consumer (config); we have many (tools, commands, hooks, timers).
+
+**`require` is host-provided.** The Luau VM ships no `require` at all. `Luau.Require` is the upstream answer, and it is **rejected here**: it walks the filesystem looking for config, and executes what it finds. mcode resolves modules itself, against the extension root and nowhere else.
+
+| Property | Value |
+|---|---|
+| Search path | The extension's own `lib/` only. No parent walk, no user scope, no `package.path` |
+| Path form | Relative to the extension root (`require("./lib/util")`), with `init.luau` resolving a directory |
+| Config files | **None.** No `.luaurc`, no `.config.luau`, nothing executed during resolution |
+| Caching | Cached by resolved path, so a module body runs once per extension thread |
+| Cycles | Detected; refused with the require chain rather than a stack overflow |
+| Escape | A path resolving outside the extension root is a load error, checked after symlink resolution |
+
+**Why upstream's Require is rejected.** `Luau.Require` pulls in `Luau.Config`, and `Luau.Config` does not merely parse: `executeAndExtractConfig` compiles `.config.luau` and runs it with `lua_resume` (source-verified in `Config/src/LuauConfig.cpp`). `RequireNavigator` calls it while walking for config files. So linking upstream's Require means **any `.config.luau` on the resolution path executes** — a second code path, triggered by discovery, that the hash-pinned trust gate does not cover. It is bounded by an interrupt callback, which makes it safe from hangs and irrelevant to the trust question.
+
+Our resolver is ~80 lines, resolves only inside the extension root, executes no config, and is covered by `A7`'s suite. Upstream's is better tested; it is still the wrong trade.
+
+**`init.luau` must be cheap.** It registers and returns; heavy work goes behind `mcode.on("session.start")` or a first tool call. This is the lazy-loading discipline that keeps startup in single-digit milliseconds (lazy.nvim evidence: registration must be sub-millisecond).
 
 `ext.toml` is the declarative half — the role Kong's `schema.lua` plays: name, version, `api_version` constraint, permissions, description. Validated at load; a bad manifest fails the *extension*, never the session.
 
@@ -53,12 +74,22 @@
 | `mcode.skill.register(def)` | register a skill: `{name, description, body, path?}`; discovery may also find `SKILL.md` on disk (`08`) | `SKILL.md` convention |
 | `mcode.mcp.register(def)` | declare/configure an MCP server: `{name, transport, command/url, tools?}`; tools land in the registry as `mcp__<server>__<tool>` (`07`) | Kong declarative config |
 | `mcode.context.add_instructions(text, opts?)` | contribute to the system prompt; **budgeted and counted** (`19`) | Neovim `before_agent_start`-style rewrite, but budgeted |
-| `mcode.ext.list()` / `.disable(name)` | introspection and runtime disable | `:checkhealth`, plugin-disable flags |
-| `mcode.ext.doctor()` | aggregate per-extension health; extensions may supply `health()` | Neovim `:checkhealth` |
+| `mcode.ext.name` | the calling extension's own name, as a string | Needed for self-attribution without a `debug` API that we removed |
 
-That is 22 entries. Anything beyond this — string helpers, path manipulation, table utilities — belongs in a pure-Lua companion library, **not** the C-exposed surface. Neovim's `vim.*` utility creep is the cautionary case: every name here is a forward-compatibility commitment forever.
+**That is 22 rows: 25 callable names and 3 fields, and v1 is closed.** `require` is deliberately *not* in this table: Luau treats it as a language-level global, so the host injects it as one. It is a capability all the same, and it is listed under "Extension layout" above. Anything beyond this — string helpers, path manipulation, table utilities — belongs in a pure-Luau companion library, **not** the C-exposed surface. Neovim's `vim.*` utility creep is the cautionary case.
 
-Two deliberate omissions from the spec's sketch: there is no `mcode.event` (use `mcode.on`/`mcode.emit`) and no `mcode.process` (use `mcode.spawn`) — aliases for the same capability cost surface area and split the documentation.
+Deliberate omissions, each for a stated reason:
+
+| Not exposed | Because |
+|---|---|
+| `mcode.event` (alias of `on`/`emit`) | Aliases for one capability cost surface area and split the documentation |
+| `mcode.process` (alias of `spawn`) | Same |
+| `mcode.ext.list()` / `.doctor()` | Host-side introspection. An extension asking the host about *other* extensions is a capability with no v1 use case, and it hands a hostile extension a map of what is loaded. These are CLI surfaces (`mcode ext doctor`), not API surfaces |
+| `mcode.ext.disable(name)` | Same, and worse: it lets one extension disable another. Disabling is a user action |
+| `mcode.session.fork` | Deferred. Branching is a host concern until an extension actually needs speculative work; shipping it now freezes a signature nobody has used |
+| Anything async | v1 hooks are synchronous with a budget. A coroutine-based `on` is an open question, not a v1 commitment |
+
+**What "frozen" costs.** Every one of these is addable later — `api_version` is additive-only and `mcode.capabilities` exists for feature detection. The reverse is not true: an entry shipped and later found wrong can only be deprecated, never removed. That asymmetry is why the bar for v1 is "proven need", not "probably useful".
 
 ## Events and hooks
 
@@ -81,7 +112,7 @@ Handler receives **one plain-data event table** (Neovim's autocmd `ev` shape). R
 | Veto is opt-in per event | Only events documented as vetoable (`tool.pre_call`, `spawn.pre`, `prompt.pre`) accept a veto return. **One protocol**: return `{veto = "reason"}`. Bare `false` is accepted as sugar for `{veto = "vetoed by <ext>"}` — the reason is what gets surfaced to the model, so prefer the explicit form |
 | First veto wins, and short-circuits | Later handlers for that event are skipped for this dispatch (`wezterm` `return false` short-circuit). Non-veto handlers are never skipped by a peer's error |
 | Veto reason is surfaced | Shown to the user and fed back to the model, attributed to the vetoing extension |
-| Veto handlers are synchronous | Run on the loop thread under a **50 ms wall-clock budget**; breach ⇒ handler detached + logged (Neovim `ui_attach` forced-detachment precedent) |
+| Veto handlers are synchronous | Run on the loop thread under a **50 ms wall-clock budget**, enforced by the **VM interrupt plus a host watchdog** — not by an instruction count hook, which Luau does not have. Breach ⇒ handler detached + logged (Neovim `ui_attach` forced-detachment precedent) |
 | Notification events never veto | `tool.post_call`, `turn.end` — may be coalesced (mpv `observe_property` coalescing) |
 | Ordering | **Registration order only.** No priority integers in v1: with three vetoable events and first-veto-wins, order is the whole semantics. mpv and Kong added priority only once composition got genuinely adversarial |
 | Reentrancy | Dispatch iterates a **snapshot** of the handler list; register/deregister of the same event during dispatch is deferred; dispatch-depth cap |
@@ -98,7 +129,8 @@ Two distinct paths, matching the Lua community guideline ("an exception that is 
 | Environmental failure (file missing, spawn failed, permission denied) | `value, err` — assertable, matches `io.open`, Neovim result-or-message, luasocket |
 | Contract violation (wrong types, unknown event name, name collision) | `error(msg, 2)` — level 2 attributes the caller (Kong's `error(err, 2)`) |
 | Handler throws | Host `pcall`s with `debug.traceback`, logs `[extname] file:line msg`, keeps the subscription |
-| Repeated handler failure | Per-extension error counter trips quarantine after N consecutive failures (configurable) |
+| Repeated handler failure | Per-extension error counter trips quarantine after **5 consecutive failures**. Quarantine detaches every handler for that extension and reports it in `mcode ext doctor`; it clears on `/reload`, on a manual re-enable, or after a 60 s backoff with no further errors |
+| Slow handler | Watchdog breach detaches the handler and counts toward the same error counter. A detached handler is not retried within the session |
 
 **Errors never propagate into the loop.** An extension error is logged and the session continues — mpv (thread per script), AwesomeWM (`protected_call`), and Neovim (pcall around callbacks) all agree.
 
@@ -150,10 +182,8 @@ What the permission system enforces for extensions: `mcode.fs.*` and `mcode.spaw
 ## Open questions
 
 - When (if ever) does registration order stop being enough? Revisit only when extensions actually contend for the same hook.
-- Should `mcode.cmd.register` support completion functions in v1, or defer?
-- How many consecutive handler errors before quarantine — and is quarantine permanent or a backoff?
-- Do we need `mcode.on` for *async* handlers (coroutine-based) in v1, or is synchronous-with-budget enough?
-- Is the ~18-entry budget right, or do we need `mcode.ui.*` for extensions that render?
+- Do we need `mcode.on` for *async* handlers (coroutine-based), or is synchronous-with-budget enough? Luau coroutines exist in the VM; the question is whether the dispatch model wants them.
+- Is 22 the right number, or does an extension that renders need `mcode.ui.*`? Nothing in the first-party set (`23`) needs it, which is why it is not in v1.
 
 ## Sources
 
@@ -167,8 +197,8 @@ What the permission system enforces for extensions: `mcode.fs.*` and `mcode.spaw
 - https://www.hammerspoon.org/go/ — GC lifetime footguns, `hs.showError`
 - https://docs.konghq.com/gateway/latest/plugin-development/ — PDK namespaces, `PRIORITY`, `schema.lua`, forward-compat guarantee
 - https://github.com/openresty/lua-nginx-module — phase model, `ngx.get_phase`
-- https://www.lua.org/pil/8.3.html — error-handling guideline
-- https://www.lua.org/manual/5.4/manual.html — registry, `luaL_ref`, finalizer hazards
+- https://www.lua.org/manual/5.4/manual.html — error-handling guideline
+- https://github.com/luau-lang/luau/blob/master/Require/include/Luau/Require.h — upstream `require`, the configuration callback contract, and why `.config.luau` is executed
 - https://luau.org/sandbox/ — what the VM removes, readonly globals, interrupt
 - https://maki.sh/docs/plugins/ — Lua extension precedent, `plugin.toml` permissions
 - https://github.com/kfcafe/imp — Lua extension precedent, blocking hooks

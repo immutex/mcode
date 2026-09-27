@@ -137,7 +137,7 @@ Each task names its acceptance evidence. No task is done without a recorded meas
 | # | Task | Acceptance |
 |---|---|---|
 | **B1** | **Benchmark harness**: cold start, idle RSS, binary size. Local + CI. | Machine-readable report |
-| **B2** | **Extension load benchmark**: N extensions × registration-only `main.lua`. | Per-ext and aggregate load time; supplies `01`'s constant |
+| **B2** | **Extension load benchmark**: N extensions × registration-only `init.luau`. | Per-ext and aggregate load time; supplies `01`'s constant |
 | **B3** | **Per-extension memory accounting** via the host allocator. | `mcode ext doctor` shows bytes per extension |
 | **B4** | **Hook dispatch benchmark**: cost of a vetoable-event chain at 0/1/10/50 handlers. | Supplies the dispatch budget |
 | **B5** | **Budget gates in CI**: fail on regression beyond tolerance (10% default, per metric). | A deliberate regression is caught |

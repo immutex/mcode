@@ -1,6 +1,6 @@
 # Extensions
 
-> TL;DR: Extensions are Lua directories with a manifest, discovered from user and project roots, loaded in-process, and gated by a hash-pinned trust grant; every capability they add — tools, commands, hooks, context — registers through the same `mcode` API and lands in the same registries as the built-ins.
+> TL;DR: Extensions are Luau extension directories with a manifest, discovered from user and project roots, loaded in-process, and gated by a hash-pinned trust grant; every capability they add — tools, commands, hooks, context — registers through the same `mcode` API and lands in the same registries as the built-ins.
 
 ## The extension seam
 
@@ -26,8 +26,8 @@ Agent Core
 ~/.config/mcode/extensions/<name>/     # user scope (trusted)
 <project>/.mcode/extensions/<name>/      # project scope (untrusted until granted)
   ext.toml        # manifest
-  main.lua        # top-level script, run once at load
-  lua/            # require-able modules, resolved relative to the extension first
+  init.luau       # top-level script, run once at load
+  lib/            # modules, resolved relative to the extension root only
 ```
 
 Precedence: **project > user > built-in**, with same-name collisions reported at load rather than silently resolved (an extension shadowing another is a support burden, not a feature).
@@ -59,7 +59,7 @@ A bad manifest fails **the extension**, never the session.
 ## Loading lifecycle
 
 ```
-discover → validate manifest → trust check → hash verify → load → main.lua → registered
+discover → validate manifest → trust check → hash verify → load → init.luau → registered
 ```
 
 | Phase | Behavior |
@@ -68,10 +68,10 @@ discover → validate manifest → trust check → hash verify → load → main
 | **Validate** | Parse `ext.toml`; reject bad names, unknown permission strings, `api_version` mismatch |
 | **Trust check** | User-scope: trusted by installation. Project-scope: **inert until an explicit, persisted, hash-pinned grant** (`12` §Repo-shipped extensions) |
 | **Hash verify** | Re-hash at every load; a changed file invalidates the grant |
-| **Load** | Fresh restricted environment; `mcode` injected; `main.lua` executed |
-| **Register** | `main.lua` calls `mcode.tool.register`, `mcode.cmd.register`, `mcode.on`, … Registration must be sub-millisecond |
+| **Load** | Fresh restricted environment; `mcode` injected; `init.luau` executed |
+| **Register** | `init.luau` calls `mcode.tool.register`, `mcode.cmd.register`, `mcode.on`, … Registration must be sub-millisecond |
 
-**Lazy by construction.** `main.lua` registers and returns. Heavy work goes behind `mcode.on("session.start")` or a first tool call. This is what keeps extension count decoupled from startup time — the pattern VS Code codifies as activation events and Neovim as remote-plugin manifests.
+**Lazy by construction.** `init.luau` registers and returns. Heavy work goes behind `mcode.on("session.start")` or a first tool call. This is what keeps extension count decoupled from startup time — the pattern VS Code codifies as activation events and Neovim as remote-plugin manifests.
 
 Extensions are loaded **after** the loop and event bus exist but **before** the first model request, so hooks are in place for turn one.
 
@@ -99,7 +99,7 @@ class extension_host {
 public:
     virtual ~extension_host() = default;
 
-    // Loads main.lua in a fresh sandboxed thread. Throws nothing; a bad
+    // Loads init.luau in a fresh sandboxed thread. Throws nothing; a bad
     // extension fails itself and the session continues.
     virtual auto load( const extension_manifest& manifest ) -> result<load_result> = 0;
 
@@ -175,7 +175,7 @@ There is no "append arbitrary text to every prompt" API. Ungoverned context grow
 |---|---|
 | Manifest invalid | Skip extension; report in `mcode ext doctor` |
 | `api_version` mismatch | Skip; name the required version |
-| `main.lua` errors | Log with traceback, attributed; skip extension; session continues |
+| `init.luau` errors | Log with traceback, attributed; skip extension; session continues |
 | Handler errors repeatedly | Per-extension error counter → **quarantine** after N consecutive failures (configurable); other extensions unaffected |
 | Handler exceeds its wall-clock budget | Detach the handler, log, continue (`18`) |
 | Extension hangs | Contained: the host interrupt fires at 8 opcodes plus a wall-clock watchdog (`12` §Layer 3). A call-free straight-line block is the one case that runs to completion first |
@@ -191,7 +191,7 @@ Disabling requires no file edits: a config-level disable list plus `mcode.ext.di
 
 | Command | Semantics | Cost |
 |---|---|---|
-| `/reload <ext>` | Unregister everything the extension registered (tools, commands, hooks, timers), then **`lua_resetthread`** its sandboxed thread and re-run `main.lua` | Milliseconds; the correct option |
+| `/reload <ext>` | Unregister everything the extension registered (tools, commands, hooks, timers), then **`lua_resetthread`** its sandboxed thread and re-run `init.luau` | Milliseconds; the correct option |
 | `/reload` (all) | Reset and re-run every extension | Milliseconds; prefer this to partial reloads |
 
 `lua_resetthread` is what makes this clean: it closes upvalues, clears call frames and thread state, and clears the stack — a genuinely fresh thread, not a re-`require` over stale closures (`12` §Layer 3).
@@ -212,7 +212,7 @@ If untrusted distribution ever becomes a goal, it requires the process tier — 
 
 - **Auto-loading project extensions.** A `git clone` plus one run would execute attacker code. The trust gate is not optional.
 - **Calling the VM boundary a sandbox.** It is an in-process capability boundary and upstream does not claim it is formally proven. Say "capability boundary."
-- **Doing work in `main.lua`.** Registration must be cheap; heavy work belongs behind an event.
+- **Doing work in `init.luau`.** Registration must be cheap; heavy work belongs behind an event.
 - **Reloading by re-requiring in the same state.** Stale closures keep running.
 - **Silent name collisions.** Report them; do not let one extension shadow another.
 - **Ungoverned context injection.** Budget it in the harness or the prompt grows without limit.
