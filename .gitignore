@@ -2,6 +2,7 @@
 /build/
 /out/
 /install/
+tools/**/build/
 
 # --- Conan ---
 # conan.lock is deliberately NOT ignored: docs/14 §Build configuration requires

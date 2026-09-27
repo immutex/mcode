@@ -261,6 +261,31 @@ The position, and the one every mature Lua host converges on (Neovim, WezTerm, H
 
 What the permission system enforces for extensions: `mcode.fs.*` and `mcode.spawn` are checked against the extension's declared manifest permissions and the session's sandbox/approval policy. Because the VM boundary removes every other route to the filesystem and the process table, this **is** load-bearing rather than decorative — an extension with no declared `fs_write` has no way to write a file. It is still blast-radius control, not a guarantee: a host-side bug in our own `mcode.fs.*` implementation is outside the VM boundary entirely.
 
+## Author tooling
+
+`extensions/mcode.d.luau` is the machine-checkable form of this document. It ships with the harness, and `luau-analyze` type-checks and completes extension code against it.
+
+**It is verified, not decorative.** `luau-analyze` cannot load a definition file — `declare` requires `ParseOptions::allowDeclarationSyntax` with `Mode::Definition`, and the CLI parses every input as an ordinary script. So the check runs through `tools/api_check`, which calls Luau's `Frontend::loadDefinitionFile` directly, and CI asserts two things:
+
+| Fixture | Must |
+|---|---|
+| `tools/api_check/fixtures/valid.luau` | type-check **clean** — it exercises every documented call shape |
+| `tools/api_check/fixtures/invalid.luau` | **fail** — wrong argument types, a missing field, an unknown member |
+
+The second assertion is the one that matters. A definition file that silently degrades to `any` passes the first check and protects nothing; the negative fixture is what makes that failure visible. CI pins the check to the same Luau commit the Conan package pins, so a VM bump cannot quietly invalidate the surface.
+
+### Dialect traps the definition file encodes
+
+Extension authors hit these immediately, so they are stated rather than discovered:
+
+| Trap | Detail |
+|---|---|
+| `(value, err)` needs **both** on every return path | A function declared `-> (string?, string?)` must return two values. `return value` alone is a type error even when it succeeds. This is the single most common first-run diagnostic |
+| `string?` is not `string` | `fs.read` returns an optional, so `#body` on it is an error until checked. `if ok and body then` narrows it; `if ok then` does not |
+| No integer subtype | Numbers are doubles. Bit-exact 64-bit work is not available in Luau |
+| No `//`, no `utf8`, no `<close>` | Lua 5.4 idioms do not run (`17`) |
+| `pairs`/`ipairs` exist; `table.getn`/`maxn`/`foreach` do not | Luau's table library is not 5.1's (`17`) |
+
 ## Versioning and stability
 
 - `mcode.api_version` is a monotonic integer; per-entry `since` metadata is exposed as `mcode._api_meta`.
@@ -310,5 +335,7 @@ What the permission system enforces for extensions: `mcode.fs.*` and `mcode.spaw
 - https://www.lua.org/manual/5.4/manual.html — error-handling guideline
 - https://github.com/luau-lang/luau/blob/master/Require/include/Luau/Require.h — upstream `require`, the configuration callback contract, and why `.config.luau` is executed
 - https://luau.org/sandbox/ — what the VM removes, readonly globals, interrupt
+- https://luau.org/typecheck/ — gradual typing, `--!strict`, the analyzer
+- https://github.com/luau-lang/luau/blob/master/Analysis/include/Luau/Frontend.h — `loadDefinitionFile`, the only way to consume a `.d.luau`
 - https://maki.sh/docs/plugins/ — Lua extension precedent, `plugin.toml` permissions
 - https://github.com/kfcafe/imp — Lua extension precedent, blocking hooks

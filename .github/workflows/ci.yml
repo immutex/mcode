@@ -20,6 +20,28 @@ env:
   CMAKE_BUILD_PARALLEL_LEVEL: 4
 
 jobs:
+  api-definition:
+    name: API definition check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      # The definition file is checked against the same Luau commit the package
+      # pins, so a VM bump cannot silently invalidate the API surface.
+      - name: Fetch Luau
+        run: |
+          git clone https://github.com/luau-lang/luau.git "$RUNNER_TEMP/luau"
+          git -C "$RUNNER_TEMP/luau" checkout \
+            "$(grep -oE '_commit = "[0-9a-f]+"' conan/recipes/luau/conanfile.py | cut -d'"' -f2)"
+
+      - name: Check the API definition
+        run: bash tools/api_check/run.sh "$RUNNER_TEMP/luau"
+
   vm-spike:
     name: VM spike (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
