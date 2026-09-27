@@ -115,6 +115,12 @@ Per-platform artifacts and signing are specified in `24`:
 
 Distribution channels: GitHub Releases first; Homebrew formula (not cask — no notarization required), winget manifest, and a scoop bucket. `curl | sh` and a tarball remain the universal fallback.
 
+### Licence obligations
+
+mcode is Apache-2.0. The one embedded component with an attribution request is **Luau** (MIT, plus a request that user-facing documentation credit the language and link to <https://luau.org/>). Satisfied by the Licence section of `README.md` and `THIRD-PARTY-NOTICES.md`; the full texts also ship inside the Conan package under `licenses/`.
+
+Every release artifact must carry both files. Conan packages resolve their own licences; only the vendored-in-binary components need this treatment, and today that is Luau alone. A new vendored dependency with an attribution clause is a release-checklist item, not a docs-afterthought.
+
 ## Traps
 
 - **Building artifact hosting before there is demand.** The index model is strictly cheaper and the ecosystem has not needed hosting yet.

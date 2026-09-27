@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     Activates the MSVC developer environment, checks Conan, builds the private
-    LuaJIT package, installs dependencies, and configures CMake.
+    Luau package, installs dependencies, and configures CMake.
 
 .PARAMETER Configuration
     Release (default) or Debug.
@@ -62,7 +62,12 @@ try {
     if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
         throw 'cl.exe is still not on PATH after activating vcvars64.'
     }
-    Write-Ok "compiler: $(& cl.exe 2>&1 | Select-Object -First 1)"
+    # cl.exe writes its version banner to stderr. Under
+    # $ErrorActionPreference='Stop' PowerShell turns any native stderr output
+    # into a terminating NativeCommandError, so the banner is captured through
+    # cmd, which does not have that behaviour.
+    $clVersion = cmd /c "cl.exe 2>&1"
+    Write-Ok "compiler: $($clVersion | Select-Object -First 1)"
 
     # A MinGW toolchain earlier on PATH hijacks the link step and produces
     # confusing "/INCREMENTAL: No such file or directory" errors.
@@ -78,7 +83,18 @@ try {
     Write-Ok "$(& conan --version)"
 
     $profile = Join-Path $repoRoot 'conan/profiles/windows-msvc'
-    Write-Step 'Installing dependencies (builds LuaJIT and Boost on first run)'
+
+    # Luau is not on Conan Center -- upstream publishes no version tags, so the
+    # pin is a commit and the recipe is ours. Conan caches the result, so this is
+    # a no-op after the first run.
+    Write-Step 'Building the Luau package'
+    & conan create conan/recipes/luau --profile $profile --build=missing `
+        --version 0.0.0-mcode.c0e346ed
+
+    if ($LASTEXITCODE -ne 0) { throw 'conan create failed for the Luau package' }
+    Write-Ok 'Luau package ready'
+
+    Write-Step 'Installing dependencies (builds Boost on first run)'
 
     $runtimeType = if ($Configuration -eq 'Debug') { 'Debug' } else { 'Release' }
 
@@ -86,7 +102,7 @@ try {
         -s "build_type=$Configuration" -s "compiler.runtime_type=$runtimeType"
 
     if ($LASTEXITCODE -ne 0) {
-        throw "conan install failed. If luajit/2.1.0-mcode.1 is missing, run: conan create conan/recipes/luajit --profile $profile --build=missing"
+        throw 'conan install failed. See the output above for the failing dependency.'
     }
     Write-Ok 'dependencies installed'
 

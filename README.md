@@ -1,6 +1,6 @@
 # mcode
 
-An extensible C++23 coding-agent harness with a LuaJIT extension layer.
+An extensible C++23 coding-agent harness with a Luau extension layer.
 
 **Status: scaffold.** This is the project skeleton — build system, dependency set,
 and a smoke test that exercises every library. There is no agent behaviour yet.
@@ -29,7 +29,7 @@ ctest --preset linux-gcc        # or macos-clang
 
 The bootstrap script is not a convenience wrapper — it does three things that are
 easy to get wrong by hand: it activates the MSVC developer environment, builds
-the private LuaJIT package, and selects the right Conan profile for the platform.
+the private Luau package, and selects the right Conan profile for the platform.
 
 ## Layout
 
@@ -41,7 +41,7 @@ the private LuaJIT package, and selects the right Conan profile for the platform
 | `tests/` | Catch2 unit tests |
 | `cmake/` | Warning set, platform configuration |
 | `conan/profiles/` | Per-platform Conan profiles |
-| `conan/recipes/luajit/` | Private LuaJIT recipe (see below) |
+| `conan/recipes/luau/` | Private Luau recipe (see below) |
 | `scripts/` | Bootstrap |
 
 Source tree:
@@ -50,7 +50,7 @@ Source tree:
 src/mcode/
 ├── core/       error model, tool registry, version
 ├── support/    logging (spdlog), JSON (yyjson), Unicode (simdutf)
-├── ext/        the LuaJIT extension host
+├── ext/        the Luau extension host
 ├── fs/         workspace boundary and file primitives
 ├── net/        SSE parser, HTTP client (Beast)
 ├── proc/       subprocess (Boost.Process v2)
@@ -61,12 +61,12 @@ Dependencies point downward only, from `agent/` toward `core/`.
 
 ## Dependencies
 
-Everything comes from Conan 2 except LuaJIT, which mcode builds from its own
+Everything comes from Conan 2 except Luau, which mcode builds from its own
 recipe. See `docs/14-cpp23-stack.md` for why each was chosen.
 
 | Component | Version | Role |
 |---|---|---|
-| LuaJIT | `2.1.0-mcode.1` (commit `c6ffc141`) | Extension layer |
+| Luau | `0.0.0-mcode.c0e346ed` (commit `c0e346ed`) | Extension layer |
 | yyjson | 0.12.0 | JSON |
 | Boost | 1.91.0 | Beast (HTTP/SSE), Process v2 (subprocess) |
 | fmt / spdlog | 12.1.0 / 1.17.0 | Formatting, logging |
@@ -121,26 +121,31 @@ code comments.
    requires exactly 12.1.0 and Conan rejects the conflict. Since `docs/14` keeps
    fmt only because spdlog is fmt-based, spdlog's pin wins.
 
-8. **LuaJIT is static-only on Windows.** `msvcbuild.bat` compiles the DLL build
-   with `/MD` while mcode uses `/MT`; mixing runtimes is undefined behaviour
-   rather than a link error, so the recipe refuses the combination. The static
-   build's `LJCOMPILE` sets no runtime flag, so it takes cl.exe's `/MT` default —
-   which is exactly what is wanted.
+8. **Luau is static-only, deliberately.** Upstream gates `LUAU_BUILD_SHARED`
+   behind `LUAU_EXTERN_C`, which force-enables `LUA_USE_LONGJMP=1` — that changes
+   how `luaL_error` and the panic handler propagate, from C++ exceptions to
+   `longjmp`. mcode's host catches VM errors as C++ exceptions, so the shared
+   configuration is a different API contract rather than a packaging variant.
+   `LUAU_STATIC_CRT` follows the consumer's CRT: mismatching it across the VM and
+   the host is heap corruption, not a link error.
 
 9. **No OpenSSL, so no TLS.** `docs/14`'s open question *"TLS backend: Beast +
    OpenSSL versus libcurl"* changes the binary budget by 2–4 MB, so it is left
    open. `http_client` returns `errc::unsupported` for `https://` rather than
    silently downgrading — a silent downgrade would be a security bug.
 
-10. **`msvcbuild.bat` exits 0 on failure.** Its failure path prints an error and
-    falls through to `:END`. The recipe asserts `lua51.lib` exists, because
-    otherwise a broken build produces a headers-only package that installs
-    cleanly and fails much later at link time.
+10. **Conan must build the VM with the same toolset as the consumer.** Two MSVC
+    installations on this machine resolve differently: `vswhere -latest` returns
+    VS18 Community (cl 19.51, Conan `compiler.version=195`) while VS2022
+    BuildTools is cl 19.44 (`194`). Building the Conan packages with one and the
+    consumer with the other links against a different STL and fails with
+    unresolved `__std_*` symbols. The profile's `compiler.version` must match
+    whatever CMake's generator picks — check both before trusting a link error.
 
-11. **`VCVars` must run in the Conan `generate` phase, not `build`.** It writes
-    `conanvcvars.bat` *and* appends a call to it from `conanbuild.bat`, which
-    `self.run()` sources. Called from `build()`, the append is lost and
-    `msvcbuild.bat` fails with "You must open a Visual Studio Command Prompt".
+11. **The extension API surface must be complete before the VM is sealed.**
+    Luau checks `readonly` on every C API write path, so `luaL_sandbox` is a
+    one-way door: after it, the host cannot add an API entry either. This is why
+    `docs/18` freezes the surface rather than growing it at runtime.
 
 12. **The subprocess timeout timer must be cancelled when both pipes hit EOF.**
     Otherwise `io_context::run()` blocks until the full timeout expires even
@@ -193,12 +198,13 @@ $ ./build/Release/src/mcode.exe
 == yyjson (JSON) ==
 == simdutf (Unicode) ==
 == ankerl::unordered_dense (tool registry) ==
-== LuaJIT (extension layer) ==
+== Luau (extension layer) ==
+== Luau boundary (every escape must fail) ==
 == Beast (SSE line parser) ==
 == Boost.Process v2 (subprocess) ==
 == filesystem (workspace boundary) ==
 == agent loop (budget + event log + dispatch) ==
-  58 checks, 0 failures
+  88 checks, 0 failures
 ```
 
 Its exit code is the number of failed checks, so CI gates on it directly.
@@ -217,3 +223,13 @@ Linux and Windows, and build + smoke on macOS.
 ## License
 
 Apache-2.0.
+
+mcode embeds **Luau**, which is distributed under the MIT License. Luau is
+Copyright (c) 2019-2025 Roblox Corporation and Copyright (c) 2005-2019 Lua.org,
+PUC-Rio. The full text ships in the Conan package under `licenses/` as
+`LICENSE.txt` and `lua_LICENSE.txt`, and is reproduced in
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
+
+Upstream asks that products embedding Luau carry attribution for the language
+and a link to <https://luau.org/> in their documentation. This section and the
+notices file satisfy that request.

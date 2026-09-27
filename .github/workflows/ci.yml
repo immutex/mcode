@@ -99,8 +99,8 @@ jobs:
           restore-keys: |
             conan-${{ runner.os }}-
 
-      - name: Build LuaJIT package
-        run: conan create conan/recipes/luajit --profile ${{ matrix.profile }} --build=missing
+      - name: Build Luau package
+        run: conan create conan/recipes/luau --profile ${{ matrix.profile }} --build=missing --version 0.0.0-mcode.c0e346ed
 
       - name: Install dependencies
         run: conan install . --profile ${{ matrix.profile }} --build=missing
@@ -186,8 +186,8 @@ jobs:
         with:
           arch: x64
 
-      - name: Build LuaJIT package
-        run: conan create conan/recipes/luajit --profile ${{ matrix.profile }} --build=missing
+      - name: Build Luau package
+        run: conan create conan/recipes/luau --profile ${{ matrix.profile }} --build=missing --version 0.0.0-mcode.c0e346ed
 
       - name: Install dependencies
         run: conan install . --profile ${{ matrix.profile }} --build=missing

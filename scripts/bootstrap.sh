@@ -88,7 +88,17 @@ if ! command -v conan >/dev/null 2>&1; then
 fi
 ok "$(conan --version)"
 
-step 'Installing dependencies (builds LuaJIT and Boost on first run)'
+# Luau is not on Conan Center -- upstream publishes no version tags, so the pin
+# is a commit and the recipe is ours. Conan caches the result, so this is a no-op
+# after the first run.
+step 'Building the Luau package'
+
+conan create conan/recipes/luau --profile "$profile" --build=missing \
+    --version 0.0.0-mcode.c0e346ed
+
+ok 'Luau package ready'
+
+step 'Installing dependencies (builds Boost on first run)'
 
 conan install . --profile "$profile" --build=missing -s "build_type=$configuration"
 
