@@ -75,6 +75,67 @@ discover → validate manifest → trust check → hash verify → load → main
 
 Extensions are loaded **after** the loop and event bus exist but **before** the first model request, so hooks are in place for turn one.
 
+## Extension host interface
+
+One interface, two implementations. v1 ships the in-process host; the process tier is the same contract over a pipe, so adding it is an implementation, not a redesign (`12` §Layer 3).
+
+```cpp
+// Everything crossing this seam is plain data. No pointers, no light userdata,
+// no live references -- those cannot be serialized, and admitting them now is
+// what would make the process tier a rewrite.
+struct extension_id { std::string name; std::string scope; };   // scope: user | project
+
+struct load_result {
+    extension_id id;
+    std::vector<std::string> registered_tools, registered_commands, subscribed_events;
+    std::uint64_t bytes_used;                                  // B3
+};
+
+struct extension_stats {
+    std::uint64_t bytes_used, peak_bytes, invocations, errors, interrupts;
+};
+
+class extension_host {
+public:
+    virtual ~extension_host() = default;
+
+    // Loads main.lua in a fresh sandboxed thread. Throws nothing; a bad
+    // extension fails itself and the session continues.
+    virtual auto load( const extension_manifest& manifest ) -> result<load_result> = 0;
+
+    // Drops the host registrations, then the thread. The VM's shared global
+    // state survives (see `12` §Layer 3) -- unregistering is what makes the
+    // extension actually gone.
+    virtual auto unload( const extension_id& id ) -> status = 0;
+
+    // Tool and command calls. `args_json` is the tool's raw arguments.
+    virtual auto invoke( const extension_id& id, std::string_view entry, std::string_view args_json )
+        -> result<std::string> = 0;
+
+    // Synchronous hook dispatch on the loop thread. Returns whether the handler
+    // vetoed, for the Pre* events that allow it (`20`).
+    virtual auto dispatch( const extension_id& id, std::string_view event, std::string_view payload_json )
+        -> result<bool> = 0;
+
+    virtual auto stats( const extension_id& id ) const -> extension_stats = 0;
+};
+```
+
+| Aspect | In-process (v1) | Process tier (later) |
+|---|---|---|
+| `load` | `luaL_sandbox` + sandboxed thread | spawn child, same handshake |
+| `invoke` / `dispatch` | direct call through `lua_pcall`, synchronous | request/response over a pipe, with a timeout |
+| `stats` | allocator counters, exact | reported by the child, trusted |
+| Failure / ceiling | `lua_pcall` contains the error; `lua_Alloc` limit | process death contains everything; Job Object / rlimit |
+
+**Three rules the interface exists to enforce:**
+
+1. **Every method returns a value, never throws** — a host that can throw across the boundary reintroduces the problem `18` §Error conventions solves.
+2. **Everything crossing is plain data** — the moment a pointer crosses, the process tier stops being an implementation swap. Same reason `18` forbids pointers as stored handles.
+3. **`invoke` and `dispatch` are bounded** — the VM interrupt cannot preempt inside a host call, so an unbounded entry point defeats the kill switch (`12` §Layer 3).
+
+The in-process host is `src/mcode/ext/lua_host.cxx` today, implementing the sandboxed-thread half of this contract. The abstraction lands with the loader (`C5`); nothing above it should reference `lua_State`.
+
 ## Tool sources
 
 The abstraction that makes tool provenance irrelevant:
