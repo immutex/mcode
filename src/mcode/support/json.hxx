@@ -1,0 +1,64 @@
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <string>
+#include <string_view>
+
+#include "mcode/core/error.hxx"
+
+struct yyjson_doc;
+struct yyjson_mut_doc;
+
+namespace mcode::json {
+
+	struct value {
+		enum class kind { string, integer };
+
+		kind type = kind::string;
+		std::string text;
+		std::int64_t number = 0;
+	};
+
+	using mut_doc_pointer = std::unique_ptr< yyjson_mut_doc, void ( * )( yyjson_mut_doc* ) >;
+
+	class document {
+	public:
+		document( ) = default;
+		~document( );
+
+		document( document&& other ) noexcept;
+		auto operator=( document&& other ) noexcept -> document&;
+
+		document( const document& ) = delete;
+		auto operator=( const document& ) -> document& = delete;
+
+		[[nodiscard]] static auto parse( std::string_view text ) -> result< document >;
+		[[nodiscard]] static auto make_object( ) -> document;
+
+		[[nodiscard]] auto valid( ) const noexcept -> bool { return doc_ != nullptr || mut_ != nullptr; }
+		[[nodiscard]] auto is_mutable( ) const noexcept -> bool { return mutable_; }
+
+		[[nodiscard]] auto get_int( std::string_view key ) const -> result< std::int64_t >;
+		[[nodiscard]] auto get_string( std::string_view key ) const -> result< std::string >;
+		[[nodiscard]] auto pointer( std::string_view path ) const -> result< std::string >;
+
+		auto set_string( std::string_view key, std::string_view text ) -> status;
+		auto set_int( std::string_view key, std::int64_t number ) -> status;
+
+		[[nodiscard]] auto dump( bool pretty = false ) const -> result< std::string >;
+		[[nodiscard]] auto size( ) const noexcept -> std::size_t;
+
+	private:
+		explicit document( yyjson_doc* doc ) : doc_( doc ) { }
+		explicit document( mut_doc_pointer doc );
+
+		yyjson_doc* doc_ = nullptr;
+		mut_doc_pointer mut_{ nullptr, nullptr };
+		std::map< std::string, value, std::less<> > members_;
+		bool mutable_ = false;
+	};
+
+}

@@ -1,0 +1,77 @@
+---
+Checks: >
+    -*,
+    bugprone-*,
+    performance-*,
+    portability-*,
+    modernize-use-nullptr,
+    modernize-use-override,
+    modernize-use-using,
+    modernize-make-unique,
+    modernize-make-shared,
+    modernize-use-equals-default,
+    modernize-use-equals-delete,
+    cppcoreguidelines-special-member-functions,
+    cppcoreguidelines-pro-type-const-cast,
+    cppcoreguidelines-pro-type-reinterpret-cast,
+    cppcoreguidelines-avoid-goto,
+    readability-avoid-const-params-in-decls,
+    readability-const-return-type,
+    readability-container-size-empty,
+    readability-duplicate-include,
+    readability-misleading-indentation,
+    readability-redundant-smartptr-get,
+    readability-redundant-string-cstr,
+    readability-static-accessed-through-instance,
+    readability-uniqueptr-delete-release,
+    readability-identifier-naming,
+    -bugprone-easily-swappable-parameters,
+    -bugprone-narrowing-conversions,
+    -bugprone-macro-parentheses,
+    -performance-avoid-endl,
+    -modernize-use-trailing-return-type,
+    -modernize-use-nodiscard,
+    -cppcoreguidelines-avoid-magic-numbers,
+    -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+    -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+    -readability-magic-numbers,
+    -readability-identifier-length,
+    -readability-function-cognitive-complexity
+
+WarningsAsErrors: >
+    bugprone-use-after-move,
+    bugprone-dangling-handle,
+    bugprone-infinite-loop,
+    bugprone-undefined-memory-manipulation,
+    performance-move-const-arg,
+    performance-unnecessary-copy-initialization,
+    readability-identifier-naming
+
+HeaderFilterRegex: '^(src|tests)/.*'
+FormatStyle: file
+
+CheckOptions:
+    readability-identifier-naming.ClassCase: lower_case
+    readability-identifier-naming.StructCase: lower_case
+    readability-identifier-naming.EnumCase: lower_case
+    readability-identifier-naming.FunctionCase: lower_case
+    readability-identifier-naming.MethodCase: lower_case
+    readability-identifier-naming.NamespaceCase: lower_case
+    readability-identifier-naming.EnumConstantCase: lower_case
+    readability-identifier-naming.ConstexprVariableCase: UPPER_CASE
+    readability-identifier-naming.ConstexprVariablePrefix: ''
+    readability-identifier-naming.GlobalConstantCase: UPPER_CASE
+    readability-identifier-naming.GlobalVariableCase: lower_case
+    readability-identifier-naming.GlobalVariablePrefix: g_
+    readability-identifier-naming.LocalVariableCase: lower_case
+    readability-identifier-naming.ParameterCase: lower_case
+    readability-identifier-naming.MemberCase: lower_case
+    readability-identifier-naming.PrivateMemberSuffix: '_'
+    readability-identifier-naming.TypeAliasCase: lower_case
+    readability-identifier-naming.IgnoreMainLikeFunctions: true
+    performance-unnecessary-value-param:
+        AllowedTypes: 'std::string_view; std::span; mcode::result<.*>'
+    cppcoreguidelines-special-member-functions:
+        AllowSoleDefaultDtor: true
+        AllowMissingMoveFunctions: true
+...

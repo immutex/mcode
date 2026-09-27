@@ -1,0 +1,45 @@
+# --- Build trees ---
+/build/
+/out/
+/install/
+
+# --- Conan ---
+# conan.lock is deliberately NOT ignored: docs/14 §Build configuration requires
+# committed lockfiles for reproducibility.
+/conanbuild.sh
+/conanbuild.bat
+/conanrun.sh
+/conanrun.bat
+/conanrunenv*.sh
+/conanrunenv*.bat
+
+# --- CMake ---
+CMakeUserPresets.json
+compile_commands.json
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+
+# --- Editors / OS ---
+.vs/
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# --- Compiler / linker output ---
+*.obj
+*.o
+*.a
+*.lib
+*.exe
+*.dll
+*.so
+*.so.*
+*.dylib
+*.pdb
+*.ilk
+*.exp

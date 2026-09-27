@@ -1,0 +1,195 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      full_macos:
+        description: 'Run the full suite on macOS (expensive)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CONAN_VERSION: '2.32.0'
+  CMAKE_BUILD_PARALLEL_LEVEL: 4
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64 (GCC 14, full)
+            os: ubuntu-24.04
+            preset: linux-gcc
+            profile: conan/profiles/linux-gcc
+          - name: Windows x64 (MSVC, full)
+            os: windows-2022
+            preset: windows-msvc
+            profile: conan/profiles/windows-msvc
+          - name: macOS arm64 (Apple Clang, build + smoke)
+            os: macos-14
+            preset: macos-clang
+            profile: conan/profiles/macos-clang
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Conan
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "conan==${{ env.CONAN_VERSION }}"
+          conan --version
+
+      - name: Cache Conan packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.conan2/p
+          key: conan-${{ runner.os }}-${{ hashFiles('conanfile.py', 'conan/recipes/**', 'conan/profiles/**') }}
+          restore-keys: |
+            conan-${{ runner.os }}-
+
+      - name: Build LuaJIT package
+        run: conan create conan/recipes/luajit --profile ${{ matrix.profile }} --build=missing
+
+      - name: Install dependencies
+        run: conan install . --profile ${{ matrix.profile }} --build=missing
+
+      - name: Set up MSVC environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }} -DMCODE_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build build/Release --config Release
+
+      - name: Unit tests
+        run: ctest --preset ${{ matrix.preset }} --output-on-failure
+
+      - name: Startup smoke test
+        shell: bash
+        run: |
+          executable="build/Release/src/mcode"
+          [ -f "$executable" ] || executable="build/Release/src/mcode.exe"
+          "$executable"
+
+      - name: Platform-specific tests
+        run: ctest --preset ${{ matrix.preset }} -L platform --output-on-failure
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.name }}
+          path: build/Release/Testing/
+          if-no-files-found: ignore
+
+  package:
+    name: Package (${{ matrix.name }})
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build-and-test
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-24.04
+            preset: linux-gcc
+            profile: conan/profiles/linux-gcc
+          - name: windows-x64
+            os: windows-2022
+            preset: windows-msvc
+            profile: conan/profiles/windows-msvc
+          - name: macos-arm64
+            os: macos-14
+            preset: macos-clang
+            profile: conan/profiles/macos-clang
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Conan
+        run: python -m pip install "conan==${{ env.CONAN_VERSION }}"
+
+      - name: Install Ninja (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: Set up MSVC environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Build LuaJIT package
+        run: conan create conan/recipes/luajit --profile ${{ matrix.profile }} --build=missing
+
+      - name: Install dependencies
+        run: conan install . --profile ${{ matrix.profile }} --build=missing
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: cmake --build build/Release --config Release
+
+      - name: Strip and sign (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          strip -x build/Release/src/mcode || true
+          codesign --force --sign - build/Release/src/mcode
+          codesign --verify --verbose build/Release/src/mcode
+
+      - name: Report binary size
+        shell: bash
+        run: |
+          executable="build/Release/src/mcode"
+          [ -f "$executable" ] || executable="build/Release/src/mcode.exe"
+          size=$(stat -c %s "$executable" 2>/dev/null || stat -f %z "$executable")
+          echo "binary: $((size / 1024 / 1024)) MiB ($size bytes)"
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcode-${{ matrix.name }}
+          path: |
+            build/Release/src/mcode
+            build/Release/src/mcode.exe
+          if-no-files-found: error

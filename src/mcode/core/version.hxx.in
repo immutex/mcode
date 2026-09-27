@@ -1,0 +1,22 @@
+#pragma once
+
+#include <string_view>
+
+namespace mcode {
+
+	inline constexpr std::string_view VERSION = "@PROJECT_VERSION@";
+	inline constexpr std::string_view NAME = "mcode";
+	inline constexpr std::string_view PLATFORM = "@MCODE_PLATFORM@";
+	inline constexpr std::string_view COMPILER = "@MCODE_COMPILER@";
+	inline constexpr std::string_view BUILD_TYPE = "@CMAKE_BUILD_TYPE@";
+
+	struct library_support {
+		bool generator = false;
+		bool move_only_function = false;
+		bool print = false;
+		bool expected = false;
+	};
+
+	[[nodiscard]] auto detect_library_support( ) noexcept -> library_support;
+
+}

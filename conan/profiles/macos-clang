@@ -1,0 +1,17 @@
+[settings]
+os=Macos
+arrm64
+build_type=Release
+compiler=apple-clang
+compiler.version=16
+compiler.cppstd=23
+compiler.libcxx=libc++
+
+# macOS cannot be fully static-linked: Apple requires a dynamic libSystem. The
+# promise there is "no bundled third-party libraries", not "one file".
+#
+# libc++ is missing std::generator and std::move_only_function in this range, so
+# feature-test macros are mandatory in code that uses them.
+
+[conf]
+tools.cmake.cmaketoolchain:generator=Ninja

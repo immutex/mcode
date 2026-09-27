@@ -1,0 +1,72 @@
+---
+Language: Cpp
+BasedOnStyle: LLVM
+Standard: c++23
+
+ColumnLimit: 100
+
+UseTab: ForIndentation
+TabWidth: 4
+IndentWidth: 4
+ContinuationIndentWidth: 4
+AccessModifierOffset: -4
+NamespaceIndentation: All
+
+SpacesInParentheses: true
+SpacesInAngles: true
+SpaceAfterCStyleCast: false
+SpaceBeforeParens: ControlStatements
+SpacesInSquareBrackets: false
+
+BreakBeforeBraces: Attach
+SplitEmptyFunction: false
+SplitEmptyRecord: false
+
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortEnumsOnASingleLine: false
+
+PointerAlignment: Left
+ReferenceAlignment: Left
+DerivePointerAlignment: false
+AlwaysBreakTemplateDeclarations: Yes
+
+BinPackArguments: false
+BinPackParameters: false
+AllowAllArgumentsOnNextLine: true
+AllowAllParametersOfDeclarationOnNextLine: true
+AlignAfterOpenBracket: Align
+AlignOperands: AlignAfterOperator
+AlignTrailingComments: false
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+
+BreakConstructorInitializers: BeforeColon
+PackConstructorInitializers: Never
+ConstructorInitializerIndentWidth: 4
+BreakInheritanceList: BeforeColon
+
+EmptyLineBeforeAccessModifier: LogicalBlock
+FixNamespaceComments: true
+IndentAccessModifiers: false
+ReflowComments: true
+MaxEmptyLinesToKeep: 1
+KeepEmptyLinesAtTheStartOfBlocks: false
+
+SortIncludes: CaseSensitive
+IncludeBlocks: Regroup
+IncludeCategories:
+    - Regex: '^<[a-z_0-9]+\.h>$'
+      Priority: 1
+    - Regex: '^<(ankerl|boost|asio|fmt|spdlog|simdutf|yyjson|catch2|lua)/.*>$'
+      Priority: 2
+    - Regex: '^<.*>$'
+      Priority: 3
+    - Regex: '^"mcode/.*"$'
+      Priority: 4
+    - Regex: '^".*"$'
+      Priority: 5
+...
