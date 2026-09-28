@@ -20,6 +20,7 @@ extern "C" {
 
 namespace {
 
+
 #if defined( _WIN32 )
 	auto current_rss_kb( ) -> unsigned long long {
 		PROCESS_MEMORY_COUNTERS counters{};
@@ -37,6 +38,15 @@ namespace {
 		return counters.PeakWorkingSetSize / 1024;
 	}
 #else
+	// statm reports PAGES. Assuming 4 KiB understates every RSS number by the page
+	// ratio on a 16 KiB-page kernel, which is the arm64 default -- and the numbers
+	// this probe produced are what the VM decision was made from.
+	auto page_size_bytes( ) -> long {
+		static const auto cached = ::sysconf( _SC_PAGESIZE );
+
+		return cached > 0 ? cached : 4096;
+	}
+
 	auto current_rss_kb( ) -> unsigned long long {
 		std::FILE* file = std::fopen( "/proc/self/statm", "r" );
 		if ( file == nullptr ) {
@@ -49,7 +59,7 @@ namespace {
 			return 0;
 		}
 		std::fclose( file );
-		return resident * 4;  // pages of 4 KiB
+		return resident * static_cast< unsigned long long >( page_size_bytes( ) ) / 1024;
 	}
 
 	auto peak_rss_kb( ) -> unsigned long long {
@@ -107,7 +117,7 @@ auto main( int argument_count, char** arguments ) -> int {
 	// against the JIT-enabled run.
 	const bool jit_off = ( argument_count > 3 ) && ( std::strcmp( arguments[ 3 ], "jitoff" ) == 0 );
 	if ( jit_off ) {
-		luaL_dostring( state, "jit.off()" );
+		luaL_dostring( state, "jit.off( )" );
 	}
 
 	lua_pushcfunction( state, host_call );

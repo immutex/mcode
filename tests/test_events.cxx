@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -132,8 +133,8 @@ TEST_CASE( "a handler publishing during dispatch queues rather than recurses", "
 	REQUIRE( observed[ 1 ] == "outer-after-publish" );
 	REQUIRE( observed[ 2 ] == "inner:nested" );
 
-	// Depth never exceeded one level of real recursion.
-	REQUIRE( bus.max_depth( ) == 1 );
+	// The nested publish was queued, never recursed, so dispatch has finished.
+	REQUIRE_FALSE( bus.dispatching( ) );
 	REQUIRE( bus.pending_count( ) == 0 );
 }
 
@@ -153,8 +154,9 @@ TEST_CASE( "an event loop between two handlers terminates", "[events]" ) {
 	bus.publish( make_event( events::kind::step_start ) );
 
 	REQUIRE( deliveries == 5 );
-	REQUIRE( bus.max_depth( ) == 1 );
+	REQUIRE_FALSE( bus.dispatching( ) );
 	REQUIRE( bus.pending_count( ) == 0 );
+	REQUIRE( bus.overflow_drops( ) == 0 );
 }
 
 TEST_CASE( "unsubscribing mid-dispatch does not invalidate iteration", "[events]" ) {
@@ -238,5 +240,11 @@ TEST_CASE( "kind tags are stable and complete", "[events]" ) {
 		REQUIRE( name.find( '.' ) != std::string_view::npos );
 	}
 
-	REQUIRE( events::KIND_COUNT == names.size( ) );
+	// The loop pushed exactly KIND_COUNT names, so asserting the size equals
+	// KIND_COUNT proved nothing. Two kinds sharing a name is the real defect: a
+	// handler subscribing by name would receive the wrong event.
+	auto sorted = names;
+	std::sort( sorted.begin( ), sorted.end( ) );
+
+	REQUIRE( std::adjacent_find( sorted.begin( ), sorted.end( ) ) == sorted.end( ) );
 }

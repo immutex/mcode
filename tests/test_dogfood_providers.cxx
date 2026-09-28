@@ -9,7 +9,7 @@
 using namespace mcode;
 
 // D3's dogfood test: the reference descriptors in extensions/providers/init.luau
-// must drive real streams from all three wire formats docs/15 identifies. These
+// must drive real streams from all three wire formats the provider docs identify. These
 // are the exact JSON shapes each provider emits, so if a descriptor cannot be
 // expressed the test fails here rather than in production.
 
@@ -34,6 +34,23 @@ namespace {
 				"out": "/usage/completion_tokens",
 				"cached_read": "/usage/prompt_tokens_details/cached_tokens"
 			}
+		}
+	})";
+
+	// Mirrors extensions/providers/init.luau: openai-responses.
+	const char* OPENAI_RESPONSES = R"({
+		"name": "openai-responses",
+		"endpoint": "https://api.openai.com/v1/responses",
+		"auth": { "from": "env", "name": "OPENAI_API_KEY", "header": "Authorization" },
+		"stream": {
+			"text_delta": "/delta",
+			"text_events": ["response.output_text.delta"],
+			"tool_calls": {
+				"id": "/item_id",
+				"args": "/delta"
+			},
+			"tool_call_events": ["response.function_call_arguments.delta"],
+			"terminal_events": ["response.completed", "response.failed", "response.incomplete"]
 		}
 	})";
 
@@ -124,7 +141,10 @@ namespace {
 }
 
 TEST_CASE( "all three reference descriptors validate", "[dogfood]" ) {
-	for ( const auto* text : { OPENAI_CHAT, ANTHROPIC } ) {
+	// Three, and the title says three. Listing two made the count a claim the test
+	// did not check, and left the Responses descriptor -- the one with the shared
+	// /delta pointer and the event-name gates -- unvalidated.
+	for ( const auto* text : { OPENAI_CHAT, ANTHROPIC, OPENAI_RESPONSES } ) {
 		auto descriptor = model::descriptor_from_json( text );
 
 		if ( !descriptor ) {

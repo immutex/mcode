@@ -22,7 +22,7 @@ namespace {
 }
 
 TEST_CASE( "pass@k and pass^k are different questions", "[eval]" ) {
-	// docs/11 requires both: reporting only pass@k flatters a harness that works
+	// Both are required: reporting only pass@k flatters a harness that works
 	// half the time.
 	const auto all_passed = std::vector< bool >{ true, true, true };
 	const auto some_passed = std::vector< bool >{ true, false, true };
@@ -71,7 +71,17 @@ TEST_CASE( "the builtin suite has ten deterministic tasks with unique ids", "[ev
 	for ( const auto& entry : tasks ) {
 		REQUIRE_FALSE( entry.id.empty( ) );
 		REQUIRE_FALSE( entry.description.empty( ) );
-		REQUIRE( static_cast< bool >( entry.run ) );
+
+		// A std::function is truthy whenever it is non-empty, so asserting that
+		// proved nothing. Running it does: a task whose body cannot execute is a
+		// broken suite, and this is the only place that would notice.
+		auto outcome = entry.run( fixture_root( ) );
+
+		REQUIRE( static_cast< bool >( outcome ) );
+
+		if ( outcome ) {
+			REQUIRE( *outcome );
+		}
 
 		ids.push_back( entry.id );
 	}
@@ -98,7 +108,7 @@ TEST_CASE( "every task passes against the fixture repo", "[eval]" ) {
 }
 
 TEST_CASE( "the suite is deterministic across runs", "[eval]" ) {
-	// docs/11's whole argument for deterministic fixtures is that small-n suites
+	// The whole argument for deterministic fixtures is that small-n suites
 	// swing run to run. Two runs must agree exactly on verdicts.
 	const auto first = eval::run_suite( fixture_root( ) );
 	const auto second = eval::run_suite( fixture_root( ) );
@@ -142,7 +152,7 @@ TEST_CASE( "run records serialize to parseable JSONL", "[eval]" ) {
 			FAIL( "unparseable record: " << line );
 		}
 
-		// And it must carry the fields docs/11's schema requires.
+		// And it must carry the fields the schema requires.
 		REQUIRE( parsed->get_string( "run_id" ).has_value( ) );
 		REQUIRE( parsed->get_string( "task_id" ).has_value( ) );
 		REQUIRE( parsed->get_string( "suite" ).has_value( ) );

@@ -209,6 +209,31 @@ code comments.
     profile ... doesn't exist" on every platform. `conan profile detect --force`
     must run first. Confirmed against `conan create --help`.
 
+23. **`luau_load` takes BYTECODE, not source.** Handing it a `.luau` file makes
+    it read the first byte as a bytecode version and fail with
+    `bytecode version mismatch (expected [3..14], got 114)`. `luau_compile` must
+    run first, and its result is what `luau_load` consumes. `lua_host::run`,
+    `eval_to_string` and the `require` loader all go through one `load_chunk`
+    helper for this reason — the two hand-written copies had already drifted.
+
+24. **`WaitForSingleObject` on a process needs `SYNCHRONIZE` access.**
+    `OpenProcess( PROCESS_QUERY_LIMITED_INFORMATION )` is enough for
+    `GetExitCodeProcess` but makes the wait fail immediately, so every live
+    process reports as dead. Ask for both rights. The exit-code probe is not an
+    alternative: a process that terminated with 259 reports as `STILL_ACTIVE`
+    forever.
+
+25. **`yyjson_obj_iter_next` yields the KEY.** The value is reached with
+    `yyjson_obj_iter_get_val( key )`. Using the iterator's return as a value
+    compiles, because both are `yyjson_val*`, and silently produces a list of
+    keys where values were expected.
+
+26. **A `docs/NN` citation in a code comment is banned, and prose around it
+    breaks when the citation is removed.** Stripping `(docs/22 E4)` from
+    `// ... the headless surface (docs/22 E4).` is safe; stripping
+    `docs/22. A consumer script branches on these, so the` leaves a sentence
+    with no subject. Read the whole comment, not the match.
+
 23. **LuaJIT's Makefile refuses to build on Darwin without
     `MACOSX_DEPLOYMENT_TARGET`.** It must be *exported*, not passed as a make
     variable: the check reads the environment. The error is

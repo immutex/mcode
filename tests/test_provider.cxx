@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -11,7 +12,7 @@ using namespace mcode;
 
 namespace {
 
-	// The descriptor from docs/26, as an extension would register it. This is the
+	// The reference descriptor, as an extension would register it. This is the
 	// fixture the acceptance criterion names: a descriptor must drive a real
 	// stream end-to-end.
 	const char* GATEWAY_DESCRIPTOR = R"({
@@ -294,4 +295,304 @@ TEST_CASE( "a provider that omits the tool-call index still works", "[provider]"
 	}
 
 	REQUIRE( found );
+}
+
+TEST_CASE( "the escape hatch replaces the mapping entirely", "[provider]" ) {
+	// The hatch had NO unit test, only a benchmark. The benchmark measures its
+	// cost; this asserts its contract.
+	auto descriptor = model::descriptor_from_json( R"({
+		"name": "hatch",
+		"endpoint": "https://example.invalid/v1/messages",
+		"on_event": true
+	})" );
+
+	REQUIRE( static_cast< bool >( descriptor ) );
+
+	if ( !descriptor ) {
+		FAIL( descriptor.error( ).msg );
+	}
+
+	auto applier = model::delta_applier{ *descriptor };
+
+	// Declared but not installed must FAIL, not fall through to the declarative
+	// mapping: that descriptor maps nothing, so every event would be accepted and
+	// silently produce an empty turn.
+	auto unmapped = applier.feed( "message", R"({"delta":"x"})" );
+
+	REQUIRE_FALSE( static_cast< bool >( unmapped ) );
+
+	if ( !unmapped ) {
+		REQUIRE( unmapped.error( ).code == errc::protocol );
+		REQUIRE( unmapped.error( ).msg.find( "escape hatch" ) != std::string::npos );
+	}
+
+	// Installed: the hatch sees the raw event name and payload, and its result is
+	// what feed returns -- the applier adds nothing of its own.
+	auto seen_name = std::string{ };
+	auto seen_data = std::string{ };
+
+	applier.set_escape_hatch( [&]( const std::string_view event_name, const std::string_view data )
+		-> result< std::vector< model::chat_event > > {
+		seen_name = std::string{ event_name };
+		seen_data = std::string{ data };
+
+		auto event = model::chat_event{ };
+		event.type = model::chat_event::kind::text_delta;
+		event.text = "from the hatch";
+
+		return std::vector< model::chat_event >{ event };
+	} );
+
+	auto produced = applier.feed( "custom.event", R"({"anything":true})" );
+
+	REQUIRE( static_cast< bool >( produced ) );
+	REQUIRE( seen_name == "custom.event" );
+	REQUIRE( seen_data == R"({"anything":true})" );
+
+	if ( produced ) {
+		REQUIRE( produced->size( ) == 1 );
+		REQUIRE( ( *produced )[ 0 ].text == "from the hatch" );
+	}
+}
+
+TEST_CASE( "a pointer gated on the event name is not applied to other events", "[provider]" ) {
+	// [OI] Responses puts text and tool arguments at the SAME pointer (/delta) and
+	// distinguishes them only by the SSE event name. Without the gate, every text
+	// token is also appended to the tool-call arguments.
+	auto descriptor = model::descriptor_from_json( R"({
+		"name": "gated",
+		"endpoint": "https://example.invalid/v1/responses",
+		"stream": {
+			"text_delta": "/delta",
+			"text_events": ["response.output_text.delta"],
+			"tool_calls": { "id": "/item_id", "args": "/delta" },
+			"tool_call_events": ["response.function_call_arguments.delta"]
+		}
+	})" );
+
+	REQUIRE( static_cast< bool >( descriptor ) );
+
+	if ( !descriptor ) {
+		FAIL( descriptor.error( ).msg );
+	}
+
+	auto applier = model::delta_applier{ *descriptor };
+
+	// A text event: text only, and no tool call starts.
+	auto text = applier.feed( "response.output_text.delta", R"({"delta":"hello"})" );
+
+	REQUIRE( static_cast< bool >( text ) );
+
+	if ( text ) {
+		REQUIRE( text->size( ) == 1 );
+		REQUIRE( ( *text )[ 0 ].type == model::chat_event::kind::text_delta );
+		REQUIRE( ( *text )[ 0 ].text == "hello" );
+	}
+
+	// A tool-argument event: the arguments are NOT text.
+	auto args = applier.feed( "response.function_call_arguments.delta",
+		R"({"item_id":"call_1","delta":"{\"a\":1}"})" );
+
+	REQUIRE( static_cast< bool >( args ) );
+
+	if ( args ) {
+		for ( const auto& event : *args ) {
+			REQUIRE( event.type != model::chat_event::kind::text_delta );
+		}
+	}
+
+	// The completed call carries the arguments, and only them.
+	auto completed = applier.finish( );
+
+	auto call = std::find_if( completed.begin( ), completed.end( ),
+		[]( const model::chat_event& value ) {
+			return value.type == model::chat_event::kind::tool_call_delta;
+		} );
+
+	REQUIRE( call != completed.end( ) );
+
+	if ( call != completed.end( ) ) {
+		REQUIRE( call->args_fragment == R"({"a":1})" );
+		REQUIRE( call->tool_call_id == "call_1" );
+	}
+}
+
+TEST_CASE( "a tool-call index off the wire is bounded", "[provider]" ) {
+	// The index addresses an array and is stored as an int. A negative or huge
+	// value was a truncating cast followed by unbounded growth -- ten bytes in,
+	// megabytes retained, per event.
+	auto descriptor = model::descriptor_from_json( R"({
+		"name": "indexed",
+		"endpoint": "https://example.invalid/v1/chat/completions",
+		"stream": {
+			"tool_calls": {
+				"index": "/index",
+				"name": "/name",
+				"args": "/arguments"
+			}
+		}
+	})" );
+
+	REQUIRE( static_cast< bool >( descriptor ) );
+
+	if ( !descriptor ) {
+		FAIL( descriptor.error( ).msg );
+	}
+
+	auto applier = model::delta_applier{ *descriptor };
+
+	for ( const auto* payload : { R"({"index":-1,"name":"x","arguments":"{}"})",
+		R"({"index":999999,"name":"x","arguments":"{}"})" } ) {
+		auto produced = applier.feed( "message", payload );
+
+		REQUIRE_FALSE( static_cast< bool >( produced ) );
+
+		if ( !produced ) {
+			REQUIRE( produced.error( ).code == errc::protocol );
+		}
+	}
+}
+
+TEST_CASE( "an unknown descriptor key is refused at every level", "[provider]" ) {
+	// The header promises rejection, and a typo like `steam` for `stream` would
+	// otherwise load with the field unset -- surfacing as a first-token failure
+	// with no hint about the cause.
+	const auto cases = std::vector< std::pair< const char*, const char* > >{
+		{ R"({"name":"x","endpoint":"https://x/v1","steam":{"text_delta":"/t"}})", "root typo" },
+		{ R"({"name":"x","endpoint":"https://x/v1","on_event":true,"nope":1})", "root extra" },
+		{ R"({"name":"x","endpoint":"https://x/v1","auth":{"from":"env","name":"K",
+			"header":"Authorization","scheme2":"x"}})", "auth typo" },
+		{ R"({"name":"x","endpoint":"https://x/v1","stream":{"text_delta":"/t",
+			"tool_call":{"args":"/a"}}})", "stream typo" },
+		{ R"({"name":"x","endpoint":"https://x/v1","stream":{"tool_calls":{"args":"/a",
+			"names":"/n"}}})", "tool_calls typo" },
+		{ R"({"name":"x","endpoint":"https://x/v1","stream":{"usage":{"in":"/i",
+			"outt":"/o"}}})", "usage typo" },
+		{ R"({"name":"x","endpoint":"https://x/v1","request":{"model":"m","nope":"x"}})",
+			"request typo" },
+	};
+
+	for ( const auto& [ text, label ] : cases ) {
+		auto descriptor = model::descriptor_from_json( text );
+
+		CHECK_FALSE( static_cast< bool >( descriptor ) );
+
+		if ( descriptor ) {
+			FAIL( "case '" << label << "' loaded but should not have" );
+		}
+
+		// The message must name the offending key, or the author has to guess.
+		if ( !descriptor ) {
+			CHECK( descriptor.error( ).msg.find( "unknown descriptor key" ) != std::string::npos );
+		}
+	}
+
+	// And a descriptor that uses only known keys still loads, at every level, so
+	// the check is not simply refusing everything.
+	auto accepted = model::descriptor_from_json( R"({
+		"name": "full",
+		"endpoint": "https://x/v1",
+		"auth": { "from": "env", "name": "K", "header": "Authorization", "scheme": "Bearer" },
+		"request": { "model": "model", "messages": "messages", "tools": "tools",
+			"max_output_tokens": "max_tokens", "temperature": "temperature",
+			"response_schema": "schema", "reasoning_effort": "effort" },
+		"stream": {
+			"text_delta": "/t",
+			"thinking_delta": "/th",
+			"tool_calls": { "index": "/i", "id": "/d", "name": "/n", "args": "/a" },
+			"finish": "/f",
+			"usage": { "in": "/ui", "out": "/uo", "cached_read": "/uc",
+				"cache_write": "/uw", "reasoning": "/ur" },
+			"terminal_events": ["done"],
+			"text_events": ["text"],
+			"tool_call_events": ["args"]
+		},
+		"extra_headers": "{}",
+		"on_event": false
+	})" );
+
+	REQUIRE( static_cast< bool >( accepted ) );
+
+	if ( !accepted ) {
+		FAIL( accepted.error( ).msg );
+	}
+
+	// Every pointer survived, including the reasoning one that used to be absent
+	// from the validation array.
+	REQUIRE( accepted->stream.usage_reasoning == "/ur" );
+	REQUIRE( accepted->stream.text_events.size( ) == 1 );
+	REQUIRE( accepted->stream.tool_call_events.size( ) == 1 );
+}
+
+TEST_CASE( "a pointer the applier cannot honour is refused at load", "[provider]" ) {
+	// The header says `/-` and wildcards are unsupported. Checking only the first
+	// character let them through to resolve to nothing at first token.
+	for ( const auto* pointer : { "/a/-", "/a/*/b", "*/b" } ) {
+		auto text = std::string{ R"({"name":"x","endpoint":"https://x/v1","stream":{"text_delta":")" };
+		text += pointer;
+		text += R"("}})";
+
+		auto descriptor = model::descriptor_from_json( text );
+
+		CHECK_FALSE( static_cast< bool >( descriptor ) );
+
+		if ( !descriptor ) {
+			CHECK( descriptor.error( ).msg.find( "not a JSON pointer" ) != std::string::npos );
+		}
+	}
+}
+
+TEST_CASE( "reasoning tokens are mapped, not dropped", "[provider]" ) {
+	// `usage_reasoning` is parsed and declared, but it was missing from the
+	// validation array -- so a typo in the pointer loaded fine and silently
+	// reported zero reasoning tokens for the life of the session.
+	auto descriptor = model::descriptor_from_json( R"({
+		"name": "reasoning",
+		"endpoint": "https://example.invalid/v1/chat/completions",
+		"stream": {
+			"text_delta": "/choices/0/delta/content",
+			"usage": {
+				"in": "/usage/prompt_tokens",
+				"out": "/usage/completion_tokens",
+				"reasoning": "/usage/completion_tokens_details/reasoning_tokens"
+			}
+		}
+	})" );
+
+	REQUIRE( static_cast< bool >( descriptor ) );
+
+	if ( !descriptor ) {
+		FAIL( descriptor.error( ).msg );
+	}
+
+	auto applier = model::delta_applier{ *descriptor };
+
+	auto produced = applier.feed( "message", R"({
+		"choices": [ { "delta": { "content": "x" } } ],
+		"usage": {
+			"prompt_tokens": 10,
+			"completion_tokens": 40,
+			"completion_tokens_details": { "reasoning_tokens": 25 }
+		}
+	})" );
+
+	REQUIRE( static_cast< bool >( produced ) );
+
+	// The reasoning count reaches the usage event, not just the accumulator.
+	REQUIRE_FALSE( produced->empty( ) );
+
+	auto usage_event = std::find_if( produced->begin( ), produced->end( ),
+		[]( const model::chat_event& value ) {
+			return value.type == model::chat_event::kind::usage;
+		} );
+
+	REQUIRE( usage_event != produced->end( ) );
+
+	if ( usage_event != produced->end( ) ) {
+		REQUIRE( usage_event->input_tokens == 10 );
+		REQUIRE( usage_event->output_tokens == 40 );
+		REQUIRE( usage_event->reasoning_tokens == 25 );
+	}
+
+	REQUIRE( applier.accumulated_usage( ).reasoning == 25 );
 }

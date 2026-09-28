@@ -327,3 +327,48 @@ TEST_CASE( "contains accepts the 8.3 spelling of the same directory", "[workspac
 	CHECK_FALSE( opened->contains( sibling ) );
 }
 #endif
+
+TEST_CASE( "a directory symlink loop does not hang the glob", "[workspace]" ) {
+	// `**` recursed into every entry whose is_directory() was true, and
+	// is_directory FOLLOWS a symlink -- so a clone containing a -> b -> a made the
+	// walk recurse until the stack ran out. The result cap did not help: it counts
+	// matches, not visits, so a tree with few matching files never hit it.
+	auto root = std::filesystem::temp_directory_path( ) / "mcode-glob-loop-test";
+	std::filesystem::remove_all( root );
+	std::filesystem::create_directories( root / "a" / "b" );
+
+	auto opened = workspace::open( root );
+	REQUIRE( static_cast< bool >( opened ) );
+
+	if ( !opened ) {
+		FAIL( opened.error( ).msg );
+	}
+
+	// b/loop -> a, which closes the cycle.
+	auto error = std::error_code{ };
+	std::filesystem::create_directory_symlink( root / "a", root / "a" / "b" / "loop", error );
+
+	if ( error ) {
+		// Symlinks need a privilege this process may not have. The test is then
+		// vacuous, so it says so rather than passing silently.
+		WARN( "skipped: cannot create a symlink here (" << error.message( ) << ")" );
+		std::filesystem::remove_all( root );
+
+		return;
+	}
+
+	// The walk must terminate. Depth and visited-set guards are what make this
+	// finish; without them it is a stack overflow, not a slow answer.
+	auto matched = opened->glob( "**/*.txt" );
+
+	REQUIRE( static_cast< bool >( matched ) );
+
+	if ( matched ) {
+		// And nothing it returned came from outside the root.
+		for ( const auto& path : *matched ) {
+			REQUIRE( opened->contains( path ) );
+		}
+	}
+
+	std::filesystem::remove_all( root );
+}

@@ -50,10 +50,28 @@ echo "== valid.luau must type-check =="
 
 echo
 echo "== invalid.luau must NOT type-check =="
-if "${checker}" "${definition}" invalid.luau 2>/dev/null; then
+
+# The output is kept, and the failure has to NAME the file and be a type or syntax
+# error. Accepting any non-zero exit made a missing or renamed fixture -- which
+# exits 2 from the checker's own argument handling -- look like a pass, so the
+# gate would report success while checking nothing.
+if invalid_output="$("${checker}" "${definition}" invalid.luau 2>&1)"; then
     echo "FAIL: invalid.luau type-checked clean -- the definition file no longer constrains anything" >&2
     exit 1
 fi
+
+if ! printf '%s' "${invalid_output}" | grep -q "invalid.luau"; then
+    echo "FAIL: the checker failed without mentioning invalid.luau -- it did not read the fixture" >&2
+    printf '%s\n' "${invalid_output}" >&2
+    exit 1
+fi
+
+if ! printf '%s' "${invalid_output}" | grep -qiE "TypeError|SyntaxError|type error|Unknown"; then
+    echo "FAIL: invalid.luau failed for a reason other than a type or syntax error" >&2
+    printf '%s\n' "${invalid_output}" >&2
+    exit 1
+fi
+
 echo "ok: invalid.luau was rejected as expected"
 
 # Shipped extensions must type-check too. A first-party extension that does not

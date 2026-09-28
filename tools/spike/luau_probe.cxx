@@ -3,6 +3,7 @@
 #include <psapi.h>
 #else
 #include <cstdio>
+#include <unistd.h>
 #endif
 
 #include <cstdio>
@@ -16,6 +17,7 @@
 #include "luacode.h"
 
 namespace {
+
 
 #if defined( _WIN32 )
 	auto current_rss_kb( ) -> unsigned long long {
@@ -34,6 +36,15 @@ namespace {
 		return counters.PeakWorkingSetSize / 1024;
 	}
 #else
+	// statm reports PAGES. Assuming 4 KiB understates every RSS number by the page
+	// ratio on a 16 KiB-page kernel, which is the arm64 default -- and the numbers
+	// this probe produced are what the VM decision was made from.
+	auto page_size_bytes( ) -> long {
+		static const auto cached = ::sysconf( _SC_PAGESIZE );
+
+		return cached > 0 ? cached : 4096;
+	}
+
 	auto current_rss_kb( ) -> unsigned long long {
 		std::FILE* file = std::fopen( "/proc/self/statm", "r" );
 		if ( file == nullptr ) {
@@ -46,7 +57,7 @@ namespace {
 			return 0;
 		}
 		std::fclose( file );
-		return resident * 4;
+		return resident * static_cast< unsigned long long >( page_size_bytes( ) ) / 1024;
 	}
 
 	auto peak_rss_kb( ) -> unsigned long long {
@@ -153,7 +164,7 @@ auto main( int argument_count, char** arguments ) -> int {
 	const auto boundary_ms = std::chrono::duration_cast< std::chrono::microseconds >(
 		std::chrono::steady_clock::now( ) - boundary_started ).count( ) / 1000.0;
 
-	// Each probe returns 1 when the escape SUCCEEDED (which is a failure for us).
+	// Each probe returns 1 when the escape SUCCEEDED ( which is a failure for us ).
 	auto probe = [&]( const char* source ) -> int {
 		lua_State* thread = lua_newthread( state );
 		luaL_sandboxthread( thread );

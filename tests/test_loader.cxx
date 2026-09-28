@@ -1,159 +1,12 @@
-#include <catch2/catch_test_macros.hpp>
+#include "ext_test_helpers.hxx"
 
 #include <algorithm>
 #include <filesystem>
-#include <fstream>
 #include <string>
 #include <vector>
 
-#include "mcode/ext/loader.hxx"
-#include "mcode/events/bus.hxx"
-#include "mcode/ext/hooks.hxx"
-#include "mcode/model/provider.hxx"
-
 using namespace mcode;
-
-namespace {
-
-	// The registry a load writes into. A free function cannot capture, so the
-	// installer reads it from here; each test replaces it before loading.
-	inline mcode::tool_registry* g_registry = nullptr;
-
-	auto extensions_root( ) -> std::filesystem::path {
-		return std::filesystem::path{ MCODE_FIXTURE_EXTENSIONS };
-	}
-
-	// The REAL API surface, not a stub. A hand-written stub would keep passing
-	// after docs/18 renamed something, which is exactly the drift this suite
-	// exists to catch -- the extension calls `mcode.tool.register` through the
-	// same entry points a third-party extension does.
-	auto register_api( lua_host& host, ext::api_surface& surface,
-		model::provider_registry& providers, ext::hook_registry& hooks,
-		const ext::manifest& manifest ) -> status {
-		return surface.install( host, *g_registry, providers, hooks, manifest );
-	}
-
-	// A bare "0 == 1" hides which extension failed and why, so every assertion on
-	// the report goes through this.
-	auto describe( const ext::load_report& report ) -> std::string {
-		auto text = std::string{ };
-
-		for ( const auto& failure : report.failed ) {
-			text += "\n  failed " + failure.name + ": " + failure.reason;
-		}
-
-		for ( const auto& entry : report.loaded ) {
-			text += "\n  loaded " + entry.name + " (" +
-				std::to_string( entry.tools.size( ) ) + " tools)";
-		}
-
-		return text;
-	}
-
-	auto scratch_root( ) -> std::filesystem::path {
-		auto path = std::filesystem::temp_directory_path( ) / "mcode-loader-test";
-		std::filesystem::remove_all( path );
-		std::filesystem::create_directories( path );
-
-		return path;
-	}
-
-	auto write( const std::filesystem::path& path, const std::string_view text ) -> void {
-		std::filesystem::create_directories( path.parent_path( ) );
-
-		auto out = std::ofstream{ path, std::ios::trunc };
-		out << text;
-	}
-
-}
-
-TEST_CASE( "a valid manifest loads", "[loader]" ) {
-	auto manifest = ext::load_manifest( extensions_root( ) / "hello-tool" );
-
-	REQUIRE( static_cast< bool >( manifest ) );
-
-	if ( !manifest ) {
-		FAIL( manifest.error( ).msg );
-	}
-
-	REQUIRE( manifest->name == "hello-tool" );
-	REQUIRE( manifest->version == "0.1.0" );
-	REQUIRE( manifest->api_version == 1 );
-	REQUIRE( manifest->has_permission( "fs_read" ) );
-	REQUIRE_FALSE( manifest->has_permission( "fs_write" ) );
-	REQUIRE_FALSE( manifest->has_permission( "net" ) );
-}
-
-TEST_CASE( "an unknown manifest key is rejected", "[loader]" ) {
-	// `permission` instead of `permissions` would otherwise load with no
-	// permissions at all, and the failure would surface much later as a confusing
-	// denial.
-	auto manifest = ext::load_manifest( extensions_root( ) / "broken-manifest" );
-
-	REQUIRE_FALSE( static_cast< bool >( manifest ) );
-	REQUIRE( manifest.error( ).msg.find( "unknown key" ) != std::string::npos );
-	REQUIRE( manifest.error( ).msg.find( "permission" ) != std::string::npos );
-}
-
-TEST_CASE( "manifest validation rejects what would fail later", "[loader]" ) {
-	const auto root = scratch_root( );
-
-	const auto cases = std::vector< std::pair< const char*, const char* > >{
-		{ R"(version = "0.1.0"
-api_version = 1)", "no name" },
-		{ R"(name = "bad"
-version = "0.1.0"
-api_version = 1)", "name does not match the directory" },
-		{ R"(name = "bad-name"
-api_version = 1)", "no version" },
-		{ R"(name = "bad-name"
-version = "not-a-version"
-api_version = 1)", "bad version" },
-		{ R"(name = "bad-name"
-version = "0.1.0")", "no api_version" },
-		{ R"(name = "bad-name"
-version = "0.1.0"
-api_version = ">=1")", "api_version is a range, not an integer" },
-		{ R"(name = "bad-name"
-version = "0.1.0"
-api_version = 99)", "api_version above this build" },
-		{ R"(name = "bad-name"
-version = "0.1.0"
-api_version = 1
-permissions = ["fs_reed"])", "unknown permission" },
-	};
-
-	for ( const auto& [ text, label ] : cases ) {
-		// The directory name must be bad-name for the name checks to be meaningful.
-		write( root / "bad-name" / "ext.toml", text );
-
-		auto manifest = ext::load_manifest( root / "bad-name" );
-
-		CHECK_FALSE( static_cast< bool >( manifest ) );
-
-		if ( manifest ) {
-			FAIL( "case '" << label << "' was accepted but should not be" );
-		}
-	}
-
-	std::filesystem::remove_all( root );
-}
-
-TEST_CASE( "a name that is not lowercase-kebab-case is refused", "[loader]" ) {
-	const auto root = scratch_root( );
-
-	for ( const auto* name : { "Bad", "bad_name", "-bad", "bad-", "bad--name", "bad name" } ) {
-		write( root / "x" / "ext.toml",
-			std::string{ "name = \"" } + name + "\"\nversion = \"0.1.0\"\napi_version = 1\n" );
-
-		// The directory is "x", so the name check fires first for valid names and
-		// the pattern check fires for invalid ones. Either way it must be refused.
-		auto manifest = ext::load_manifest( root / "x" );
-		CHECK_FALSE( static_cast< bool >( manifest ) );
-	}
-
-	std::filesystem::remove_all( root );
-}
+using namespace ext_test;
 
 TEST_CASE( "loading registers nothing when extensions are disabled", "[loader]" ) {
 	// E8's acceptance: disabling every extension leaves a working, less capable
@@ -199,7 +52,7 @@ TEST_CASE( "a disabled-name list skips without failing", "[loader]" ) {
 }
 
 TEST_CASE( "a bad manifest fails the extension, not the session", "[loader]" ) {
-	// docs/19: a bad manifest fails the extension, never the session. The valid
+	// A bad manifest fails the extension, never the session. The valid
 	// extension alongside it must still load.
 	auto registry = tool_registry{ };
 	g_registry = &registry;
@@ -406,7 +259,7 @@ TEST_CASE( "invoking an unknown tool is an error, not a crash", "[loader]" ) {
 }
 
 TEST_CASE( "an environmental failure returns the extension's message", "[loader]" ) {
-	// docs/18 splits failure in two: `nil, err` is environmental and returns to
+	// Failure splits in two: `nil, err` is environmental and returns to
 	// the caller, a raised error is a contract violation. Both must reach the
 	// model as a message rather than as an empty success.
 	auto registry = tool_registry{ };
@@ -515,7 +368,7 @@ TEST_CASE( "the providers extension declares three providers through the API", "
 }
 
 TEST_CASE( "disabling every extension leaves a working registry", "[loader]" ) {
-	// E8's acceptance criterion, stated in docs/23 as "the mechanical check that
+	// The acceptance criterion, stated as "the mechanical check that
 	// the core/extension line has not drifted": with every extension disabled the
 	// agent must still have its core tools and must not error.
 	auto registry = tool_registry{ };
@@ -563,7 +416,7 @@ TEST_CASE( "disabling every extension leaves a working registry", "[loader]" ) {
 }
 
 TEST_CASE( "the surface exposes exactly the frozen fields", "[loader]" ) {
-	// docs/18 freezes `mcode.ext.name` and `mcode.api_version`, and closes the
+	// The frozen surface has `mcode.ext.name` and `mcode.api_version`, and closes the
 	// table. A field that is not in it is drift, and `api_version` as a string
 	// would break every `mcode.api_version < 2` comparison an author writes --
 	// Luau raises on a number/string comparison rather than coercing.
@@ -616,128 +469,111 @@ TEST_CASE( "the surface exposes exactly the frozen fields", "[loader]" ) {
 	REQUIRE( *shape == "true" );
 }
 
-TEST_CASE( "a hook written in Luau vetoes through the bus", "[loader]" ) {
-	// docs/26's exit criterion names a provider, a tool, AND a hook as the three
-	// things that must be implementable in the extension language. This is the
-	// hook: registered by init.luau, dispatched by the bus, and its veto surfaced
-	// with attribution.
-	auto registry = tool_registry{ };
-	g_registry = &registry;
-
-	auto providers = model::provider_registry{ };
-	auto bus = events::bus{ };
-	auto hooks = ext::hook_registry{ bus };
-
-	auto options = ext::loader_options{ };
-	options.register_api = register_api;
-
-	auto loaded = ext::load_extensions( { extensions_root( ) }, providers, hooks, options );
-
-	REQUIRE( loaded.report.loaded.size( ) == 1 );
-	REQUIRE( hooks.size( ) == 2 );
-	REQUIRE( hooks.handlers_for( "tool.pre_call" ) == 1 );
-	REQUIRE( hooks.handlers_for( "hello-tool.ready" ) == 1 );
-
-	// A tool call the hook does not object to passes.
-	auto allowed = events::event{ };
-	allowed.type = events::kind::tool_pre_call;
-	allowed.sequence = 1;
-	allowed.payload_json = R"({"name":"read"})";
-
-	REQUIRE_FALSE( static_cast< bool >( bus.publish( allowed ) ) );
-
-	// And the one it does object to is blocked, with the extension named as the
-	// source -- docs/18 requires the reason to be surfaced to the model attributed
-	// to the vetoing extension.
-	auto blocked = events::event{ };
-	blocked.type = events::kind::tool_pre_call;
-	blocked.sequence = 2;
-	blocked.payload_json = R"({"name":"forbidden"})";
-
-	auto veto = bus.publish( blocked );
-
-	REQUIRE( static_cast< bool >( veto ) );
-
-	if ( veto ) {
-		REQUIRE( veto->reason == "blocked by hello-tool" );
-		REQUIRE( veto->source == "hello-tool" );
-	}
-
-	// A non-vetoable kind never vetoes, even from the same extension: the handler
-	// returns nothing for it, and docs/20 only accepts a veto on the three
-	// pre-action kinds.
-	auto notification = events::event{ };
-	notification.type = events::kind::tool_result;
-	notification.sequence = 3;
-	notification.payload_json = R"({"name":"forbidden"})";
-
-	REQUIRE_FALSE( static_cast< bool >( bus.publish( notification ) ) );
-}
-
-TEST_CASE( "a custom event reaches the extension and never the log", "[loader]" ) {
-	// docs/20's closed tagged union exists so the session log's schema stays
-	// explicit. An extension-invented event name must not become a kind, so custom
-	// events dispatch inside the hook registry and never touch the bus.
-	//
-	// This test also guards a lifetime rule that bit once: everything the API
-	// surface or a hook holds must outlive the LOAD, not just the loop iteration
-	// that created it. The handler here logs through `mcode.log.*`, which reads the
-	// extension's manifest -- so if the surface kept a pointer to the loader's
-	// local manifest, this is the call that reads freed memory.
-	auto registry = tool_registry{ };
-	g_registry = &registry;
-
-	auto providers = model::provider_registry{ };
-	auto bus = events::bus{ };
-	auto hooks = ext::hook_registry{ bus };
-
-	auto options = ext::loader_options{ };
-	options.register_api = register_api;
-
-	auto loaded = ext::load_extensions( { extensions_root( ) }, providers, hooks, options );
-
-	REQUIRE( loaded.report.loaded.size( ) == 1 );
-
-	if ( loaded.extensions.empty( ) ) {
-		return;
-	}
-
-	auto& host = *loaded.extensions.front( ).host;
-
-	// Firing it runs the handler. The handler logs, so the observable effect is
-	// that dispatch completes without a failure being counted.
-	REQUIRE( static_cast< bool >( hooks.emit( host, "hello-tool.ready", R"({"count":7})" ) ) );
-	REQUIRE( hooks.total_failures( ) == 0 );
-	REQUIRE( hooks.failures( "hello-tool" ) == 0 );
-
-	// An unsubscribed name is a no-op rather than an error.
-	REQUIRE( static_cast< bool >( hooks.emit( host, "hello-tool.nothing", "{}" ) ) );
-
-	// And a session event name cannot be emitted: it belongs to the bus, and
-	// letting an extension synthesize one would corrupt the log's ordering.
-	auto refused = hooks.emit( host, "tool.call", "{}" );
-	REQUIRE_FALSE( static_cast< bool >( refused ) );
-	REQUIRE( refused.error( ).msg.find( "session event" ) != std::string::npos );
-}
-
-TEST_CASE( "a throwing hook is contained, counted, and does not abort dispatch", "[loader]" ) {
-	// docs/20: dispatch is noexcept at the bus boundary. A throwing subscriber is
-	// caught and counted, and a peer's handler still runs -- a peer's error must
-	// never skip another extension's hook.
+TEST_CASE( "an extension without init.luau is refused by name", "[loader]" ) {
+	// The reason string is the only thing that tells the author what is missing;
+	// "failed" alone sends them looking at their manifest.
 	const auto root = scratch_root( );
-	const auto directory = root / "throwing-hook";
+
+	write( root / "no-entry" / "ext.toml",
+		"name = \"no-entry\"\nversion = \"0.1.0\"\napi_version = 1\n" );
+
+	auto registry = tool_registry{ };
+	g_registry = &registry;
+
+	auto providers = model::provider_registry{ };
+	auto bus = events::bus{ };
+	auto hooks = ext::hook_registry{ bus };
+
+	auto options = ext::loader_options{ };
+	options.register_api = register_api;
+
+	auto loaded = ext::load_extensions( { root }, providers, hooks, options );
+
+	REQUIRE( loaded.report.loaded.empty( ) );
+	REQUIRE( loaded.report.failed.size( ) == 1 );
+	REQUIRE( loaded.report.failed.front( ).name == "no-entry" );
+	REQUIRE( loaded.report.failed.front( ).reason == "no init.luau" );
+
+	std::filesystem::remove_all( root );
+}
+
+TEST_CASE( "two extensions claiming one tool name is a failure, not a silent override", "[loader]" ) {
+	// A name collision means the model would call whichever registered last, with
+	// no indication that the other exists. The second one fails instead.
+	const auto root = scratch_root( );
+
+	for ( const auto* name : { "first", "second" } ) {
+		write( root / name / "ext.toml",
+			std::string{ "name = \"" } + name + "\"\nversion = \"0.1.0\"\napi_version = 1\n" );
+		write( root / name / "init.luau", R"LUASRC(mcode.tool.register({
+	name = "shared",
+	description = "Claimed by more than one extension",
+	schema = { type = "object", properties = {} },
+	run = function(args, ctx)
+		return "ok", nil
+	end,
+})
+)LUASRC" );
+	}
+
+	auto registry = tool_registry{ };
+	g_registry = &registry;
+
+	auto providers = model::provider_registry{ };
+	auto bus = events::bus{ };
+	auto hooks = ext::hook_registry{ bus };
+
+	auto options = ext::loader_options{ };
+	options.register_api = register_api;
+
+	auto loaded = ext::load_extensions( { root }, providers, hooks, options );
+
+	// Exactly one wins, and the other is reported rather than dropped.
+	REQUIRE( loaded.report.loaded.size( ) == 1 );
+	REQUIRE( loaded.report.failed.size( ) == 1 );
+	REQUIRE( loaded.report.failed.front( ).reason.find( "shared" ) != std::string::npos );
+
+	// Deterministic order means the FIRST candidate keeps the name, so a rerun
+	// reports the same loser.
+	REQUIRE( loaded.report.loaded.front( ).name == "first" );
+	REQUIRE( loaded.report.failed.front( ).name == "second" );
+
+	std::filesystem::remove_all( root );
+}
+
+TEST_CASE( "unregister and off remove exactly what they named", "[loader]" ) {
+	// Both take a handle from the registration call. A wrong id must not remove a
+	// different tool or hook, and a fractional id must not truncate onto one.
+	const auto root = scratch_root( );
+	const auto directory = root / "handles";
 
 	write( directory / "ext.toml",
-		"name = \"throwing-hook\"\nversion = \"0.1.0\"\napi_version = 1\n" );
-	write( directory / "init.luau", R"LUASRC(mcode.on("tool.pre_call", function(ev)
-	error("hook exploded")
+		"name = \"handles\"\nversion = \"0.1.0\"\napi_version = 1\n" );
+	write( directory / "init.luau", R"LUASRC(local kept = mcode.tool.register({
+	name = "kept",
+	description = "Stays registered",
+	schema = { type = "object", properties = {} },
+	run = function(args, ctx)
+		return "kept", nil
+	end,
+})
+
+local doomed = mcode.tool.register({
+	name = "doomed",
+	description = "Unregistered below",
+	schema = { type = "object", properties = {} },
+	run = function(args, ctx)
+		return "doomed", nil
+	end,
+})
+
+mcode.tool.unregister(doomed)
+
+local hook = mcode.on("tool.pre_call", function(ev)
+	return nil
 end)
 
-mcode.on("tool.pre_call", function(ev)
-	if ev.payload.name == "second" then
-		return { veto = "second handler ran" }
-	end
-end)
+mcode.off(hook)
 )LUASRC" );
 
 	auto registry = tool_registry{ };
@@ -752,67 +588,39 @@ end)
 
 	auto loaded = ext::load_extensions( { root }, providers, hooks, options );
 
+	INFO( describe( loaded.report ) );
 	REQUIRE( loaded.report.loaded.size( ) == 1 );
-	REQUIRE( hooks.handlers_for( "tool.pre_call" ) == 2 );
 
-	auto event = events::event{ };
-	event.type = events::kind::tool_pre_call;
-	event.payload_json = R"({"name":"second"})";
+	// The named tool is gone; the other survives.
+	CHECK( registry.find( "doomed" ) == nullptr );
+	CHECK( registry.find( "kept" ) != nullptr );
 
-	// The first handler throws; the second still runs and still vetoes.
-	auto veto = bus.publish( event );
+	// And the unregistered tool is no longer callable through the surface.
+	CHECK_FALSE( static_cast< bool >( loaded.invoke( "doomed", "{}" ) ) );
 
-	REQUIRE( static_cast< bool >( veto ) );
+	auto kept = loaded.invoke( "kept", "{}" );
+	REQUIRE( static_cast< bool >( kept ) );
 
-	if ( veto ) {
-		REQUIRE( veto->reason == "second handler ran" );
+	if ( kept ) {
+		REQUIRE( *kept == "kept" );
 	}
 
-	// The failure was counted rather than thrown, which is what feeds the
-	// quarantine threshold in docs/18.
-	REQUIRE( hooks.total_failures( ) >= 1 );
-	REQUIRE( hooks.failures( "throwing-hook" ) >= 1 );
+	// The hook was unsubscribed, so nothing is left to dispatch into.
+	CHECK( hooks.size( ) == 0 );
+	CHECK( hooks.handlers_for( "tool.pre_call" ) == 0 );
 
 	std::filesystem::remove_all( root );
 }
 
-TEST_CASE( "a clean call clears the consecutive-failure counter", "[loader]" ) {
-	// docs/18 counts CONSECUTIVE failures, so an extension that fails once every
-	// hundred events is never quarantined. A cumulative counter would quarantine
-	// it eventually, which is the wrong behaviour.
-	auto registry = tool_registry{ };
-	g_registry = &registry;
-
-	auto providers = model::provider_registry{ };
-	auto bus = events::bus{ };
-	auto hooks = ext::hook_registry{ bus };
-
-	auto options = ext::loader_options{ };
-	options.register_api = register_api;
-
-	auto loaded = ext::load_extensions( { extensions_root( ) }, providers, hooks, options );
-
-	REQUIRE( loaded.report.loaded.size( ) == 1 );
-
-	auto event = events::event{ };
-	event.type = events::kind::tool_pre_call;
-	event.payload_json = R"({"name":"read"})";
-
-	bus.publish( event );
-
-	REQUIRE( hooks.failures( "hello-tool" ) == 0 );
-}
-
-TEST_CASE( "an unrecognised hook name is refused, not silently inert", "[loader]" ) {
-	// `tool.precal` is a typo, and a hook that can never fire is worse than a load
-	// error: the author would believe their guard was active.
+TEST_CASE( "the loader forwards the VM limits it was given", "[loader]" ) {
+	// memory_limit_bytes and time_limit are the sandbox's only enforcement knobs.
+	// Nothing set them, so a regression that stopped forwarding them was invisible.
 	const auto root = scratch_root( );
-	const auto directory = root / "typo-hook";
+	const auto directory = root / "limited";
 
 	write( directory / "ext.toml",
-		"name = \"typo-hook\"\nversion = \"0.1.0\"\napi_version = 1\n" );
-	write( directory / "init.luau",
-		R"LUASRC(mcode.on("tool.precal", function(ev) return nil end))LUASRC" );
+		"name = \"limited\"\nversion = \"0.1.0\"\napi_version = 1\n" );
+	write( directory / "init.luau", "return 0\n" );
 
 	auto registry = tool_registry{ };
 	g_registry = &registry;
@@ -821,46 +629,29 @@ TEST_CASE( "an unrecognised hook name is refused, not silently inert", "[loader]
 	auto bus = events::bus{ };
 	auto hooks = ext::hook_registry{ bus };
 
+	// A limit small enough that loading cannot fit inside it, which makes the
+	// forwarding observable: the VM refuses an allocation and the load fails.
 	auto options = ext::loader_options{ };
 	options.register_api = register_api;
+	options.memory_limit_bytes = 4096;
 
 	auto loaded = ext::load_extensions( { root }, providers, hooks, options );
 
+	INFO( describe( loaded.report ) );
+
+	REQUIRE( loaded.report.loaded.empty( ) );
 	REQUIRE( loaded.report.failed.size( ) == 1 );
-	REQUIRE( loaded.report.failed.front( ).reason.find( "tool.precal" ) != std::string::npos );
+
+	// A generous limit loads normally, so the refusal above is the limit and not
+	// something else about the fixture.
+	auto generous = ext::loader_options{ };
+	generous.register_api = register_api;
+	generous.memory_limit_bytes = 64 * 1024 * 1024;
+
+	auto accepted = ext::load_extensions( { root }, providers, hooks, generous );
+
+	INFO( describe( accepted.report ) );
+	REQUIRE( accepted.report.loaded.size( ) == 1 );
 
 	std::filesystem::remove_all( root );
-}
-
-TEST_CASE( "unloading an extension detaches its hooks", "[loader]" ) {
-	// A hook left subscribed to a discarded VM is a crash waiting for the next
-	// event, so detaching is part of unload rather than a separate concern.
-	auto registry = tool_registry{ };
-	g_registry = &registry;
-
-	auto providers = model::provider_registry{ };
-	auto bus = events::bus{ };
-	auto hooks = ext::hook_registry{ bus };
-
-	auto options = ext::loader_options{ };
-	options.register_api = register_api;
-
-	auto loaded = ext::load_extensions( { extensions_root( ) }, providers, hooks, options );
-
-	REQUIRE( loaded.report.loaded.size( ) == 1 );
-	REQUIRE( hooks.size( ) == 2 );
-
-	if ( loaded.extensions.empty( ) ) {
-		return;
-	}
-
-	REQUIRE( hooks.detach_owner( *loaded.extensions.front( ).host, "hello-tool" ) == 2 );
-	REQUIRE( hooks.size( ) == 0 );
-
-	// Publishing after detach finds no handler and does not reach the dead VM.
-	auto event = events::event{ };
-	event.type = events::kind::tool_pre_call;
-	event.payload_json = R"({"name":"forbidden"})";
-
-	REQUIRE_FALSE( static_cast< bool >( bus.publish( event ) ) );
 }

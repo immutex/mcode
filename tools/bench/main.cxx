@@ -2,7 +2,7 @@
 // memory, and hook dispatch cost.
 //
 // Reports `key=value` lines so CI can gate on them and a human can diff runs.
-// Every number here is a budget in docs/01 or docs/26; if a number moves, the
+// Every number here is a documented budget; if a number moves, the
 // doc that owns the budget moves with it.
 //
 // Usage: mcode_bench [extensions] [tools-per-ext] [handlers]
@@ -17,9 +17,10 @@
 
 #if defined( _WIN32 )
 #include <windows.h>
+
 #include <psapi.h>
 #else
-#include <cstdio>
+#include <unistd.h>
 #endif
 
 #include "mcode/ext/lua_host.hxx"
@@ -29,6 +30,14 @@
 namespace {
 
 	using clock_type = std::chrono::steady_clock;
+
+#if !defined( _WIN32 )
+	auto page_size_bytes( ) -> long {
+		static const auto cached = ::sysconf( _SC_PAGESIZE );
+
+		return cached > 0 ? cached : 4096;
+	}
+#endif
 
 	auto current_rss_kb( ) -> unsigned long long {
 	#if defined( _WIN32 )
@@ -57,7 +66,9 @@ namespace {
 
 		std::fclose( file );
 
-		return resident * 4;
+		// statm reports PAGES. Assuming 4 KiB understates every RSS number by the
+		// page ratio on a 16 KiB-page kernel, which is the common arm64 default.
+		return resident * static_cast< unsigned long long >( page_size_bytes( ) ) / 1024;
 	#endif
 	}
 
@@ -101,7 +112,7 @@ namespace {
 		return static_cast< double >( elapsed ) / 1'000'000.0;
 	}
 
-	// The full frozen surface from docs/18, registered with stubs. Measuring a
+	// The full frozen surface, registered with stubs. Measuring a
 	// partial surface would understate load cost, and the number has to match
 	// what a real extension actually receives.
 	auto register_api_surface( mcode::lua_host& host ) -> bool {
@@ -184,6 +195,11 @@ auto main( int argument_count, char** arguments ) -> int {
 	const auto load_start = clock_type::now( );
 	auto load_failures = 0;
 
+	// Distinct from load_failures: a measurement that could not be taken is not a
+	// load failure, but it must still fail the run. Swallowing it would let the
+	// gate pass on a run that produced no number at all.
+	auto measurement_failures = 0;
+
 	for ( auto index = 0; index < extension_count; ++index ) {
 		auto options = mcode::lua_host_options{ };
 		options.extension_name = "bench_" + std::to_string( index );
@@ -237,31 +253,59 @@ auto main( int argument_count, char** arguments ) -> int {
 		auto host = mcode::lua_host::create( std::move( options ) );
 
 		if ( !host ) {
+			// Each of these skips a gated metric entirely. Reporting and counting
+			// them is what lets the gate require every metric rather than tolerate
+			// a missing one.
+			std::printf( "  dispatch(%d): VM creation failed: %s\n", handler_count,
+				host.error( ).msg.c_str( ) );
+			++measurement_failures;
+
 			continue;
 		}
 
 		if ( !register_api_surface( *host ) ) {
+			std::printf( "  dispatch(%d): API registration failed\n", handler_count );
+			++measurement_failures;
+
 			continue;
 		}
 
 		auto dispatch_source = build_dispatch_source( handler_count );
 
 		if ( !host->run( dispatch_source, "=(dispatch)" ) ) {
+			std::printf( "  dispatch(%d): the dispatch source failed to run\n", handler_count );
+			++measurement_failures;
+
 			continue;
 		}
 
 		const auto started = clock_type::now( );
+		auto completed = 0;
 
 		for ( auto index = 0; index < dispatch_iterations; ++index ) {
 			auto result = host->call_global( "dispatch", "x" );
 
 			if ( !result ) {
+				// Report it. Silently breaking here divided the elapsed time of a
+				// handful of iterations by the full count, so a dispatch that failed
+				// immediately measured as the fastest one in the run.
+				std::printf( "  dispatch with %d handlers failed after %d iterations: %s\n",
+					handler_count, index, result.error( ).msg.c_str( ) );
+				++measurement_failures;
+
 				break;
 			}
+
+			++completed;
 		}
 
+		if ( completed == 0 ) {
+			continue;
+		}
+
+		// Divided by the iterations that actually ran, not the ones requested.
 		const auto total_ms = milliseconds_since( started );
-		dispatch_per_call_us.push_back( total_ms * 1000.0 / dispatch_iterations );
+		dispatch_per_call_us.push_back( total_ms * 1000.0 / completed );
 
 		std::printf( "dispatch_handlers_%d_us_per_call=%.4f\n", handler_count,
 			dispatch_per_call_us.back( ) );
@@ -274,10 +318,20 @@ auto main( int argument_count, char** arguments ) -> int {
 	{
 		auto bare = mcode::lua_host::create( mcode::lua_host_options{ .extension_name = "bare", .module_loader = { } } );
 
+		if ( !bare ) {
+			std::printf( "  bare VM creation failed: %s\n", bare.error( ).msg.c_str( ) );
+			++measurement_failures;
+		}
+
 		if ( bare ) {
 			// Force sealing without running anything, which is what installs the
 			// sandbox and the thread.
 			auto sealed = bare->run( "return 0", "=(bare)" );
+
+			if ( !sealed ) {
+				std::printf( "  bare VM failed to seal: %s\n", sealed.error( ).msg.c_str( ) );
+				++measurement_failures;
+			}
 
 			if ( sealed ) {
 				std::printf( "bare_vm_bytes=%llu\n",
@@ -308,6 +362,15 @@ auto main( int argument_count, char** arguments ) -> int {
 		const auto payload = std::string{ R"({"choices":[{"delta":{"content":"x"}}]})" };
 
 		auto descriptor = mcode::model::descriptor_from_json( declarative_json );
+
+		if ( !descriptor ) {
+			// Previously silent. A declarative descriptor that fails to load emits no
+			// timing line at all, so the gate would see a missing metric and -- before
+			// the gate was fixed -- pass.
+			std::printf( "provider_declarative_error=descriptor:%s\n",
+				descriptor.error( ).msg.c_str( ) );
+			++measurement_failures;
+		}
 
 		if ( descriptor ) {
 			auto applier = mcode::model::delta_applier{ *descriptor };
@@ -341,6 +404,7 @@ auto main( int argument_count, char** arguments ) -> int {
 
 		if ( !hatch ) {
 			std::printf( "provider_escape_hatch_error=descriptor:%s\n", hatch.error( ).msg.c_str( ) );
+			++measurement_failures;
 		}
 
 		if ( hatch ) {
@@ -351,6 +415,7 @@ auto main( int argument_count, char** arguments ) -> int {
 
 			if ( !host ) {
 				std::printf( "provider_escape_hatch_error=vm:%s\n", host.error( ).msg.c_str( ) );
+				++measurement_failures;
 			}
 
 			if ( host ) {
@@ -373,6 +438,7 @@ auto main( int argument_count, char** arguments ) -> int {
 
 				if ( !ran ) {
 					std::printf( "provider_escape_hatch_error=lua:%s\n", ran.error( ).msg.c_str( ) );
+					++measurement_failures;
 				}
 
 				if ( ran ) {
@@ -431,6 +497,7 @@ auto main( int argument_count, char** arguments ) -> int {
 	std::printf( "extensions=%d\n", loaded );
 	std::printf( "tools_per_extension=%d\n", tools_per_extension );
 	std::printf( "load_failures=%d\n", load_failures );
+	std::printf( "measurement_failures=%d\n", measurement_failures );
 	std::printf( "load_total_ms=%.3f\n", load_ms );
 	std::printf( "load_per_ext_us=%.1f\n", loaded > 0 ? ( load_ms * 1000.0 / loaded ) : 0.0 );
 	std::printf( "ext_bytes_total=%llu\n", static_cast< unsigned long long >( total_bytes ) );
@@ -444,5 +511,5 @@ auto main( int argument_count, char** arguments ) -> int {
 	std::printf( "rss_peak_kb=%llu\n", peak_rss_kb( ) );
 	std::printf( "process_uptime_ms=%.3f\n", milliseconds_since( process_start ) );
 
-	return load_failures != 0 ? 1 : 0;
+	return ( load_failures != 0 || measurement_failures != 0 ) ? 1 : 0;
 }

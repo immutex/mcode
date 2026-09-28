@@ -1,16 +1,20 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <string>
 
 #if defined( _WIN32 )
+#include <io.h>
 #include <windows.h>
 #else
 #include <unistd.h>
 #endif
 
+#include "mcode/cli/exec.hxx"
+#include "mcode/core/error.hxx"
 #include "mcode/platform/seams.hxx"
 #include "mcode/support/config.hxx"
 #include "mcode/support/toml.hxx"
@@ -18,6 +22,16 @@
 using namespace mcode;
 
 namespace {
+
+	// Whether stdout is a console. ctest redirects it, so the negative branch is
+	// the one CI exercises; an interactive run exercises the positive one.
+	auto terminal_attached( ) -> bool {
+	#if defined( _WIN32 )
+		return _isatty( _fileno( stdout ) ) != 0;
+	#else
+		return ::isatty( STDOUT_FILENO ) != 0;
+	#endif
+	}
 
 	auto write_file( const std::filesystem::path& path, const std::string_view text ) -> void {
 		std::filesystem::create_directories( path.parent_path( ) );
@@ -81,6 +95,13 @@ name = "b")", "duplicate key" },
 		{ R"(bad = "\q")", "unsupported escape" },
 		{ R"([unclosed)", "unterminated table header" },
 		{ R"(name = "a" trailing)", "text after a value" },
+
+		// A malformed number must be REFUSED, not truncated to its numeric prefix.
+		// std::stod stopped at the first character it could not use and returned
+		// what it had, so these parsed as 0.25 and 1.0 respectively.
+		{ R"(ratio = 0.25.9)", "a number with two dots" },
+		{ R"(ratio = 1e)", "an exponent with no digits" },
+		{ R"(ratio = 1.2e5.6)", "an exponent followed by more digits" },
 	};
 
 	for ( const auto& [ text, label ] : cases ) {
@@ -219,11 +240,24 @@ TEST_CASE( "the seven platform seams exist and report honestly", "[platform]" ) 
 	// here is that every seam answers, and that the ones M0 does not implement say
 	// so rather than pretending.
 
-	// 1. PtySession
-	REQUIRE( platform::pty_session::supported( ) );
+	// 1. PtySession. The predicate and the operations must AGREE: reporting a
+	// capability that every operation refuses turns a design-time answer into a
+	// runtime surprise, which is the dishonesty this test is named for.
+	const auto pty_supported = platform::pty_session::supported( );
+
 	auto pty = platform::pty_session::spawn( "sh", { } );
-	REQUIRE_FALSE( static_cast< bool >( pty ) );
-	REQUIRE( pty.error( ).code == errc::unsupported );
+
+	if ( pty_supported ) {
+		// Claiming support means spawn has to work. It does not yet, so this branch
+		// is the one that must not be reachable.
+		REQUIRE( static_cast< bool >( pty ) );
+	} else {
+		REQUIRE_FALSE( static_cast< bool >( pty ) );
+
+		if ( !pty ) {
+			REQUIRE( pty.error( ).code == errc::unsupported );
+		}
+	}
 
 	// 2. Sandbox: not enforced yet, and the level says so rather than the caller
 	// assuming isolation.
@@ -288,10 +322,23 @@ TEST_CASE( "the seven platform seams exist and report honestly", "[platform]" ) 
 	REQUIRE( static_cast< bool >( cache_path ) );
 
 	// 6. ResizeSource
+	//
+	// The contract has two halves, and `if ( size )` checked neither: it passed
+	// whether the call succeeded or failed. The honest rule is that a size is
+	// reported only when there IS a terminal, and that a reported size is positive.
+	// A fabricated size under redirection would make the TUI draw to a guess.
 	auto size = platform::terminal_size( );
-	if ( size ) {
-		REQUIRE( size->first > 0 );
-		REQUIRE( size->second > 0 );
+
+	if ( terminal_attached( ) ) {
+		REQUIRE( static_cast< bool >( size ) );
+
+		if ( size ) {
+			REQUIRE( size->first > 0 );
+			REQUIRE( size->second > 0 );
+		}
+	} else {
+		// No console: reporting failure is the correct answer, not a default size.
+		REQUIRE_FALSE( static_cast< bool >( size ) );
 	}
 
 	// 7. FileWatch: deliberately not a core primitive.
@@ -299,4 +346,77 @@ TEST_CASE( "the seven platform seams exist and report honestly", "[platform]" ) 
 	auto watcher = platform::file_watcher::create( *temp, false );
 	REQUIRE_FALSE( static_cast< bool >( watcher ) );
 	REQUIRE( watcher.error( ).code == errc::unsupported );
+}
+
+TEST_CASE( "every exit code is the documented number", "[cli]" ) {
+	// These numbers are an interface: a CI script branches on them. Nothing
+	// asserted them, which is how budget exhaustion came to report 130 --
+	// "interrupted" -- instead of 3, telling a caller the run had been signalled.
+	REQUIRE( cli::to_int( cli::exit_code::success ) == 0 );
+	REQUIRE( cli::to_int( cli::exit_code::verification_failed ) == 1 );
+	REQUIRE( cli::to_int( cli::exit_code::usage_error ) == 2 );
+	REQUIRE( cli::to_int( cli::exit_code::budget_exhausted ) == 3 );
+	REQUIRE( cli::to_int( cli::exit_code::provider_error ) == 4 );
+	REQUIRE( cli::to_int( cli::exit_code::permission_denied ) == 5 );
+	REQUIRE( cli::to_int( cli::exit_code::interrupted ) == 130 );
+}
+
+TEST_CASE( "budget exhaustion is not an interruption", "[cli]" ) {
+	// The two are different outcomes with different codes, and collapsing them is
+	// the specific regression this pins.
+	REQUIRE( cli::exit_code_for( errc::budget_exhausted ) == cli::exit_code::budget_exhausted );
+	REQUIRE( cli::exit_code_for( errc::cancelled ) == cli::exit_code::interrupted );
+	REQUIRE( cli::exit_code_for( errc::budget_exhausted ) != cli::exit_code_for( errc::cancelled ) );
+}
+
+TEST_CASE( "the error-to-exit mapping is total", "[cli]" ) {
+	// Every error code must map to a real code, and the mapping must be total --
+	// an unmapped error silently becomes 1, which reads as "verification failed".
+	const auto codes = std::array{
+		errc::ok, errc::io, errc::json, errc::protocol, errc::tool_failed,
+		errc::cancelled, errc::budget_exhausted, errc::lua_error, errc::config,
+		errc::unsupported,
+	};
+
+	for ( const auto code : codes ) {
+		// Every code has a name, and no two share one.
+		REQUIRE_FALSE( to_string( code ).empty( ) );
+	}
+
+	for ( const auto code : codes ) {
+		if ( code == errc::ok ) {
+			continue;
+		}
+
+		// A failure never maps to success.
+		REQUIRE( cli::exit_code_for( code ) != cli::exit_code::success );
+	}
+}
+
+TEST_CASE( "a UTF-8 BOM does not make the file unreadable", "[toml]" ) {
+	// Notepad -- still the default editor on this project's primary platform --
+	// writes a BOM. Without the skip, the first byte is not a space, a '#', or a
+	// '[', so the parse failed with "expected a key" and named the wrong cause.
+	auto parsed = toml::parse( "\xEF\xBB\xBFmodel = \"gpt\"\n" );
+
+	REQUIRE( static_cast< bool >( parsed ) );
+
+	if ( !parsed ) {
+		FAIL( parsed.error( ).msg );
+	}
+
+	// And the key after the BOM is read normally, not shifted.
+	auto model = parsed->get_string( "model" );
+	REQUIRE( model.has_value( ) );
+
+	if ( model ) {
+		REQUIRE( *model == "gpt" );
+	}
+
+	// A BOM in the middle of a file is NOT special: it is content, and it is not a
+	// valid bare-key character, so the parse still fails there.
+	// Built by concatenation: `\xBFbad` would be read as one long hex escape.
+	const auto bom_mid_file = std::string{ "ok = 1\n" } + "\xEF\xBB\xBF" + "bad = 2\n";
+
+	CHECK_FALSE( static_cast< bool >( toml::parse( bom_mid_file ) ) );
 }

@@ -15,6 +15,8 @@ add_executable(mcode_tests
     test_events.cxx
     test_eval.cxx
     test_loader.cxx
+    test_manifest.cxx
+    test_hooks.cxx
 )
 
 target_link_libraries(mcode_tests

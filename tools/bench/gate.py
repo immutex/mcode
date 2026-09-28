@@ -84,14 +84,23 @@ def main() -> int:
                 if isinstance(rule, dict) and "kind" in rule:
                     gates.setdefault(name, []).append(rule)
 
+    # A gated metric the run did not produce is a FAILURE, not a skip. The whole
+    # point of the gate is that the number is checked; a missing number means the
+    # measurement broke, and silently passing is how a gate rots into decoration.
+    #
+    # There is deliberately no "conditional" allowlist. Every gated metric is
+    # emitted by every healthy run of mcode_bench, and the bench now reports and
+    # counts each path that used to skip one silently. If a metric ever becomes
+    # genuinely conditional, the honest fix is a separate budget group for that
+    # invocation, not an exception that hides a broken measurement.
     failures: list[str] = []
     checked = 0
+    missing: list[str] = []
 
     for name, rules in sorted(gates.items()):
         if name not in metrics:
-            # load_total_ms is only emitted for a specific extension count, so a
-            # missing metric is not a failure -- it is a metric this run does not
-            # produce.
+            missing.append(name)
+
             continue
 
         value = metrics[name]
@@ -126,12 +135,26 @@ def main() -> int:
             else:
                 failures.append(f"{name}: unknown gate kind {kind!r}")
 
+    if missing:
+        print(
+            f"gate: {len(missing)} gated metric(s) missing from the run: "
+            f"{', '.join(missing)}",
+            file=sys.stderr,
+        )
+
+        for name in missing:
+            print(f"  MISSING  {name}", file=sys.stderr)
+
     if checked == 0:
         print("gate: no gated metrics were produced by this run", file=sys.stderr)
         return 2
 
-    if failures:
-        print(f"\ngate: {len(failures)} metric(s) out of budget", file=sys.stderr)
+    if failures or missing:
+        print(
+            f"\ngate: {len(failures)} metric(s) out of budget, "
+            f"{len(missing)} missing",
+            file=sys.stderr,
+        )
 
         for failure in failures:
             print(f"  FAIL  {failure}", file=sys.stderr)
