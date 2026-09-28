@@ -56,7 +56,10 @@ namespace mcode::model {
 			}
 		}
 
-		pending_.push_back( pending_call{ .index = index } );
+		auto call = pending_call{ };
+		call.index = index;
+
+		pending_.push_back( std::move( call ) );
 
 		return pending_.back( );
 	}

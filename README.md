@@ -231,7 +231,22 @@ code comments.
     both compile clean on MSVC and fail the Linux leg. The Linux job is the only
     thing that catches these.
 
-27. **Sorting before comparison is not optional in reports.** Extension discovery
+27. **A designated initializer that leaves a field defaulted fails the GCC and
+    Clang legs.** `-Wmissing-field-initializers` is on under
+    `-DMCODE_WARNINGS_AS_ERRORS=ON`, and MSVC has no equivalent. Construct the
+    struct and assign the fields, or initialize every member.
+
+28. **`[[nodiscard]]` on an infallible helper is a defect, not a safety net.**
+    MSVC's C4834 is also an error here, so a `status`-returning function that
+    never fails forces every caller either to check a value that is always empty
+    or to discard it. `provider.cxx`'s `string_member` returned `status` and now
+    returns `void`; the three call sites were the only reason the warning fired.
+
+29. **An unused file-scope function is an error on GCC and Clang.** MSVC does not
+    warn. When the only reader of a registry slot is such a function, the slot is
+    dead too — remove both, do not suppress the warning.
+
+30. **Sorting before comparison is not optional in reports.** Extension discovery
     sorts by name, and JSON object keys are emitted in sorted order, so two runs
     are byte-identical. An unsorted report makes a duplicate-name or load-order
     failure unreproducible.

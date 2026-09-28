@@ -14,7 +14,6 @@ namespace mcode {
 
 	namespace {
 
-		char g_allocator_key = 0;
 		char g_watchdog_key = 0;
 
 		[[nodiscard]] auto last_segment( const std::string_view path ) -> std::string_view {
@@ -43,10 +42,6 @@ namespace mcode {
 			lua_pop( state, 1 );
 
 			return value;
-		}
-
-		auto allocator_from( lua_State* state ) -> detail::allocator_state* {
-			return static_cast< detail::allocator_state* >( registry_pointer( state, &g_allocator_key ) );
 		}
 
 		auto watchdog_from( lua_State* state ) -> detail::watchdog_state* {
@@ -271,10 +266,9 @@ namespace mcode {
 
 		host.state_ = state;
 
-		lua_pushlightuserdata( state, &g_allocator_key );
-		lua_pushlightuserdata( state, host.allocator_.get( ) );
-		lua_rawset( state, LUA_REGISTRYINDEX );
-
+		// Only the watchdog goes in the registry. The allocator is reached through
+		// the host's own member, and its slot was written but never read -- the one
+		// function that looked it up was dead.
 		lua_pushlightuserdata( state, &g_watchdog_key );
 		lua_pushlightuserdata( state, host.watchdog_.get( ) );
 		lua_rawset( state, LUA_REGISTRYINDEX );

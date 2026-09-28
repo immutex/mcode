@@ -490,7 +490,8 @@ namespace mcode::toml {
 
 	auto parse( const std::string_view text ) -> result< table > {
 		auto out = table{ };
-		auto input = reader{ .text = text };
+		auto input = reader{ };
+		input.text = text;
 		auto prefix = std::string{ };
 
 		while ( !input.at_end( ) ) {

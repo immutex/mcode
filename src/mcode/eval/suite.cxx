@@ -247,7 +247,11 @@ namespace mcode::eval {
 				bus.subscribe_veto( events::kind::tool_pre_call, [&]( const events::event& ) {
 					++reached;
 
-					return std::optional< events::veto >{ events::veto{ .reason = "blocked" } };
+					auto veto = events::veto{ };
+					veto.reason = "blocked";
+					veto.source = "eval";
+
+					return std::optional< events::veto >{ std::move( veto ) };
 				} );
 
 				bus.subscribe_veto( events::kind::tool_pre_call, [&]( const events::event& ) {
@@ -427,7 +431,10 @@ namespace mcode::eval {
 			.id = "extension-boundary-holds",
 			.description = "io, package, and the writable-globals escapes are all refused",
 			.run = []( const std::filesystem::path& ) -> result< bool > {
-				auto host = lua_host::create( { .extension_name = "eval" } );
+				auto options = lua_host_options{ };
+				options.extension_name = "eval";
+
+				auto host = lua_host::create( std::move( options ) );
 
 				if ( !host ) {
 					return fail_message( "could not create the VM" );

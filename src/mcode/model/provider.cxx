@@ -18,13 +18,14 @@ namespace mcode::model {
 			return text.starts_with( "http://" ) || text.starts_with( "https://" );
 		}
 
+		// Returns void, not a status: an absent member is not a failure, and a
+		// fallible signature on an infallible operation forces every caller either
+		// to check a value that is always empty or to discard it.
 		auto string_member( const json::document& doc, const std::string_view key,
-			std::string& target ) -> status {
-			if ( doc.get_string( key ) ) {
-				target = *doc.get_string( key );
+			std::string& target ) -> void {
+			if ( const auto found = doc.get_string( key ) ) {
+				target = *found;
 			}
-
-			return { };
 		}
 
 	}

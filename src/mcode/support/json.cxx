@@ -299,7 +299,11 @@ namespace mcode::json {
 			return std::unexpected( fail( errc::json, "empty key" ) );
 		}
 
-		members_[ std::string{ key } ] = value{ .type = value::kind::string, .text = std::string{ text } };
+		auto entry = value{ };
+		entry.type = value::kind::string;
+		entry.text = std::string{ text };
+
+		members_[ std::string{ key } ] = std::move( entry );
 
 		return { };
 	}
