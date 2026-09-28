@@ -316,7 +316,19 @@ code comments.
     them — which is exactly what `detect_library_support` did on GCC 14 and
     Apple Clang 16. Optional headers are pulled in behind `__has_include`.
 
-41. **Sorting before comparison is not optional in reports.** Extension discovery
+41. **`catch_discover_tests` does not map Catch2 tags to ctest labels unless
+    `ADD_TAGS_AS_LABELS` is passed.** Without it, `ctest -L platform` finds zero
+    tests and fails with exit 8 — on a suite that is entirely green. The CI matrix
+    runs exactly that command for the per-platform seam check.
+
+42. **A timing ceiling must come from a documented budget, not from a local
+    measurement.** `load_per_ext_us` was gated at 250 us — 2.3x the ~110 us
+    measured on a quiet machine — and a shared runner produced 341 us. docs/28
+    already records that timing metrics vary 26–131%; a gate tight enough to be
+    interesting is a gate that fails on load. It is the 1 ms budget from docs/01
+    now, which still catches an order-of-magnitude regression.
+
+43. **Sorting before comparison is not optional in reports.** Extension discovery
     sorts by name, and JSON object keys are emitted in sorted order, so two runs
     are byte-identical. An unsorted report makes a duplicate-name or load-order
     failure unreproducible.

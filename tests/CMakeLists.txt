@@ -32,4 +32,8 @@ target_compile_definitions(mcode_tests PRIVATE
 mcode_configure_target(mcode_tests)
 
 include(Catch)
-catch_discover_tests(mcode_tests)
+# ADD_TAGS_AS_LABELS is required, not cosmetic: the CI matrix runs
+# `ctest -L platform` to exercise the OS seams per platform, and without this the
+# Catch2 tags never become ctest labels -- so the step found no tests at all and
+# failed on two of three platforms while the suite itself was green.
+catch_discover_tests(mcode_tests ADD_TAGS_AS_LABELS)
