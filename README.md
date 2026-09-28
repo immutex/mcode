@@ -214,7 +214,24 @@ code comments.
     variable: the check reads the environment. The error is
     `*** missing: export MACOSX_DEPLOYMENT_TARGET=XX.YY`.
 
-24. **Sorting before comparison is not optional in reports.** Extension discovery
+24. **`conan/profiles/windows-msvc` targets MSVC 194, not this machine's 195.**
+    A bare `compiler.version` is read as a *Visual Studio generation* number, so
+    195 means "Visual Studio 18" and the recipe generator fails with
+    `VS non-existing installation: Visual Studio 18` on any runner without it.
+    The profile carries the portable value plus
+    `tools.microsoft.msbuild:vs_version=17`; override on the command line for a
+    local VS 18 toolset.
+
+25. **Conan's Apple Silicon arch is `armv8`, not `arm64`.** `arch=arm64` fails
+    with `Invalid setting 'arm64' is not a valid 'settings.arch' value`.
+
+26. **GCC's `-Wshadow` and `-Wmissing-field-initializers` fire under
+    `-DMCODE_WARNINGS_AS_ERRORS=ON` and MSVC does not have them.** A designated
+    initializer that leaves a field defaulted, and a local shadowing a member,
+    both compile clean on MSVC and fail the Linux leg. The Linux job is the only
+    thing that catches these.
+
+27. **Sorting before comparison is not optional in reports.** Extension discovery
     sorts by name, and JSON object keys are emitted in sorted order, so two runs
     are byte-identical. An unsorted report makes a duplicate-name or load-order
     failure unreproducible.

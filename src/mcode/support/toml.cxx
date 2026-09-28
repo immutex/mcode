@@ -372,13 +372,13 @@ namespace mcode::toml {
 		auto out = std::vector< std::string >{ };
 
 		for ( const auto& item : items ) {
-			auto text = item.as_string( );
+			auto element = item.as_string( );
 
-			if ( !text ) {
-				return std::unexpected( text.error( ) );
+			if ( !element ) {
+				return std::unexpected( element.error( ) );
 			}
 
-			out.push_back( std::move( *text ) );
+			out.push_back( std::move( *element ) );
 		}
 
 		return out;

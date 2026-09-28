@@ -313,7 +313,11 @@ namespace mcode::json {
 			return std::unexpected( fail( errc::json, "empty key" ) );
 		}
 
-		members_[ std::string{ key } ] = value{ .type = value::kind::integer, .number = number };
+		auto entry = value{ };
+		entry.type = value::kind::integer;
+		entry.number = number;
+
+		members_[ std::string{ key } ] = std::move( entry );
 
 		return { };
 	}

@@ -1,5 +1,7 @@
 #include "mcode/support/config.hxx"
 
+#include <algorithm>
+
 #include <cstdlib>
 #include <fstream>
 #include <sstream>

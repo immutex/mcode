@@ -1,6 +1,6 @@
 [settings]
 os=Macos
-arch=arm64
+arch=armv8
 build_type=Release
 compiler=apple-clang
 compiler.version=16
