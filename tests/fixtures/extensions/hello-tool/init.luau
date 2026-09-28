@@ -24,4 +24,24 @@ mcode.tool.register({
 	end,
 })
 
+-- A hook, in the extension language: docs/26's exit criterion names a provider, a
+-- tool, AND a hook as the three things that must be implementable in Luau.
+mcode.on("tool.pre_call", function(ev)
+	if ev.payload and ev.payload.name == "forbidden" then
+		return { veto = "blocked by hello-tool" }
+	end
+
+	return nil
+end)
+
+-- And a custom event, which never reaches the session log: docs/20 keeps the log's
+-- schema closed, so an extension-invented name must not become a kind.
+mcode.on("hello-tool.ready", function(ev)
+	mcode.log.info("ready event seen", ev.payload.count)
+
+	-- An explicit nil: the declared return is `{ veto: string }?`, and --!strict
+	-- requires every codepath to return it.
+	return nil
+end)
+
 mcode.log.info("loaded", mcode.ext.name)

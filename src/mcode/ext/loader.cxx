@@ -60,7 +60,8 @@ namespace mcode::ext {
 	}
 
 	auto load_extensions( const std::vector< std::filesystem::path >& roots, tool_registry& registry,
-		model::provider_registry& providers, const loader_options& options ) -> load_result {
+		model::provider_registry& providers, hook_registry& hooks,
+		const loader_options& options ) -> load_result {
 		auto outcome = load_result{ };
 
 		// Collect candidates first, so a disabled extension is counted rather than
@@ -157,7 +158,7 @@ namespace mcode::ext {
 				// The surface is installed before the extension runs, because
 				// sealing is a one-way door: registering after the first execution
 				// returns an error rather than silently failing.
-				if ( auto registered = options.register_api( *host, *surface, providers,
+				if ( auto registered = options.register_api( *host, *surface, providers, hooks,
 					*manifest_value ); !registered ) {
 					outcome.report.failed.push_back( { candidate.name, candidate.directory,
 						"API registration failed: " + registered.error( ).msg } );
@@ -205,13 +206,15 @@ namespace mcode::ext {
 
 	auto default_register_api( tool_registry& registry, model::provider_registry& providers )
 		-> std::function< status( lua_host& host, api_surface& surface,
-			model::provider_registry& providers, const manifest& manifest ) > {
-		// Both registries are captured by reference, not copied: the surface writes
-		// definitions straight into them, and a copy would leave the caller's
-		// registry empty while the tools appeared to load.
+			model::provider_registry& providers, hook_registry& hooks,
+			const manifest& manifest ) > {
+		// Every registry is captured by reference, not copied: the surface writes
+		// into them directly, and a copy would leave the caller's registry empty
+		// while the extension appeared to load.
 		return [ &registry ]( lua_host& host, api_surface& surface,
-			model::provider_registry& declared, const manifest& details ) -> status {
-			return surface.install( host, registry, declared, details );
+			model::provider_registry& declared, hook_registry& declared_hooks,
+			const manifest& details ) -> status {
+			return surface.install( host, registry, declared, declared_hooks, details );
 		};
 	}
 

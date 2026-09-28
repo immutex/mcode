@@ -7,6 +7,8 @@
 #include <vector>
 
 #include "mcode/ext/loader.hxx"
+#include "mcode/events/bus.hxx"
+#include "mcode/ext/hooks.hxx"
 #include "mcode/model/provider.hxx"
 
 using namespace mcode;
@@ -26,8 +28,9 @@ namespace {
 	// exists to catch -- the extension calls `mcode.tool.register` through the
 	// same entry points a third-party extension does.
 	auto register_api( lua_host& host, ext::api_surface& surface,
-		model::provider_registry& providers, const ext::manifest& manifest ) -> status {
-		return surface.install( host, *g_registry, providers, manifest );
+		model::provider_registry& providers, ext::hook_registry& hooks,
+		const ext::manifest& manifest ) -> status {
+		return surface.install( host, *g_registry, providers, hooks, manifest );
 	}
 
 	// A bare "0 == 1" hides which extension failed and why, so every assertion on
@@ -159,11 +162,13 @@ TEST_CASE( "loading registers nothing when extensions are disabled", "[loader]" 
 	auto registry = tool_registry{ };
 	g_registry = &registry;
 	auto providers = model::provider_registry{ };
+	auto bus = events::bus{ };
+	auto hooks = ext::hook_registry{ bus };
 	auto options = ext::loader_options{ };
 	options.disabled = true;
 	options.register_api = register_api;
 
-	auto report = ext::load_extensions( { extensions_root( ) }, registry, providers, options ).report;
+	auto report = ext::load_extensions( { extensions_root( ) }, registry, providers, hooks, options ).report;
 
 	REQUIRE( report.loaded.empty( ) );
 	REQUIRE( report.total_tools( ) == 0 );
@@ -178,11 +183,13 @@ TEST_CASE( "a disabled-name list skips without failing", "[loader]" ) {
 	auto registry = tool_registry{ };
 	g_registry = &registry;
 	auto providers = model::provider_registry{ };
+	auto bus = events::bus{ };
+	auto hooks = ext::hook_registry{ bus };
 	auto options = ext::loader_options{ };
 	options.disabled_names = { "hello-tool" };
 	options.register_api = register_api;
 
-	auto report = ext::load_extensions( { extensions_root( ) }, registry, providers, options ).report;
+	auto report = ext::load_extensions( { extensions_root( ) }, registry, providers, hooks, options ).report;
 
 	REQUIRE( report.disabled == 1 );
 
@@ -197,10 +204,12 @@ TEST_CASE( "a bad manifest fails the extension, not the session", "[loader]" ) {
 	auto registry = tool_registry{ };
 	g_registry = &registry;
 	auto providers = model::provider_registry{ };
+	auto bus = events::bus{ };
+	auto hooks = ext::hook_registry{ bus };
 	auto options = ext::loader_options{ };
 	options.register_api = register_api;
 
-	auto report = ext::load_extensions( { extensions_root( ) }, registry, providers, options ).report;
+	auto report = ext::load_extensions( { extensions_root( ) }, registry, providers, hooks, options ).report;
 
 	if ( report.loaded.size( ) != 1 ) {
 		auto reasons = std::string{ };
@@ -231,10 +240,12 @@ TEST_CASE( "load order is deterministic", "[loader]" ) {
 		auto registry = tool_registry{ };
 		g_registry = &registry;
 		auto providers = model::provider_registry{ };
+		auto bus = events::bus{ };
+		auto hooks = ext::hook_registry{ bus };
 		auto options = ext::loader_options{ };
 		options.register_api = register_api;
 
-		auto report = ext::load_extensions( { extensions_root( ) }, registry, providers, options ).report;
+		auto report = ext::load_extensions( { extensions_root( ) }, registry, providers, hooks, options ).report;
 
 		if ( report.loaded.size( ) != 1 || report.failed.size( ) != 1 ) {
 			FAIL( "unexpected report:" << describe( report ) );
@@ -251,12 +262,14 @@ TEST_CASE( "a missing root is skipped, not an error", "[loader]" ) {
 	auto registry = tool_registry{ };
 	g_registry = &registry;
 	auto providers = model::provider_registry{ };
+	auto bus = events::bus{ };
+	auto hooks = ext::hook_registry{ bus };
 	auto options = ext::loader_options{ };
 	options.register_api = register_api;
 
 	auto report = ext::load_extensions(
 		{ std::filesystem::temp_directory_path( ) / "mcode-no-such-root" }, registry, providers,
-		options ).report;
+		hooks, options ).report;
 
 	REQUIRE( report.loaded.empty( ) );
 	REQUIRE( report.failed.empty( ) );
@@ -267,6 +280,8 @@ TEST_CASE( "unloading removes exactly the owner's tools", "[loader]" ) {
 	auto registry = tool_registry{ };
 	g_registry = &registry;
 	auto providers = model::provider_registry{ };
+	auto bus = events::bus{ };
+	auto hooks = ext::hook_registry{ bus };
 
 	auto core = tool_def{ };
 	core.name = "read";
@@ -308,11 +323,13 @@ TEST_CASE( "the shipped reference providers load", "[loader]" ) {
 	auto registry = tool_registry{ };
 	g_registry = &registry;
 	auto providers = model::provider_registry{ };
+	auto bus = events::bus{ };
+	auto hooks = ext::hook_registry{ bus };
 	auto options = ext::loader_options{ };
 	options.register_api = register_api;
 
 	auto report = ext::load_extensions( { std::filesystem::path{ MCODE_EXTENSIONS_ROOT } },
-		registry, providers, options ).report;
+		registry, providers, hooks, options ).report;
 
 	// It registers providers rather than tools, so the registry stays empty --
 	// but it must not be reported as failed.
@@ -333,10 +350,12 @@ TEST_CASE( "a registered tool is callable and reaches the extension", "[loader]"
 	g_registry = &registry;
 
 	auto providers = model::provider_registry{ };
+	auto bus = events::bus{ };
+	auto hooks = ext::hook_registry{ bus };
 	auto options = ext::loader_options{ };
 	options.register_api = register_api;
 
-	auto loaded = ext::load_extensions( { extensions_root( ) }, registry, providers, options );
+	auto loaded = ext::load_extensions( { extensions_root( ) }, registry, providers, hooks, options );
 
 	if ( loaded.report.loaded.size( ) != 1 ) {
 		FAIL( "unexpected report:" << describe( loaded.report ) );
@@ -374,10 +393,12 @@ TEST_CASE( "invoking an unknown tool is an error, not a crash", "[loader]" ) {
 	g_registry = &registry;
 
 	auto providers = model::provider_registry{ };
+	auto bus = events::bus{ };
+	auto hooks = ext::hook_registry{ bus };
 	auto options = ext::loader_options{ };
 	options.register_api = register_api;
 
-	auto loaded = ext::load_extensions( { extensions_root( ) }, registry, providers, options );
+	auto loaded = ext::load_extensions( { extensions_root( ) }, registry, providers, hooks, options );
 
 	auto missing = loaded.invoke( "no-such-tool", "{}" );
 	REQUIRE_FALSE( static_cast< bool >( missing ) );
@@ -392,10 +413,12 @@ TEST_CASE( "an environmental failure returns the extension's message", "[loader]
 	g_registry = &registry;
 
 	auto providers = model::provider_registry{ };
+	auto bus = events::bus{ };
+	auto hooks = ext::hook_registry{ bus };
 	auto options = ext::loader_options{ };
 	options.register_api = register_api;
 
-	auto loaded = ext::load_extensions( { extensions_root( ) }, registry, providers, options );
+	auto loaded = ext::load_extensions( { extensions_root( ) }, registry, providers, hooks, options );
 
 	auto missing_name = loaded.invoke( "hello", "{}" );
 
@@ -431,10 +454,12 @@ TEST_CASE( "a raised error does not become an empty result", "[loader]" ) {
 	g_registry = &registry;
 
 	auto providers = model::provider_registry{ };
+	auto bus = events::bus{ };
+	auto hooks = ext::hook_registry{ bus };
 	auto options = ext::loader_options{ };
 	options.register_api = register_api;
 
-	auto loaded = ext::load_extensions( { root }, registry, providers, options );
+	auto loaded = ext::load_extensions( { root }, registry, providers, hooks, options );
 
 	if ( loaded.report.loaded.size( ) != 1 ) {
 		FAIL( "unexpected report:" << describe( loaded.report ) );
@@ -465,11 +490,13 @@ TEST_CASE( "the providers extension declares three providers through the API", "
 	g_registry = &registry;
 
 	auto providers = model::provider_registry{ };
+	auto bus = events::bus{ };
+	auto hooks = ext::hook_registry{ bus };
 	auto options = ext::loader_options{ };
 	options.register_api = register_api;
 
 	auto loaded = ext::load_extensions( { std::filesystem::path{ MCODE_EXTENSIONS_ROOT } },
-		registry, providers, options );
+		registry, providers, hooks, options );
 
 	if ( loaded.report.loaded.size( ) != 1 ) {
 		FAIL( "unexpected report:" << describe( loaded.report ) );
@@ -505,13 +532,15 @@ TEST_CASE( "disabling every extension leaves a working registry", "[loader]" ) {
 	g_registry = &registry;
 
 	auto providers = model::provider_registry{ };
+	auto bus = events::bus{ };
+	auto hooks = ext::hook_registry{ bus };
 	auto options = ext::loader_options{ };
 	options.disabled = true;
 	options.register_api = register_api;
 
 	auto loaded = ext::load_extensions(
 		{ extensions_root( ), std::filesystem::path{ MCODE_EXTENSIONS_ROOT } }, registry,
-		providers, options );
+		providers, hooks, options );
 
 	// Nothing loaded, nothing failed, everything accounted for as disabled.
 	REQUIRE( loaded.report.loaded.empty( ) );
@@ -542,10 +571,12 @@ TEST_CASE( "the surface exposes exactly the frozen fields", "[loader]" ) {
 	g_registry = &registry;
 
 	auto providers = model::provider_registry{ };
+	auto bus = events::bus{ };
+	auto hooks = ext::hook_registry{ bus };
 	auto options = ext::loader_options{ };
 	options.register_api = register_api;
 
-	auto loaded = ext::load_extensions( { extensions_root( ) }, registry, providers, options );
+	auto loaded = ext::load_extensions( { extensions_root( ) }, registry, providers, hooks, options );
 
 	REQUIRE( loaded.extensions.size( ) == 1 );
 
@@ -583,4 +614,251 @@ TEST_CASE( "the surface exposes exactly the frozen fields", "[loader]" ) {
 		"type(mcode.tool) == 'table' and type(mcode.tool.register) == 'function'" );
 	REQUIRE( static_cast< bool >( shape ) );
 	REQUIRE( *shape == "true" );
+}
+
+TEST_CASE( "a hook written in Luau vetoes through the bus", "[loader]" ) {
+	// docs/26's exit criterion names a provider, a tool, AND a hook as the three
+	// things that must be implementable in the extension language. This is the
+	// hook: registered by init.luau, dispatched by the bus, and its veto surfaced
+	// with attribution.
+	auto registry = tool_registry{ };
+	g_registry = &registry;
+
+	auto providers = model::provider_registry{ };
+	auto bus = events::bus{ };
+	auto hooks = ext::hook_registry{ bus };
+
+	auto options = ext::loader_options{ };
+	options.register_api = register_api;
+
+	auto loaded = ext::load_extensions( { extensions_root( ) }, registry, providers, hooks,
+		options );
+
+	REQUIRE( loaded.report.loaded.size( ) == 1 );
+	REQUIRE( hooks.size( ) == 2 );
+	REQUIRE( hooks.handlers_for( "tool.pre_call" ) == 1 );
+	REQUIRE( hooks.handlers_for( "hello-tool.ready" ) == 1 );
+
+	// A tool call the hook does not object to passes.
+	auto allowed = events::event{ };
+	allowed.type = events::kind::tool_pre_call;
+	allowed.sequence = 1;
+	allowed.payload_json = R"({"name":"read"})";
+
+	REQUIRE_FALSE( static_cast< bool >( bus.publish( allowed ) ) );
+
+	// And the one it does object to is blocked, with the extension named as the
+	// source -- docs/18 requires the reason to be surfaced to the model attributed
+	// to the vetoing extension.
+	auto blocked = events::event{ };
+	blocked.type = events::kind::tool_pre_call;
+	blocked.sequence = 2;
+	blocked.payload_json = R"({"name":"forbidden"})";
+
+	auto veto = bus.publish( blocked );
+
+	REQUIRE( static_cast< bool >( veto ) );
+
+	if ( veto ) {
+		REQUIRE( veto->reason == "blocked by hello-tool" );
+		REQUIRE( veto->source == "hello-tool" );
+	}
+
+	// A non-vetoable kind never vetoes, even from the same extension: the handler
+	// returns nothing for it, and docs/20 only accepts a veto on the three
+	// pre-action kinds.
+	auto notification = events::event{ };
+	notification.type = events::kind::tool_result;
+	notification.sequence = 3;
+	notification.payload_json = R"({"name":"forbidden"})";
+
+	REQUIRE_FALSE( static_cast< bool >( bus.publish( notification ) ) );
+}
+
+TEST_CASE( "a custom event reaches the extension and never the log", "[loader]" ) {
+	// docs/20's closed tagged union exists so the session log's schema stays
+	// explicit. An extension-invented event name must not become a kind, so custom
+	// events dispatch inside the hook registry and never touch the bus.
+	auto registry = tool_registry{ };
+	g_registry = &registry;
+
+	auto providers = model::provider_registry{ };
+	auto bus = events::bus{ };
+	auto hooks = ext::hook_registry{ bus };
+
+	auto options = ext::loader_options{ };
+	options.register_api = register_api;
+
+	auto loaded = ext::load_extensions( { extensions_root( ) }, registry, providers, hooks,
+		options );
+
+	REQUIRE( loaded.report.loaded.size( ) == 1 );
+
+	if ( loaded.extensions.empty( ) ) {
+		return;
+	}
+
+	auto& host = *loaded.extensions.front( ).host;
+
+	// Firing it runs the handler. The handler logs, so the observable effect is
+	// that dispatch completes without a failure being counted.
+	REQUIRE( static_cast< bool >( hooks.emit( host, "hello-tool.ready", R"({"count":7})" ) ) );
+	REQUIRE( hooks.total_failures( ) == 0 );
+	REQUIRE( hooks.failures( "hello-tool" ) == 0 );
+
+	// An unsubscribed name is a no-op rather than an error.
+	REQUIRE( static_cast< bool >( hooks.emit( host, "hello-tool.nothing", "{}" ) ) );
+
+	// And a session event name cannot be emitted: it belongs to the bus, and
+	// letting an extension synthesize one would corrupt the log's ordering.
+	auto refused = hooks.emit( host, "tool.call", "{}" );
+	REQUIRE_FALSE( static_cast< bool >( refused ) );
+	REQUIRE( refused.error( ).msg.find( "session event" ) != std::string::npos );
+}
+
+TEST_CASE( "a throwing hook is contained, counted, and does not abort dispatch", "[loader]" ) {
+	// docs/20: dispatch is noexcept at the bus boundary. A throwing subscriber is
+	// caught and counted, and a peer's handler still runs -- a peer's error must
+	// never skip another extension's hook.
+	const auto root = scratch_root( );
+	const auto directory = root / "throwing-hook";
+
+	write( directory / "ext.toml",
+		"name = \"throwing-hook\"\nversion = \"0.1.0\"\napi_version = 1\n" );
+	write( directory / "init.luau", R"LUASRC(mcode.on("tool.pre_call", function(ev)
+	error("hook exploded")
+end)
+
+mcode.on("tool.pre_call", function(ev)
+	if ev.payload.name == "second" then
+		return { veto = "second handler ran" }
+	end
+end)
+)LUASRC" );
+
+	auto registry = tool_registry{ };
+	g_registry = &registry;
+
+	auto providers = model::provider_registry{ };
+	auto bus = events::bus{ };
+	auto hooks = ext::hook_registry{ bus };
+
+	auto options = ext::loader_options{ };
+	options.register_api = register_api;
+
+	auto loaded = ext::load_extensions( { root }, registry, providers, hooks, options );
+
+	REQUIRE( loaded.report.loaded.size( ) == 1 );
+	REQUIRE( hooks.handlers_for( "tool.pre_call" ) == 2 );
+
+	auto event = events::event{ };
+	event.type = events::kind::tool_pre_call;
+	event.payload_json = R"({"name":"second"})";
+
+	// The first handler throws; the second still runs and still vetoes.
+	auto veto = bus.publish( event );
+
+	REQUIRE( static_cast< bool >( veto ) );
+
+	if ( veto ) {
+		REQUIRE( veto->reason == "second handler ran" );
+	}
+
+	// The failure was counted rather than thrown, which is what feeds the
+	// quarantine threshold in docs/18.
+	REQUIRE( hooks.total_failures( ) >= 1 );
+	REQUIRE( hooks.failures( "throwing-hook" ) >= 1 );
+
+	std::filesystem::remove_all( root );
+}
+
+TEST_CASE( "a clean call clears the consecutive-failure counter", "[loader]" ) {
+	// docs/18 counts CONSECUTIVE failures, so an extension that fails once every
+	// hundred events is never quarantined. A cumulative counter would quarantine
+	// it eventually, which is the wrong behaviour.
+	auto registry = tool_registry{ };
+	g_registry = &registry;
+
+	auto providers = model::provider_registry{ };
+	auto bus = events::bus{ };
+	auto hooks = ext::hook_registry{ bus };
+
+	auto options = ext::loader_options{ };
+	options.register_api = register_api;
+
+	auto loaded = ext::load_extensions( { extensions_root( ) }, registry, providers, hooks,
+		options );
+
+	REQUIRE( loaded.report.loaded.size( ) == 1 );
+
+	auto event = events::event{ };
+	event.type = events::kind::tool_pre_call;
+	event.payload_json = R"({"name":"read"})";
+
+	bus.publish( event );
+
+	REQUIRE( hooks.failures( "hello-tool" ) == 0 );
+}
+
+TEST_CASE( "an unrecognised hook name is refused, not silently inert", "[loader]" ) {
+	// `tool.precal` is a typo, and a hook that can never fire is worse than a load
+	// error: the author would believe their guard was active.
+	const auto root = scratch_root( );
+	const auto directory = root / "typo-hook";
+
+	write( directory / "ext.toml",
+		"name = \"typo-hook\"\nversion = \"0.1.0\"\napi_version = 1\n" );
+	write( directory / "init.luau",
+		R"LUASRC(mcode.on("tool.precal", function(ev) return nil end))LUASRC" );
+
+	auto registry = tool_registry{ };
+	g_registry = &registry;
+
+	auto providers = model::provider_registry{ };
+	auto bus = events::bus{ };
+	auto hooks = ext::hook_registry{ bus };
+
+	auto options = ext::loader_options{ };
+	options.register_api = register_api;
+
+	auto loaded = ext::load_extensions( { root }, registry, providers, hooks, options );
+
+	REQUIRE( loaded.report.failed.size( ) == 1 );
+	REQUIRE( loaded.report.failed.front( ).reason.find( "tool.precal" ) != std::string::npos );
+
+	std::filesystem::remove_all( root );
+}
+
+TEST_CASE( "unloading an extension detaches its hooks", "[loader]" ) {
+	// A hook left subscribed to a discarded VM is a crash waiting for the next
+	// event, so detaching is part of unload rather than a separate concern.
+	auto registry = tool_registry{ };
+	g_registry = &registry;
+
+	auto providers = model::provider_registry{ };
+	auto bus = events::bus{ };
+	auto hooks = ext::hook_registry{ bus };
+
+	auto options = ext::loader_options{ };
+	options.register_api = register_api;
+
+	auto loaded = ext::load_extensions( { extensions_root( ) }, registry, providers, hooks,
+		options );
+
+	REQUIRE( loaded.report.loaded.size( ) == 1 );
+	REQUIRE( hooks.size( ) == 2 );
+
+	if ( loaded.extensions.empty( ) ) {
+		return;
+	}
+
+	REQUIRE( hooks.detach_owner( *loaded.extensions.front( ).host, "hello-tool" ) == 2 );
+	REQUIRE( hooks.size( ) == 0 );
+
+	// Publishing after detach finds no handler and does not reach the dead VM.
+	auto event = events::event{ };
+	event.type = events::kind::tool_pre_call;
+	event.payload_json = R"({"name":"forbidden"})";
+
+	REQUIRE_FALSE( static_cast< bool >( bus.publish( event ) ) );
 }

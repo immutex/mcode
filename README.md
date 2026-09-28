@@ -191,7 +191,19 @@ code comments.
     host has no thread" — long after the code that caused it. The loader
     constructs the VM into its `unique_ptr` directly and never moves it again.
 
-20. **Sorting before comparison is not optional in reports.** Extension discovery
+20. **A `hook_registry` must be declared after the `events::bus` it binds.** It
+    unsubscribes in its destructor, so a bus destroyed first leaves the registry
+    unsubscribing from freed memory — a crash at scope exit, nowhere near the
+    code that caused it. The bus is bound at construction so the requirement is
+    in the type rather than in a comment.
+
+21. **Luau `--!strict` requires an explicit return on every codepath.** A handler
+    whose declared return is `{ veto: string }?` must end with `return nil` when
+    it does not veto. Declaring the return `any` would silence this, at the cost
+    of letting a misspelled `{veto = …}` compile — a guard the author believes is
+    active but that never blocks. The explicit `return nil` is the cheaper side.
+
+22. **Sorting before comparison is not optional in reports.** Extension discovery
     sorts by name, and JSON object keys are emitted in sorted order, so two runs
     are byte-identical. An unsorted report makes a duplicate-name or load-order
     failure unreproducible.

@@ -69,6 +69,13 @@ The pending-deque approach is simpler than Neovim's nested-flag machinery (`auto
 
 Tool workers and the provider stream thread produce events; the loop thread consumes them.
 
+**Custom extension events do not enter the bus.** `mcode.emit` (`18`) fires a name that
+is not a session event, and it dispatches inside the extension hook registry rather than
+through `publish`. That is the consequence of choosing a closed union for serialization
+stability: `kind` is the log's primary key, so an extension-invented name must not become
+one. A custom event is one extension talking to another; it is not session state and it
+never reaches the log.
+
 **Mutex + deque + condition variable.** Not lock-free.
 
 At the measured rates this matters: mcode's realistic peak is ~100–1000 events/sec. Every candidate queue — mutex+deque, moodycamel, SPSC rings — is ≥1M items/sec at relevant thread counts, so we are 4–5 orders of magnitude below where the choice differentiates. And the numbers favor the boring option at low contention: mutex+deque at **7.75M items/s (129 ns/op)** beats moodycamel's 6.79M (147 ns/op) with 100 ns think-time, because an uncontended `std::mutex` is a single atomic CAS on the futex word with no syscall.

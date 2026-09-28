@@ -12,6 +12,7 @@
 
 #include "mcode/core/error.hxx"
 #include "mcode/core/registry.hxx"
+#include "mcode/events/bus.hxx"
 #include "mcode/ext/api.hxx"
 #include "mcode/ext/lua_host.hxx"
 #include "mcode/ext/manifest.hxx"
@@ -92,7 +93,8 @@ namespace mcode::ext {
 		//
 		// The surface object is owned by the caller: it holds the tool closures by
 		// registry reference, so it must outlive the VM it was installed into.
-		std::function< status( lua_host& host, api_surface& surface, model::provider_registry& providers,
+		std::function< status( lua_host& host, api_surface& surface,
+			model::provider_registry& providers, hook_registry& hooks,
 			const manifest& manifest ) > register_api;
 	};
 
@@ -103,7 +105,7 @@ namespace mcode::ext {
 	// cheap: an extension that does work at load time is a bug the report makes
 	// visible as a slow load.
 	[[nodiscard]] auto load_extensions( const std::vector< std::filesystem::path >& roots,
-		tool_registry& registry, model::provider_registry& providers,
+		tool_registry& registry, model::provider_registry& providers, hook_registry& hooks,
 		const loader_options& options = { } ) -> load_result;
 
 	// The real API installer: everything in docs/18 that v1 implements. Passed as
@@ -112,7 +114,8 @@ namespace mcode::ext {
 	[[nodiscard]] auto default_register_api( tool_registry& registry,
 		model::provider_registry& providers )
 		-> std::function< status( lua_host& host, api_surface& surface,
-			model::provider_registry& providers, const manifest& manifest ) >;
+			model::provider_registry& providers, hook_registry& hooks,
+			const manifest& manifest ) >;
 
 	// The extension roots, in precedence order: project, then user. Project
 	// shadows user, so a repository can pin a version without touching the

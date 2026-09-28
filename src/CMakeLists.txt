@@ -12,6 +12,7 @@ add_library(mcode_core STATIC
     mcode/support/toml.cxx
     mcode/support/config.cxx
 
+    mcode/ext/hooks.cxx
     mcode/ext/lua_host.cxx
 
     mcode/model/types.cxx

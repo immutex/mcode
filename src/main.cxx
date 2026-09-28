@@ -9,6 +9,7 @@
 #include "mcode/cli/exec.hxx"
 #include "mcode/events/bus.hxx"
 #include "mcode/eval/suite.hxx"
+#include "mcode/ext/hooks.hxx"
 #include "mcode/ext/loader.hxx"
 #include "mcode/core/registry.hxx"
 #include "mcode/core/version.hxx"
@@ -674,13 +675,16 @@ auto main( int argument_count, char** arguments ) -> int {
 		// and call the registered tool back. No stubs.
 		auto registry = mcode::tool_registry{ };
 		auto providers = mcode::model::provider_registry{ };
+		auto bus = mcode::events::bus{ };
+		auto hooks = mcode::ext::hook_registry{ bus };
 
 		const auto extensions = std::filesystem::path{ MCODE_SMOKE_EXTENSIONS };
 
 		auto options = mcode::ext::loader_options{ };
 		options.register_api = mcode::ext::default_register_api( registry, providers );
 
-		auto loaded = mcode::ext::load_extensions( { extensions }, registry, providers, options );
+		auto loaded = mcode::ext::load_extensions( { extensions }, registry, providers, hooks,
+			options );
 
 		for ( const auto& failure : loaded.report.failed ) {
 			std::printf( "  loader: %s failed: %s\n", failure.name.c_str( ),
@@ -717,6 +721,37 @@ auto main( int argument_count, char** arguments ) -> int {
 			"an environmental failure returns the extension's message",
 			refused ? std::string{ "unexpectedly succeeded" } : refused.error( ).msg );
 
+		section( "extension hooks (a hook written in Luau)" );
+
+		// docs/26's exit criterion names a provider, a tool, AND a hook. The hook is
+		// registered by init.luau, dispatched by the bus, and its veto is attributed.
+		check( hooks.handlers_for( "tool.pre_call" ) == 1, "the extension's hook is subscribed" );
+		check( hooks.handlers_for( "hello-tool.ready" ) == 1, "its custom event is subscribed" );
+
+		auto allowed = mcode::events::event{ };
+		allowed.type = mcode::events::kind::tool_pre_call;
+		allowed.payload_json = R"({"name":"read"})";
+		check( !bus.publish( allowed ), "an unobjectionable tool call passes the hook" );
+
+		auto blocked = mcode::events::event{ };
+		blocked.type = mcode::events::kind::tool_pre_call;
+		blocked.payload_json = R"({"name":"forbidden"})";
+
+		auto veto = bus.publish( blocked );
+		check( veto && veto->reason == "blocked by hello-tool" && veto->source == "hello-tool",
+			"the hook vetoed the call, attributed to the extension",
+			veto ? veto->reason : std::string{ "no veto" } );
+
+		// A custom event dispatches inside the hook registry and never becomes a
+		// session kind: docs/20 keeps the log's schema closed.
+		if ( !loaded.extensions.empty( ) && loaded.extensions.front( ).host != nullptr ) {
+			check( static_cast< bool >( hooks.emit( *loaded.extensions.front( ).host,
+				"hello-tool.ready", R"({"count":7})" ) ),
+				"a custom event reaches the extension" );
+		}
+
+		check( hooks.total_failures( ) == 0, "no hook threw" );
+
 		section( "extension loader (disable all)" );
 
 		// docs/23's mechanical check: with every extension disabled the agent must
@@ -737,6 +772,8 @@ auto main( int argument_count, char** arguments ) -> int {
 		}
 
 		auto bare_providers = mcode::model::provider_registry{ };
+		auto bare_bus = mcode::events::bus{ };
+		auto bare_hooks = mcode::ext::hook_registry{ bare_bus };
 
 		auto disabled_options = mcode::ext::loader_options{ };
 		disabled_options.disabled = true;
@@ -744,7 +781,7 @@ auto main( int argument_count, char** arguments ) -> int {
 			bare_providers );
 
 		auto bare = mcode::ext::load_extensions( { extensions }, bare_registry, bare_providers,
-			disabled_options );
+			bare_hooks, disabled_options );
 
 		check( bare.report.loaded.empty( ), "nothing loaded when disabled" );
 		check( bare.report.failed.empty( ), "disabling is not a failure" );
@@ -765,6 +802,8 @@ auto main( int argument_count, char** arguments ) -> int {
 		// exercised through the real loader rather than a hand-written mirror.
 		auto shipped_registry = mcode::tool_registry{ };
 		auto shipped_providers = mcode::model::provider_registry{ };
+		auto shipped_bus = mcode::events::bus{ };
+		auto shipped_hooks = mcode::ext::hook_registry{ shipped_bus };
 
 		auto shipped_options = mcode::ext::loader_options{ };
 		shipped_options.register_api = mcode::ext::default_register_api( shipped_registry,
@@ -772,7 +811,7 @@ auto main( int argument_count, char** arguments ) -> int {
 
 		auto shipped = mcode::ext::load_extensions(
 			{ std::filesystem::path{ MCODE_SMOKE_SHIPPED_EXTENSIONS } }, shipped_registry,
-			shipped_providers, shipped_options );
+			shipped_providers, shipped_hooks, shipped_options );
 
 		for ( const auto& failure : shipped.report.failed ) {
 			std::printf( "  loader: %s failed: %s\n", failure.name.c_str( ),

@@ -75,6 +75,11 @@ declare mcode: {
 	-- quarantine the extension.
 	on: (
 		event: string,
+		-- Returning nothing at all is a type error under --!strict, so every
+		-- handler ends with an explicit `return nil` on the path where it does not
+		-- veto. That is the price of typing the veto: with the return declared
+		-- `any`, a misspelled `{veto = ...}` would compile and the guard the author
+		-- believes is active would silently not block.
 		handler: (event: { [string]: any }) -> ({ veto: string }?),
 		opts: { once: boolean? }?
 	) -> number,

@@ -8,6 +8,7 @@
 #include "mcode/core/error.hxx"
 #include "mcode/core/registry.hxx"
 #include "mcode/ext/lua_host.hxx"
+#include "mcode/ext/hooks.hxx"
 #include "mcode/ext/manifest.hxx"
 #include "mcode/model/provider.hxx"
 
@@ -57,7 +58,7 @@ namespace mcode::ext {
 		// providers, and `manifest` supplies identity and the permission set the
 		// gated entries check.
 		auto install( lua_host& host, tool_registry& registry, model::provider_registry& providers,
-			const manifest& manifest ) -> status;
+			hook_registry& hooks, const manifest& manifest ) -> status;
 
 		[[nodiscard]] auto providers( ) const noexcept -> const model::provider_registry& {
 			return providers_ != nullptr ? *providers_ : empty_providers_;
@@ -89,12 +90,16 @@ namespace mcode::ext {
 		auto handle_unregister( lua_State* state ) -> int;
 		auto handle_log( lua_State* state, const char* level ) -> int;
 		auto handle_register_provider( lua_State* state ) -> int;
+		auto handle_on( lua_State* state ) -> int;
+		auto handle_off( lua_State* state ) -> int;
+		auto handle_emit( lua_State* state ) -> int;
 
 	private:
 
 		lua_host* host_ = nullptr;
 		tool_registry* registry_ = nullptr;
 		model::provider_registry* providers_ = nullptr;
+		hook_registry* hooks_ = nullptr;
 		const manifest* manifest_ = nullptr;
 
 		// Returned by `providers()` before install. Static so the accessor needs no

@@ -170,13 +170,23 @@ The event system (`19`) is the spine; the Lua layer is one subscriber among seve
 
 ```lua
 mcode.on("tool.pre_call", function(ev)
-  -- ev = { event = "tool.pre_call", seq = 1234, tool = "bash",
-  --        args = { cmd = "rm -rf /" }, session = "s_abc", ext = "myext" }
-  if ev.args.cmd:match("^rm%s") then
+  -- ev = { event = "tool.pre_call", seq = 1234, payload = { name = "bash",
+  --        args = { cmd = "rm -rf /" } } }
+  if ev.payload.args.cmd:match("^rm%s") then
     return { veto = "destructive shell command blocked by policy" }
   end
-end, { priority = 50 })
+
+  -- Required under --!strict: the declared return is `{ veto: string }?`, and
+  -- every codepath must return it.
+  return nil
+end)
 ```
+
+The return is typed `{ veto: string }?` rather than `any`, at the cost of an explicit
+`return nil` on the non-vetoing path. The alternative — declaring the return `any` so
+handlers can simply end — would let a misspelled `{veto = …}` compile, and a guard the
+author believes is active but is not is the failure this surface exists to prevent.
+There is no `priority` option: ordering is registration order, per the table below.
 
 Handler receives **one plain-data event table** (Neovim's autocmd `ev` shape). Rules:
 
@@ -192,6 +202,24 @@ Handler receives **one plain-data event table** (Neovim's autocmd `ev` shape). R
 | Slow handlers | Notifications may be queued and drained between loop iterations; veto hooks cannot (they gate an action) |
 
 Reentrancy is not theoretical — Neovim has an explicit autocmd-nesting guard (`E218`), WezTerm documents a `config-reloaded` loop, AwesomeWM carries an `in_error` flag against error loops. Snapshot-and-defer plus a depth cap is the cheap general fix.
+
+### What E8 implemented
+
+The hook layer is live: `mcode.on` / `off` / `emit` are backed by a `hook_registry`
+(`src/mcode/ext/hooks.cxx`) that subscribes into the event bus and calls the extension's
+closure by registry reference. Four decisions came out of building it.
+
+| Settled | Why |
+|---|---|
+| **Custom events never reach the bus** | docs/20's closed tagged union exists so the log's schema stays explicit, and `kind` is the log's primary key. An extension-invented name must not become a kind, so `emit` dispatches inside the registry and never touches the log. |
+| **Emit is namespaced, subscribe is not** | An extension may only emit under its own name (`hello-tool.ready`). Subscribing to another extension's events is legitimate composition; emitting them is spoofing. The asymmetry is deliberate. |
+| **A reserved prefix means a typo** | `tool.precal` is refused, not registered as a never-firing custom event. The reserved set is derived from the session event table, so it cannot drift from the names it guards. A hook the author believes is active but that can never fire is the failure mode. |
+| **Failures are counted per handler, reported per extension** | Counting per extension lets one healthy handler clear a flapping sibling's streak forever, which defeats the 5-consecutive-failure quarantine. `failures(owner)` returns the worst of that extension's handlers. |
+
+The bus is bound to the registry at construction rather than passed per call. The
+registry unsubscribes in its destructor, so a bus that dies first leaves the registry
+writing into freed memory — binding it in the type makes the declaration order a compile
+error rather than a crash.
 
 ## Error conventions
 
