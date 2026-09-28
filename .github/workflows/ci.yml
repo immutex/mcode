@@ -149,6 +149,26 @@ jobs:
           [ -f "$executable" ] || executable="build/Release/src/mcode.exe"
           "$executable"
 
+      # docs/26 E6/E7. Ten deterministic tasks against the fixture repo. No model
+      # involved, so a failure is always a real regression rather than sampling
+      # noise -- which is exactly why docs/11 prefers deterministic fixtures over
+      # small-n suites for a regression gate.
+      - name: Deterministic eval suite
+        shell: bash
+        run: |
+          executable="build/Release/src/mcode"
+          [ -f "$executable" ] || executable="build/Release/src/mcode.exe"
+          "$executable" eval --json | tee eval-records.jsonl
+          "$executable" eval
+
+      - name: Upload eval records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-records-${{ matrix.name }}
+          path: eval-records.jsonl
+          if-no-files-found: ignore
+
       # docs/26 B5. Gates the measurement spine against tools/bench/budgets.toml.
       # Memory metrics are deterministic and gated tightly; timing metrics vary
       # 26-131% run to run, so they are gated against the documented budget with

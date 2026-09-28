@@ -1,0 +1,2 @@
+A scratch file the read/grep tasks operate on. It contains the word
+FIXTURE_MARKER exactly once, so a task can assert a search hit.

@@ -8,6 +8,7 @@
 #include "mcode/agent/loop.hxx"
 #include "mcode/cli/exec.hxx"
 #include "mcode/events/bus.hxx"
+#include "mcode/eval/suite.hxx"
 #include "mcode/core/registry.hxx"
 #include "mcode/core/version.hxx"
 #include "mcode/ext/lua_host.hxx"
@@ -155,6 +156,53 @@ auto main( int argument_count, char** arguments ) -> int {
 
 	if ( !argv.empty( ) && argv.front( ) == "exec" ) {
 		return run_exec( { argv.begin( ) + 1, argv.end( ) } );
+	}
+
+	// `mcode eval [--json] [fixture-root]` -- the deterministic suite (docs/26 E6/E7).
+	// No model involved: every task asserts a harness behaviour, so a failure is
+	// always a real regression rather than sampling noise.
+	if ( !argv.empty( ) && argv.front( ) == "eval" ) {
+		auto json = false;
+		auto fixture = std::filesystem::path{ "tests/fixtures/fixture-repo" };
+
+		for ( auto index = std::size_t{ 1 }; index < argv.size( ); ++index ) {
+			if ( argv[ index ] == "--json" ) {
+				json = true;
+			} else if ( argv[ index ] == "--fixtures" && index + 1 < argv.size( ) ) {
+				fixture = argv[ ++index ];
+			} else {
+				std::fprintf( stderr, "mcode: unknown eval argument '%s'\n",
+					argv[ index ].c_str( ) );
+
+				return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
+			}
+		}
+
+		if ( !std::filesystem::exists( fixture ) ) {
+			std::fprintf( stderr, "mcode: fixture repo not found: %s\n", fixture.string( ).c_str( ) );
+
+			return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
+		}
+
+		const auto result = mcode::eval::run_suite( fixture );
+
+		if ( json ) {
+			std::fputs( mcode::eval::to_jsonl( result ).c_str( ), stdout );
+		} else {
+			for ( const auto& record : result.records ) {
+				std::printf( "  [%-5s] %s\n", record.verdict.c_str( ), record.task_id.c_str( ) );
+
+				if ( !record.detail.empty( ) ) {
+					std::printf( "          %s\n", record.detail.c_str( ) );
+				}
+			}
+
+			std::printf( "\n  %zu passed, %zu failed, %zu errored (of %zu)\n", result.passed,
+				result.failed, result.errored, result.total( ) );
+		}
+
+		return result.all_passed( ) ? mcode::cli::to_int( mcode::cli::exit_code::success )
+			: mcode::cli::to_int( mcode::cli::exit_code::verification_failed );
 	}
 
 	if ( !argv.empty( ) && ( argv.front( ) == "--help" || argv.front( ) == "-h" ) ) {

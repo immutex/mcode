@@ -13,6 +13,7 @@ add_executable(mcode_tests
     test_config_and_platform.cxx
     test_event_log.cxx
     test_events.cxx
+    test_eval.cxx
 )
 
 target_link_libraries(mcode_tests
@@ -20,6 +21,10 @@ target_link_libraries(mcode_tests
         mcode_core
         Catch2::Catch2WithMain
 )
+
+# The eval tests need the fixture repo's real path: they run from the build tree.
+target_compile_definitions(mcode_tests PRIVATE
+    MCODE_FIXTURE_REPO="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/fixture-repo")
 
 mcode_configure_target(mcode_tests)
 

@@ -24,6 +24,8 @@ add_library(mcode_core STATIC
 
     mcode/cli/exec.cxx
 
+    mcode/eval/suite.cxx
+
     mcode/fs/workspace.cxx
 
     mcode/net/sse.cxx
