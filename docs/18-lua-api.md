@@ -77,6 +77,30 @@ Our resolver is ~80 lines, resolves only inside the extension root, executes no 
 | `mcode.ext.name` | the calling extension's own name, as a string | Needed for self-attribution without a `debug` API that we removed |
 | `mcode.model.register(def)` | declare a provider: endpoint, auth, and the JSON-pointer mapping from its stream to the canonical event model (`15` §Provider seam). **Requires `net`.** The hot path stays in C++; this is data, not a callback | `26` decision 2 |
 
+### Quarantine, enforced (added after E8)
+
+The threshold was **counted but not enforced** — the counters existed and nothing
+read them, so an extension that failed forever kept being called. It is now wired:
+the fifth consecutive failure detaches every handler for that extension, records
+it as quarantined, and reports it on stderr. A quarantined extension cannot
+re-register its way back; `subscribe` refuses it until `/reload`.
+
+A clean call still clears the streak, so an extension that fails intermittently is
+never quarantined. That asymmetry is the point: the counter is *consecutive*, and
+a cumulative one would eventually remove a handler that works most of the time.
+
+### The dispatch budget is a scope
+
+The 50 ms budget was armed only on `run`, `eval_to_string` and `call_global`, so a
+handler that looped forever inside a hook or a tool call — the two paths that
+matter — hung the loop thread with no interruption. Worse, after `init.luau` the
+watchdog stayed armed with a **past** deadline, so the first safepoint of every
+later call raised a time-budget error belonging to a call that had already
+finished.
+
+Both are one fix: a `budget_scope` that arms on construction and disarms on
+destruction, used at every dispatch entry. Disarming matters as much as arming.
+
 ### What E8 implemented
 
 `docs/26` E8 built the loader and the tool path, and the implementation settled four
@@ -192,7 +216,7 @@ Handler receives **one plain-data event table** (Neovim's autocmd `ev` shape). R
 
 | Rule | Detail |
 |---|---|
-| Veto is opt-in per event | Only events documented as vetoable (`tool.pre_call`, `spawn.pre`, `prompt.pre`) accept a veto return. **One protocol**: return `{veto = "reason"}`. Bare `false` is accepted as sugar for `{veto = "vetoed by <ext>"}` — the reason is what gets surfaced to the model, so prefer the explicit form |
+| Veto is opt-in per event | Only events documented as vetoable (`tool.pre_call`, `spawn.pre`, `prompt.pre`) accept a veto return. **One protocol**: return `{veto = "reason"}`. Bare `false` is accepted as sugar for `{veto = "vetoed by <ext>"}` — the reason is what gets surfaced to the model, so prefer the explicit form. The sugar is implemented: a bare `false` that were silently ignored would leave the author believing a guard is active |
 | First veto wins, and short-circuits | Later handlers for that event are skipped for this dispatch (`wezterm` `return false` short-circuit). Non-veto handlers are never skipped by a peer's error |
 | Veto reason is surfaced | Shown to the user and fed back to the model, attributed to the vetoing extension |
 | Veto handlers are synchronous | Run on the loop thread under a **50 ms wall-clock budget**, enforced by the **VM interrupt plus a host watchdog** — not by an instruction count hook, which Luau does not have. Breach ⇒ handler detached + logged (Neovim `ui_attach` forced-detachment precedent) |

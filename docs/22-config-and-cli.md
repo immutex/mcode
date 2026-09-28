@@ -15,6 +15,11 @@ One file, `config.toml`, merged from four scopes. **Higher scope wins on scalars
 
 The never-widen rule is the defense against a cloned repo shipping a config that grants itself permissions (`12` T3). It applies to the same keys as the permission engine, and it is enforced at merge time, not at use time.
 
+Two load-time rules make the merge safe:
+
+- **Unknown sections are refused.** A top-level key outside `model`, `agent`, `context`, `sandbox`, `ui`, `extensions` and `permissions` is a typo, and storing it silently means the user believes a setting took effect when it did not. Checked at section granularity; the nested keys belong to the docs that define them.
+- **Project scope may only APPEND.** A project file may name `permissions.deny` or `permissions.ask` and nothing else, and only as a list. A scalar at one of those names — `permissions.deny = "everything"`, which is valid TOML — would otherwise overwrite the user's list in the merge, and every consumer reads the result through a string-array accessor that turns the type mismatch into an empty list. The user's deny rules would vanish and the blocked tool would become callable. The merge itself also refuses to let a non-list replace a list, so a future layer type inherits the rule rather than re-deriving it.
+
 ```toml
 [model]
 provider = "openai-compatible"     # openai-compatible | anthropic | gemini

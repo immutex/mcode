@@ -63,10 +63,15 @@ Two things that bite: sequences split across reads (never assume a full event pe
 ## Error model
 
 ```cpp
-enum class errc { io, json, protocol, tool_failed, cancelled, lua_error };
+enum class errc {
+    io, json, protocol, tool_failed, cancelled, budget_exhausted,
+    lua_error, config, unsupported,
+};
 struct error { errc code; std::string msg; };
 template<class T> using result = std::expected<T, error>;
 ```
+
+`budget_exhausted` is separate from `cancelled` because they are different outcomes with different exit codes (`22`): a budget stop is a normal, resumable end to a run, while a cancellation is an interruption. Collapsing them told a CI script that a run out of budget had been signalled.
 
 Never throw across tool boundaries or Lua frames (`17`). Exceptions stay enabled for library requirements and true invariants.
 

@@ -77,7 +77,7 @@ The hot path cannot move to Lua — per-token delta parsing in a scripting VM is
 mcode.model.register({
   name     = "my-gateway",
   endpoint = "https://api.example.com/v1/chat/completions",
-  auth     = { header = "Authorization", from = "env:MY_GATEWAY_KEY" },
+  auth     = { header = "Authorization", from = "env", name = "MY_GATEWAY_KEY" },
   stream   = {
     text_delta = "/choices/0/delta/content",
     tool_calls = { index = "/choices/0/delta/tool_calls/0/index",
@@ -89,6 +89,29 @@ mcode.model.register({
 ```
 
 C++ keeps HTTP, SSE framing, retry, the canonical taxonomy, egress policy, SSRF filtering, and caps (decision 38 preserved). It applies the JSON pointers with yyjson. Lua supplies the mapping. An `on_event` escape hatch covers exotic providers, opt-in, with its cost measured.
+
+### Event-name gates (added building D3)
+
+One wire format puts **two different things at the same pointer** and distinguishes them only by the SSE event name. [OI] Responses sends text as `response.output_text.delta` and tool arguments as `response.function_call_arguments.delta`, both at `/delta`. Applying the pointer unconditionally appends every text token to the tool-call arguments, which is a silent corruption rather than a visible failure.
+
+So two optional descriptor fields gate the pointers by event name:
+
+| Field | Gates | Absent means |
+|---|---|---|
+| `text_events` | `text_delta` | every event |
+| `tool_call_events` | `tool_calls.*` | every event |
+
+Empty is "every event", which is correct for a format that encodes meaning in the payload alone. A format that encodes it in the name declares the names.
+
+### Bounds on wire-supplied values
+
+Three values arrive from the gateway and are validated rather than trusted:
+
+| Value | Bound | Why |
+|---|---|---|
+| Tool-call `index` | `[0, 256)` | It addresses an array and is stored as an `int`. A negative or huge value was a truncating cast followed by unbounded growth — ten bytes in, megabytes retained per stream |
+| Pointer syntax | `/`-prefixed, no `/-`, no `*` | The applier resolves pointers literally. `/-` means "append to the array" and `*` is not a JSON pointer wildcard, so both resolved to nothing at first token |
+| Descriptor keys | allowlisted per level | A typo such as `steam` for `stream` loaded with the field unset and surfaced as a first-token failure with no hint about the cause |
 
 ## The measurement spine
 
