@@ -1,5 +1,7 @@
 #include "mcode/agent/loop.hxx"
 
+#include "mcode/agent/loop_internal.hxx"
+
 #include <algorithm>
 #include <exception>
 #include <fstream>
@@ -14,90 +16,6 @@
 #include <utility>
 
 namespace mcode {
-
-	namespace {
-
-		inline constexpr std::string_view NEAR_BUDGET_NOTE =
-			"budget nearly exhausted - wrap up or report blockers";
-
-		auto token_estimate( const std::string_view text ) noexcept -> std::int64_t {
-			return static_cast< std::int64_t >( text.size( ) / CHARS_PER_TOKEN_ESTIMATE );
-		}
-
-		auto message_tokens( const model::message& value ) -> std::int64_t {
-			auto total = std::int64_t{ 0 };
-
-			for ( const auto& block : value.blocks ) {
-				total += token_estimate( block.text );
-				total += token_estimate( block.args_json );
-				total += token_estimate( block.result_json );
-			}
-
-			return total;
-		}
-
-		auto history_tokens( const std::vector< model::message >& history ) -> std::int64_t {
-			auto total = std::int64_t{ 0 };
-
-			for ( const auto& value : history ) {
-				total += message_tokens( value );
-			}
-
-			return total;
-		}
-
-		auto thrash_hash( const std::string_view tool_name, const std::string_view args_json )
-			-> result< std::string > {
-			auto canonical = args_json.empty( ) ? std::string{ "{}" }
-												: json::canonicalize( args_json );
-
-			if ( !canonical ) {
-				return std::unexpected( canonical.error( ) );
-			}
-
-			auto combined = std::string{ tool_name };
-			combined += '\x1f';
-			combined += *canonical;
-
-			return combined;
-		}
-
-			auto result_block( const tool_outcome& outcome ) -> model::block {
-			auto block = model::block{ };
-			block.kind = model::block_kind::tool_result;
-			block.is_error = !outcome.ok;
-			block.result_json = outcome.ok ? outcome.content : outcome.error_message;
-
-			return block;
-		}
-
-			auto collect_calls( const std::vector< model::chat_event >& events )
-			-> std::vector< tool_call > {
-			auto calls = std::vector< tool_call >{ };
-			auto args = std::map< int, std::string >{ };
-			auto names = std::map< int, std::string >{ };
-
-			for ( const auto& event : events ) {
-				switch ( event.type ) {
-					case model::chat_event::kind::tool_call_delta: {
-						names[ event.index ] = event.tool_name;
-						args[ event.index ] += event.args_fragment;
-
-						break;
-					}
-
-					default: break;
-				}
-			}
-
-			for ( const auto& [ index, name ] : names ) {
-				calls.push_back( { name, args.contains( index ) ? args.at( index ) : "{}" } );
-			}
-
-			return calls;
-		}
-
-		} // namespace
 
 	auto to_string( const loop_state value ) noexcept -> std::string_view {
 		switch ( value ) {
@@ -114,149 +32,6 @@ namespace mcode {
 		}
 
 		return "idle";
-	}
-
-	auto thrash_detector::record( const std::string_view tool_name, const std::string_view args_json )
-		-> std::size_t {
-		auto hashed = thrash_hash( tool_name, args_json );
-
-		if ( !hashed ) {
-			return 0;
-		}
-
-		auto repeats = std::size_t{ 1 };
-
-		for ( auto index = window_.rbegin( ); index != window_.rend( ); ++index ) {
-			if ( *index != *hashed ) {
-				break;
-			}
-
-			++repeats;
-		}
-
-		window_.push_back( *hashed );
-
-		if ( window_.size( ) > THRASH_WINDOW ) {
-			window_.erase( window_.begin( ) );
-		}
-
-		current_repeats_ = repeats;
-
-		return repeats;
-	}
-
-	auto assemble_request( const tool_registry& registry, const std::string_view system_prompt,
-		const std::vector< model::message >& history, const std::string_view model_name,
-		const model::capabilities&, const model::cache_mode mode, const bool near_budget,
-		const std::string_view recitation ) -> assembled_request {
-		auto out = assembled_request{ };
-		out.request.model = std::string{ model_name };
-		out.request.cache.mode = mode;
-
-		auto tools = registry.all( );
-		std::sort( tools.begin( ), tools.end( ),
-			[]( const tool_def* one, const tool_def* other ) {
-				return one->name < other->name;
-			} );
-
-		for ( const auto* definition : tools ) {
-			auto spec = model::tool_spec{ };
-			spec.name = definition->name;
-			spec.description = definition->description;
-			spec.schema_json = definition->schema_json;
-
-			out.request.tools.push_back( std::move( spec ) );
-		}
-
-		auto system = model::message{ };
-		system.speaker = model::role::system;
-
-		auto system_block = model::block{ };
-		system_block.kind = model::block_kind::text;
-		system_block.text = std::string{ system_prompt };
-		system.blocks.push_back( std::move( system_block ) );
-
-		out.request.messages.push_back( std::move( system ) );
-
-		for ( const auto& value : history ) {
-			out.request.messages.push_back( value );
-		}
-
-		if ( !recitation.empty( ) ) {
-			auto tail = model::message{ };
-			tail.speaker = model::role::user;
-
-			auto tail_block = model::block{ };
-			tail_block.kind = model::block_kind::text;
-			tail_block.text = std::string{ recitation };
-			tail.blocks.push_back( std::move( tail_block ) );
-
-			out.request.messages.push_back( std::move( tail ) );
-		}
-
-		if ( near_budget ) {
-			auto note = model::message{ };
-			note.speaker = model::role::user;
-
-			auto note_block = model::block{ };
-			note_block.kind = model::block_kind::text;
-			note_block.text = std::string{ NEAR_BUDGET_NOTE };
-			note.blocks.push_back( std::move( note_block ) );
-
-			out.request.messages.push_back( std::move( note ) );
-			out.near_budget_note = true;
-		}
-
-		out.prefix_bytes = out.request.messages.size( ) > 0 ? 1 : 0;
-
-		return out;
-	}
-
-	auto build_system_prompt( const tool_registry& registry ) -> std::string {
-		auto has_tool = [&]( const std::string_view name ) {
-			return registry.find( name ) != nullptr;
-		};
-
-		auto out = std::string{ };
-
-		out += "# Identity\n";
-		out += "You are mcode, a coding agent working in a user's repository.\n\n";
-
-		out += "# Persistence\n";
-		out += "Keep going until the request is resolved. Only stop when the task is done";
-		out += " or a blocker needs the user.\n\n";
-
-		out += "# Scope discipline\n";
-		out += "Deliver the full requested scope. Do not quietly narrow or widen it.";
-		out += " Make routine judgment calls; ask only when a wrong assumption is unsafe";
-		out += " or makes the work useless.\n\n";
-
-		out += "# Tool usage\n";
-		out += "Prefer the dedicated tool over a shell command. Batch independent reads";
-		out += " in one turn; never parallel-edit the same file.\n";
-
-		if ( has_tool( "read" ) && has_tool( "edit" ) ) {
-			out += "Read a file before editing it.\n";
-		}
-
-		out += "\n# Coding conventions\n";
-		out += "Mimic the existing style of the files you touch. Default to no comments;";
-		out += " where one is justified, keep it to one line. Do not add speculative";
-		out += " abstractions, impossible-scenario handling, or compatibility shims.\n\n";
-
-		out += "# Verification\n";
-		out += "Run the change's own test or command before claiming success. State";
-		out += " failures with their output; never hedge on verified work.\n\n";
-
-		out += "# Safety\n";
-		out += "Never revert changes you did not make. Stop and ask when the repository";
-		out += " changes unexpectedly. Do not force-push or edit git config.\n\n";
-
-		out += "# Output format\n";
-		out += "Keep chat terse; keep code at full verbosity. Cite changes as";
-		out += " path:line.\n";
-
-		return out;
 	}
 
 	agent_loop::agent_loop( dependencies dependencies )
@@ -286,7 +61,7 @@ namespace mcode {
 	auto agent_loop::observe_result( const tool_call& call, const tool_outcome& outcome ) -> void {
 		auto message = model::message{ };
 		message.speaker = model::role::tool;
-		message.blocks.push_back( result_block( outcome ) );
+		message.blocks.push_back( loop_internal::result_block( outcome ) );
 
 		history_.push_back( std::move( message ) );
 
@@ -349,7 +124,7 @@ namespace mcode {
 			assistant.blocks.push_back( std::move( block ) );
 		}
 
-		pending_calls_ = collect_calls( events );
+		pending_calls_ = loop_internal::collect_calls( events );
 
 		const auto& calls = pending_calls_;
 
@@ -387,7 +162,7 @@ namespace mcode {
 	auto agent_loop::maybe_compact( ) -> status {
 		const auto usable = static_cast< double >( caps_.context_window - RESERVED_OUTPUT_TOKENS );
 		const auto window = usable * ( 1.0 - SAFETY_MARGIN_FRACTION );
-		const auto fill = static_cast< double >( history_tokens( history_ ) );
+		const auto fill = static_cast< double >( loop_internal::history_tokens( history_ ) );
 
 		if ( caps_.context_window == 0 || fill < window * COMPACTION_TRIGGER_FRACTION ) {
 			return status{ };
@@ -400,7 +175,7 @@ namespace mcode {
 		auto kept_tokens = std::int64_t{ 0 };
 
 		for ( auto index = history_.size( ); index > COMPACTION_KEEP_FIRST_EVENTS; --index ) {
-			const auto cost = message_tokens( history_[ index - 1 ] );
+			const auto cost = loop_internal::message_tokens( history_[ index - 1 ] );
 
 			if ( kept_tokens + cost > COMPACTION_KEEP_LAST_TOKENS ||
 				history_.size( ) - index >= COMPACTION_KEEP_LAST_TURNS ) {

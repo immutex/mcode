@@ -50,6 +50,7 @@ add_library(mcode_core STATIC
 
     mcode/agent/event_log.cxx
     mcode/agent/loop.cxx
+    mcode/agent/loop_context.cxx
 )
 
 target_include_directories(mcode_core
