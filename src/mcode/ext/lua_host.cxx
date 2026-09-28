@@ -416,7 +416,9 @@ namespace mcode {
 		// needed -- the reference in the table is what pins the thread -- so it is
 		// not stored.
 		lua_pushvalue( state_, -1 );
-		( void )lua_ref( state_, -1 );
+		// The reference in the table is what pins the thread; the returned index is
+		// never needed, so it is dropped rather than stored.
+		lua_ref( state_, -1 );
 
 		// Gives the thread its own globals table that reads through to the frozen
 		// host globals. Extension globals land there, so the host surface stays

@@ -135,8 +135,11 @@ namespace mcode::toml {
 	}
 
 	auto table::reject_unknown( const std::vector< std::string_view >& allowed ) const -> status {
-		for ( const auto& [ key, entry ] : values_ ) {
-			(void)entry;
+		// The values are not read: this checks the KEY, and a section such as
+		// `stream.usage.in` is allowed when its parent is allowed -- the caller
+		// lists the tables it understands, not every leaf.
+		for ( const auto& entry : values_ ) {
+			const auto& key = entry.first;
 
 			// A table section such as `stream.usage.in` is allowed if its parent is
 			// allowed: the caller lists the tables it understands, not every leaf.

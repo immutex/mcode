@@ -476,7 +476,11 @@ namespace mcode::ext {
 			// session event, so there is no `events::kind` to name it -- stamping it
 			// with a made-up one would make `ev.event` read "session.start" inside
 			// every custom handler.
-			(void)call_handler( subscription,
+			// Custom events are not vetoable: a veto is a gate on a host action, and
+			// this is one extension talking to another, so a refusal is the sender's
+			// business rather than the harness's. The result is therefore discarded
+			// rather than propagated.
+			call_handler( subscription,
 				delivered_event{ .name = subscription.name, .sequence = ++custom_sequence_,
 					.timestamp_ms = timestamp, .payload_json = payload_json } );
 		}

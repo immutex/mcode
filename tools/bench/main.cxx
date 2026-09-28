@@ -445,10 +445,10 @@ auto main( int argument_count, char** arguments ) -> int {
 					auto applier = mcode::model::delta_applier{ *hatch };
 					auto lua_host_pointer = &*host;
 
-					applier.set_escape_hatch( [lua_host_pointer]( const std::string_view event_name,
+					// The name is unused because this probe drives one event shape; the
+					// measured crossing is the payload marshalling either way.
+					applier.set_escape_hatch( [lua_host_pointer]( const std::string_view,
 						const std::string_view data ) -> mcode::result< std::vector< mcode::model::chat_event > > {
-						(void)event_name;
-
 						auto result = lua_host_pointer->call_global( "on_event", data );
 
 						if ( !result ) {

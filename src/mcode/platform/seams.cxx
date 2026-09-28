@@ -151,6 +151,9 @@ namespace mcode::platform {
 		// Killing the tree needs a Job Object handle, which is owned by whoever
 		// spawned the child. Without it, this degrades to killing the root, and
 		// saying so is better than implying the children died too.
+		//
+		// The parameters are unnamed in the POSIX branch below only because that
+		// branch does not use them; they stay named here for the signature.
 		(void)process_id;
 		(void)force;
 

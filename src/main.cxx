@@ -71,6 +71,8 @@ namespace {
 auto run_exec( const std::vector< std::string >& arguments ) -> int;
 
 auto main( int argument_count, char** arguments ) -> int {
+	// `argument_count` is used only to build argv below.
+
 	auto argv = std::vector< std::string >{ };
 
 	for ( auto index = 1; index < argument_count; ++index ) {
@@ -467,8 +469,10 @@ auto main( int argument_count, char** arguments ) -> int {
 		const auto environment = mcode::minimal_environment( );
 		auto leaked = false;
 
-		for ( const auto& [ key, value ] : environment ) {
-			( void )value;
+		// Only the names matter here: the check is that no secret-bearing variable
+		// survived the allowlist, not what any of them holds.
+		for ( const auto& entry : environment ) {
+			const auto& key = entry.first;
 
 			if ( key.find( "TOKEN" ) != std::string::npos || key.find( "SECRET" ) != std::string::npos ||
 				key.find( "KEY" ) != std::string::npos ) {
@@ -540,8 +544,6 @@ auto main( int argument_count, char** arguments ) -> int {
 	}
 
 	mcode::shutdown_logging( );
-
-	( void )argument_count;
 
 	return g_failures;
 }

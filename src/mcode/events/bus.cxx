@@ -124,8 +124,10 @@ namespace mcode::events {
 			pending_.pop_front( );
 			++drained;
 
-			const auto vetoed = dispatch_one( next );
-			(void)vetoed;
+			// The veto is dropped, and that is correct: a veto answers the publish
+			// that is currently unwinding. A handler that queues an event during
+			// drain has already returned, so there is no call left for it to refuse.
+			dispatch_one( next );
 		}
 	}
 
