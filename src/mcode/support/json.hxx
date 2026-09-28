@@ -45,6 +45,16 @@ namespace mcode::json {
 		std::vector< node > items;
 		std::map< std::string, node, std::less<> > members;
 
+		// Factories rather than designated initializers: `node{ .type = ... }` leaves
+		// the other members unspecified and every toolchain warns about it, so the
+		// constructor form is what callers use.
+		[[nodiscard]] static auto make_boolean( bool value ) -> node;
+		[[nodiscard]] static auto make_integer( std::int64_t value ) -> node;
+		[[nodiscard]] static auto make_real( double value ) -> node;
+		[[nodiscard]] static auto make_string( std::string_view value ) -> node;
+		[[nodiscard]] static auto make_array( ) -> node;
+		[[nodiscard]] static auto make_object( ) -> node;
+
 		[[nodiscard]] auto member( std::string_view key ) -> node*;
 		[[nodiscard]] auto member( std::string_view key ) const -> const node*;
 	};
@@ -134,8 +144,9 @@ namespace mcode::json {
 		mut_doc_pointer mut_{ nullptr, nullptr };
 
 		// The mutable document's whole content. One representation rather than a
-		// flat map plus a tree, so nesting cannot drift from the flat path.
-		node root_ = node{ .type = node::kind::object };
+		// flat map plus a tree, so nesting cannot drift from the flat path. Its type
+		// is set to `object` by the constructor that makes a document mutable.
+		node root_ = node{ };
 		bool mutable_ = false;
 	};
 

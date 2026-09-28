@@ -173,8 +173,8 @@ namespace mcode::net {
 		}
 	}
 
-	auto http_client::stream_sse( const http_request& request, sse_parser::event_callback on_event )
-		-> status {
+	auto http_client::stream_sse( const http_request& request, sse_parser::event_callback on_event,
+		http_failure* failure ) -> status {
 		auto parsed = parse_url( request.url );
 
 		if ( !parsed ) {
@@ -214,17 +214,48 @@ namespace mcode::net {
 			http::write( stream, message );
 
 			auto buffer = beast::flat_buffer{ };
-			auto parser = http::response_parser< http::empty_body >{ };
-			parser.skip( true );
+			auto parser = http::response_parser< http::string_body >{ };
+			parser.body_limit( MAX_ERROR_BODY_BYTES );
 			http::read_header( stream, buffer, parser );
 
+			const auto status_code = static_cast< int >( parser.get( ).result_int( ) );
+
 			if ( parser.get( ).result( ) != http::status::ok ) {
+				// The body is what distinguishes a retryable 429 from a billing one,
+				// so it is read rather than skipped. Best-effort: a truncated or
+				// unreadable body must not cost us the status we already have.
+				auto body_error = boost::system::error_code{ };
+				http::read( stream, buffer, parser, body_error );
+
+				if ( failure != nullptr ) {
+					failure->status = status_code;
+					failure->body = parser.get( ).body( );
+
+					for ( const auto& field : parser.get( ).base( ) ) {
+						failure->headers.emplace( std::string{ field.name_string( ) },
+							std::string{ field.value( ) } );
+					}
+				}
+
 				return std::unexpected( fail( errc::protocol,
-					"SSE request returned HTTP " + std::to_string( parser.get( ).result_int( ) ) ) );
+					"SSE request returned HTTP " + std::to_string( status_code ) ) );
 			}
 
 			auto parser_state = sse_parser{ std::move( on_event ) };
 			auto total = std::uint64_t{ 0 };
+
+			// `read_header` leaves whatever it read past the header in `buffer`, and
+			// a server that writes its first SSE event in the same segment as the
+			// response headers puts it there. Reading straight from the socket would
+			// drop those bytes, so the buffer is drained first.
+			if ( buffer.size( ) > 0 ) {
+				const auto buffered = static_cast< const char* >( buffer.data( ).data( ) );
+
+				total += buffer.size( );
+				parser_state.feed( std::string_view{ buffered, buffer.size( ) } );
+				buffer.consume( buffer.size( ) );
+			}
+
 			auto chunk = std::array< char, 8192 >{ };
 
 			while ( true ) {

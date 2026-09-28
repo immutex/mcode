@@ -253,13 +253,11 @@ TEST_CASE( "a nested body round-trips through the mutable writer", "[json]" ) {
 	auto* messages = doc.make_array_at( "messages" );
 	REQUIRE( messages != nullptr );
 
-	auto first = mcode::json::node{ .type = mcode::json::node::kind::object };
-	REQUIRE( first.members.emplace( "role", mcode::json::node{ .type = mcode::json::node::kind::string,
-		.text = "user" } ).second );
+	auto first = mcode::json::node::make_object( );
+	REQUIRE( first.members.emplace( "role", mcode::json::node::make_string( "user" ) ).second );
 
-	auto* blocks = &first.members.emplace( "content",
-		mcode::json::node{ .type = mcode::json::node::kind::array } ).first->second;
-	blocks->items.push_back( mcode::json::node{ .type = mcode::json::node::kind::object } );
+	auto* blocks = &first.members.emplace( "content", mcode::json::node::make_array( ) ).first->second;
+	blocks->items.push_back( mcode::json::node::make_object( ) );
 
 	messages->items.push_back( std::move( first ) );
 
@@ -299,9 +297,7 @@ TEST_CASE( "nesting preserves the sorted-key contract", "[json]" ) {
 		for ( auto index = std::size_t{ 0 }; index < keys.size( ); ++index ) {
 			const auto at = reverse ? ( keys.size( ) - 1 - index ) : index;
 
-			outer->members.emplace( keys[ at ],
-				mcode::json::node{ .type = mcode::json::node::kind::integer,
-					.integer = static_cast< std::int64_t >( at ) } );
+			outer->members.emplace( keys[ at ], mcode::json::node::make_integer( static_cast< std::int64_t >( at ) ) );
 		}
 
 		return doc.dump( );

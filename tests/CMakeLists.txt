@@ -6,6 +6,7 @@ add_executable(mcode_tests
     test_text.cxx
     test_registry.cxx
     test_sse.cxx
+    test_http_client.cxx
     test_workspace.cxx
     test_model_types.cxx
     test_provider.cxx

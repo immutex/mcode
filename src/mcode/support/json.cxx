@@ -46,6 +46,52 @@ namespace mcode::json {
 
 	}
 
+	auto node::make_boolean( const bool value ) -> node {
+		auto out = node{ };
+		out.type = kind::boolean;
+		out.boolean = value;
+
+		return out;
+	}
+
+	auto node::make_integer( const std::int64_t value ) -> node {
+		auto out = node{ };
+		out.type = kind::integer;
+		out.integer = value;
+
+		return out;
+	}
+
+	auto node::make_real( const double value ) -> node {
+		auto out = node{ };
+		out.type = kind::real;
+		out.real = value;
+
+		return out;
+	}
+
+	auto node::make_string( const std::string_view value ) -> node {
+		auto out = node{ };
+		out.type = kind::string;
+		out.text = std::string{ value };
+
+		return out;
+	}
+
+	auto node::make_array( ) -> node {
+		auto out = node{ };
+		out.type = kind::array;
+
+		return out;
+	}
+
+	auto node::make_object( ) -> node {
+		auto out = node{ };
+		out.type = kind::object;
+
+		return out;
+	}
+
 	auto node::member( const std::string_view key ) -> node* {
 		const auto found = members.find( key );
 
@@ -58,7 +104,9 @@ namespace mcode::json {
 		return found == members.end( ) ? nullptr : &found->second;
 	}
 
-	document::document( mut_doc_pointer doc ) : mut_( std::move( doc ) ), mutable_( true ) { }
+	document::document( mut_doc_pointer doc ) : mut_( std::move( doc ) ), mutable_( true ) {
+		root_.type = node::kind::object;
+	}
 
 	document::~document( ) {
 		if ( doc_ != nullptr ) {
