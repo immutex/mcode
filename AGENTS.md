@@ -140,7 +140,7 @@ Defined in `docs/01-north-star.md`. Never redefine them; reference them.
 pwsh -File scripts/bootstrap.ps1     # once per machine
 cmake --build build/Release
 ctest --preset windows-msvc
-./build/Release/src/mcode.exe        # exit code = number of failed checks
+./build/Release/bin/mcode.exe        # exit code = number of failed checks
 ```
 
 Linux and macOS: `./scripts/bootstrap.sh`, `ctest --preset linux-gcc` or `macos-clang`.

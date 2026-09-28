@@ -98,6 +98,13 @@ set(MCODE_BUNDLED_EXT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../extensions")
 add_executable(mcode main.cxx)
 target_link_libraries(mcode PRIVATE mcode_core)
 
+# The binary cannot live at `src/mcode`: that path is the SOURCE DIRECTORY, and on
+# Linux and macOS the executable has no suffix, so the linker tries to open a
+# directory for writing. Windows hid this behind `.exe` for the whole project's
+# life. Runtime output goes to bin/ on every platform, so the path is uniform.
+set_target_properties(mcode PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
 # The smoke test loads the real fixture extensions, so it needs their path. The
 # fixture lives beside the tests rather than in the source tree's extensions/,
 # because a broken fixture must not be loadable by a normal run.

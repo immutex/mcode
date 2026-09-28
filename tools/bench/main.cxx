@@ -7,6 +7,7 @@
 //
 // Usage: mcode_bench [extensions] [tools-per-ext] [handlers]
 
+#include <cstring>
 #include <algorithm>
 #include <chrono>
 #include <cstdio>

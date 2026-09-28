@@ -154,8 +154,8 @@ jobs:
       - name: Startup smoke test
         shell: bash
         run: |
-          executable="build/Release/src/mcode"
-          [ -f "$executable" ] || executable="build/Release/src/mcode.exe"
+          executable="build/Release/bin/mcode"
+          [ -f "$executable" ] || executable="build/Release/bin/mcode.exe"
           "$executable"
 
       # docs/26 E6/E7. Ten deterministic tasks against the fixture repo. No model
@@ -165,8 +165,8 @@ jobs:
       - name: Deterministic eval suite
         shell: bash
         run: |
-          executable="build/Release/src/mcode"
-          [ -f "$executable" ] || executable="build/Release/src/mcode.exe"
+          executable="build/Release/bin/mcode"
+          [ -f "$executable" ] || executable="build/Release/bin/mcode.exe"
           "$executable" eval --json | tee eval-records.jsonl
           "$executable" eval
 
@@ -271,15 +271,15 @@ jobs:
       - name: Strip and sign (macOS)
         if: runner.os == 'macOS'
         run: |
-          strip -x build/Release/src/mcode || true
-          codesign --force --sign - build/Release/src/mcode
-          codesign --verify --verbose build/Release/src/mcode
+          strip -x build/Release/bin/mcode || true
+          codesign --force --sign - build/Release/bin/mcode
+          codesign --verify --verbose build/Release/bin/mcode
 
       - name: Report binary size
         shell: bash
         run: |
-          executable="build/Release/src/mcode"
-          [ -f "$executable" ] || executable="build/Release/src/mcode.exe"
+          executable="build/Release/bin/mcode"
+          [ -f "$executable" ] || executable="build/Release/bin/mcode.exe"
           size=$(stat -c %s "$executable" 2>/dev/null || stat -f %z "$executable")
           echo "binary: $((size / 1024 / 1024)) MiB ($size bytes)"
 
@@ -288,6 +288,6 @@ jobs:
         with:
           name: mcode-${{ matrix.name }}
           path: |
-            build/Release/src/mcode
-            build/Release/src/mcode.exe
+            build/Release/bin/mcode
+            build/Release/bin/mcode.exe
           if-no-files-found: error

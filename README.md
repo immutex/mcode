@@ -15,7 +15,7 @@ python -m pip install "conan==2.32.0"
 pwsh -File scripts/bootstrap.ps1
 cmake --build build/Release
 ctest --preset windows-msvc
-./build/Release/src/mcode.exe
+./build/Release/bin/mcode.exe
 ```
 
 ```bash
@@ -24,7 +24,7 @@ python3 -m pip install "conan==2.32.0"
 ./scripts/bootstrap.sh
 cmake --build build/Release
 ctest --preset linux-gcc        # or macos-clang
-./build/Release/src/mcode
+./build/Release/bin/mcode
 ```
 
 The bootstrap script is not a convenience wrapper — it does three things that are
@@ -285,7 +285,13 @@ code comments.
     regression test builds a long directory name, takes its short form via
     `GetShortPathNameW`, and asserts both spellings are accepted.
 
-36. **Sorting before comparison is not optional in reports.** Extension discovery
+36. **The executable cannot be named `src/mcode`.** That path is the SOURCE
+    DIRECTORY, and on Linux and macOS the executable has no suffix, so the linker
+    tries to open a directory for writing: `ld: cannot open output file src/mcode:
+    Is a directory`. Windows hid this behind `.exe` for the project's whole life.
+    Runtime output is `${CMAKE_BINARY_DIR}/bin` on every platform.
+
+37. **Sorting before comparison is not optional in reports.** Extension discovery
     sorts by name, and JSON object keys are emitted in sorted order, so two runs
     are byte-identical. An unsorted report makes a duplicate-name or load-order
     failure unreproducible.
@@ -314,7 +320,7 @@ produce confusing errors.
 The smoke test is the scaffold's proof that the toolchain works end to end:
 
 ```
-$ ./build/Release/src/mcode.exe
+$ ./build/Release/bin/mcode.exe
 == spdlog (logging) ==
 == C++23 library support ==
 == yyjson (JSON) ==
