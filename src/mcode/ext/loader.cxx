@@ -204,13 +204,14 @@ namespace mcode::ext {
 		return outcome;
 	}
 
-	auto default_register_api( tool_registry& registry, model::provider_registry& providers )
+	auto default_register_api( tool_registry& registry )
 		-> std::function< status( lua_host& host, api_surface& surface,
 			model::provider_registry& providers, hook_registry& hooks,
 			const manifest& manifest ) > {
-		// Every registry is captured by reference, not copied: the surface writes
-		// into them directly, and a copy would leave the caller's registry empty
-		// while the extension appeared to load.
+		// The tool registry is captured by reference, not copied: the surface writes
+		// into it directly, and a copy would leave the caller's registry empty while
+		// the extension appeared to load. Providers and hooks arrive per call,
+		// because the caller owns the ones it must inspect afterwards.
 		return [ &registry ]( lua_host& host, api_surface& surface,
 			model::provider_registry& declared, hook_registry& declared_hooks,
 			const manifest& details ) -> status {
@@ -226,10 +227,10 @@ namespace mcode::ext {
 
 		// The user root is resolved from the environment rather than a hardcoded
 		// home path, because the platform seam owns that decision (docs/24).
-		if ( const auto* home = std::getenv( "USERPROFILE" ); home != nullptr ) {
-			roots.push_back( std::filesystem::path{ home } / ".mcode" / "extensions" );
-		} else if ( const auto* home = std::getenv( "HOME" ); home != nullptr ) {
-			roots.push_back( std::filesystem::path{ home } / ".mcode" / "extensions" );
+		if ( const auto* profile = std::getenv( "USERPROFILE" ); profile != nullptr ) {
+			roots.push_back( std::filesystem::path{ profile } / ".mcode" / "extensions" );
+		} else if ( const auto* profile = std::getenv( "HOME" ); profile != nullptr ) {
+			roots.push_back( std::filesystem::path{ profile } / ".mcode" / "extensions" );
 		}
 
 		return roots;

@@ -681,7 +681,7 @@ auto main( int argument_count, char** arguments ) -> int {
 		const auto extensions = std::filesystem::path{ MCODE_SMOKE_EXTENSIONS };
 
 		auto options = mcode::ext::loader_options{ };
-		options.register_api = mcode::ext::default_register_api( registry, providers );
+		options.register_api = mcode::ext::default_register_api( registry );
 
 		auto loaded = mcode::ext::load_extensions( { extensions }, providers, hooks, options );
 
@@ -776,8 +776,7 @@ auto main( int argument_count, char** arguments ) -> int {
 
 		auto disabled_options = mcode::ext::loader_options{ };
 		disabled_options.disabled = true;
-		disabled_options.register_api = mcode::ext::default_register_api( bare_registry,
-			bare_providers );
+		disabled_options.register_api = mcode::ext::default_register_api( bare_registry );
 
 		auto bare = mcode::ext::load_extensions( { extensions }, bare_providers, bare_hooks,
 			disabled_options );
@@ -805,8 +804,7 @@ auto main( int argument_count, char** arguments ) -> int {
 		auto shipped_hooks = mcode::ext::hook_registry{ shipped_bus };
 
 		auto shipped_options = mcode::ext::loader_options{ };
-		shipped_options.register_api = mcode::ext::default_register_api( shipped_registry,
-			shipped_providers );
+		shipped_options.register_api = mcode::ext::default_register_api( shipped_registry );
 
 		auto shipped = mcode::ext::load_extensions(
 			{ std::filesystem::path{ MCODE_SMOKE_SHIPPED_EXTENSIONS } }, shipped_providers,

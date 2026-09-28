@@ -490,8 +490,10 @@ namespace mcode::eval {
 
 			const auto started = std::chrono::steady_clock::now( );
 			auto outcome = entry.run( fixture_root );
-			record.wall_seconds = std::chrono::duration_cast< std::chrono::microseconds >(
-				std::chrono::steady_clock::now( ) - started ).count( ) / 1'000'000.0;
+			const auto elapsed = std::chrono::duration_cast< std::chrono::microseconds >(
+				std::chrono::steady_clock::now( ) - started ).count( );
+
+			record.wall_seconds = static_cast< double >( elapsed ) / 1'000'000.0;
 
 			if ( outcome && *outcome ) {
 				record.verdict = "pass";

@@ -119,8 +119,10 @@ namespace mcode::ext {
 	// The real API installer: everything in docs/18 that v1 implements. Passed as
 	// `loader_options::register_api`, and injectable so a test can substitute a
 	// narrower surface without the loader growing a second code path.
-	[[nodiscard]] auto default_register_api( tool_registry& registry,
-		model::provider_registry& providers )
+	// Captures only the tool registry, which the surface writes into directly.
+	// Providers and hooks arrive per call, because the caller owns them and a
+	// second reference would be a second source of truth.
+	[[nodiscard]] auto default_register_api( tool_registry& registry )
 		-> std::function< status( lua_host& host, api_surface& surface,
 			model::provider_registry& providers, hook_registry& hooks,
 			const manifest& manifest ) >;

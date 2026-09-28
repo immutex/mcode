@@ -201,7 +201,7 @@ namespace mcode::ext {
 				out += '[';
 
 				for ( auto element = std::size_t{ 1 }; element <= length; ++element ) {
-					if ( element > 1 ) {
+					if ( element > std::size_t{ 1 } ) {
 						out += ',';
 					}
 
