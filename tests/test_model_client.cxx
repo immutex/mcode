@@ -1,0 +1,465 @@
+#include <catch2/catch_test_macros.hpp>
+
+#include <array>
+#include <chrono>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include "mcode/model/capabilities.hxx"
+#include "mcode/model/credentials.hxx"
+#include "mcode/model/http_client.hxx"
+#include "mcode/model/provider.hxx"
+#include "mcode/net/http_client.hxx"
+
+#include <string_view>
+#if defined( _WIN32 )
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+
+using namespace mcode;
+
+namespace {
+
+#if defined( _WIN32 )
+	using socket_handle = SOCKET;
+	inline constexpr socket_handle INVALID_HANDLE = INVALID_SOCKET;
+#else
+	using socket_handle = int;
+	inline constexpr socket_handle INVALID_HANDLE = -1;
+#endif
+
+	// A scripted loopback server: one response per accepted connection, in
+	// order. The retry tests need a server that answers differently per
+	// attempt, which a one-shot response cannot do. No external network.
+	class scripted_server {
+	public:
+		explicit scripted_server( std::vector< std::string > responses )
+			: responses_( std::move( responses ) ) {
+		#if defined( _WIN32 )
+			auto data = WSADATA{ };
+			::WSAStartup( MAKEWORD( 2, 2 ), &data );
+		#endif
+
+			socket_ = ::socket( AF_INET, SOCK_STREAM, 0 );
+
+			auto address = sockaddr_in{ };
+			address.sin_family = AF_INET;
+			address.sin_addr.s_addr = ::htonl( INADDR_LOOPBACK );
+			address.sin_port = 0;
+
+			if ( ::bind( socket_, reinterpret_cast< sockaddr* >( &address ), sizeof( address ) ) != 0
+				|| ::listen( socket_, 4 ) != 0 ) {
+				return;
+			}
+
+			auto length = static_cast< socklen_t >( sizeof( address ) );
+
+			if ( ::getsockname( socket_, reinterpret_cast< sockaddr* >( &address ), &length ) != 0 ) {
+				return;
+			}
+
+			port_ = ::ntohs( address.sin_port );
+			worker_ = std::thread{ [this] { serve( ); } };
+		}
+
+		~scripted_server( ) {
+			if ( worker_.joinable( ) ) {
+				worker_.join( );
+			}
+
+			close_socket( socket_ );
+
+		#if defined( _WIN32 )
+			::WSACleanup( );
+		#endif
+		}
+
+		scripted_server( const scripted_server& ) = delete;
+		auto operator=( const scripted_server& ) -> scripted_server& = delete;
+
+		[[nodiscard]] auto url( ) const -> std::string {
+			return "http://127.0.0.1:" + std::to_string( port_ ) + "/v1/chat/completions";
+		}
+
+		[[nodiscard]] auto requests_seen( ) const noexcept -> std::size_t { return requests_; }
+
+	private:
+		static auto close_socket( const socket_handle handle ) -> void {
+		#if defined( _WIN32 )
+			::closesocket( handle );
+		#else
+			::close( handle );
+		#endif
+	}
+
+		auto serve( ) -> void {
+			for ( const auto& response : responses_ ) {
+				const auto accepted = ::accept( socket_, nullptr, nullptr );
+
+				if ( accepted == INVALID_HANDLE ) {
+					return;
+				}
+
+				auto scratch = std::array< char, 8192 >{ };
+				::recv( accepted, scratch.data( ), static_cast< int >( scratch.size( ) ), 0 );
+				++requests_;
+
+				::send( accepted, response.data( ), static_cast< int >( response.size( ) ), 0 );
+
+				std::this_thread::sleep_for( std::chrono::milliseconds( 30 ) );
+				close_socket( accepted );
+			}
+		}
+
+		std::vector< std::string > responses_;
+		socket_handle socket_ = INVALID_HANDLE;
+		std::uint16_t port_ = 0;
+		std::size_t requests_ = 0;
+		std::thread worker_;
+	};
+
+	auto sse_response( const int status, const std::string& body ) -> std::string {
+		auto head = std::string{ "HTTP/1.1 " + std::to_string( status ) + " reason\r\n"
+			"Content-Type: text/event-stream\r\n" };
+
+		if ( !body.empty( ) ) {
+			head += "Content-Length: " + std::to_string( body.size( ) ) + "\r\n";
+		}
+
+		head += "Connection: close\r\n\r\n" + body;
+
+		return head;
+	}
+
+	auto chat_completions_descriptor( const std::string& endpoint ) -> model::provider_descriptor {
+		auto descriptor = model::provider_descriptor{ };
+		descriptor.name = "openai-chat-completions";
+		descriptor.endpoint = endpoint;
+		descriptor.auth.from = model::auth_spec::source::none;
+
+		return descriptor;
+	}
+
+	auto make_request( const std::string& endpoint ) -> model::stream_request {
+		auto request = model::chat_request{ };
+		request.model = "test-model";
+
+		auto user = model::message{ };
+		user.speaker = model::role::user;
+
+		auto block = model::block{ };
+		block.kind = model::block_kind::text;
+		block.text = "hi";
+
+		user.blocks.push_back( std::move( block ) );
+		request.messages.push_back( std::move( user ) );
+
+		auto out = model::stream_request{ };
+		out.request = std::move( request );
+		out.provider = chat_completions_descriptor( endpoint );
+
+		return out;
+	}
+
+	auto no_sleep( const std::chrono::milliseconds ) -> void { }
+
+	// Deterministic jitter: always zero, so the retry loop's own sleeps are the
+	// only variable and the tests observe delays through the injected sleeper.
+	auto zero_random( ) -> std::uint64_t { return 0; }
+
+	auto collect( std::vector< model::chat_event >& into ) -> model::event_sink {
+		return [ &into ]( const model::chat_event& event ) { into.push_back( event ); };
+	}
+
+}
+
+TEST_CASE( "credentials resolve per source", "[credentials]" ) {
+	auto env_auth = model::auth_spec{ };
+	env_auth.from = model::auth_spec::source::environment;
+	env_auth.name = "MCODE_TEST_CREDENTIAL_THAT_DOES_NOT_EXIST";
+
+	auto missing_env = model::resolve_api_key( env_auth, { } );
+	REQUIRE_FALSE( static_cast< bool >( missing_env ) );
+	REQUIRE( missing_env.error( ).msg.find( "MCODE_TEST_CREDENTIAL_THAT_DOES_NOT_EXIST" )
+		!= std::string::npos );
+
+	auto config_auth = model::auth_spec{ };
+	config_auth.from = model::auth_spec::source::config;
+	config_auth.name = "some.key";
+
+	auto from_config = []( const std::string_view key ) -> std::optional< std::string > {
+		if ( key == "some.key" ) {
+			return std::string{ "secret" };
+		}
+
+		return std::nullopt;
+	};
+
+	auto found = model::resolve_api_key( config_auth, from_config );
+	REQUIRE( static_cast< bool >( found ) );
+	REQUIRE( *found == "secret" );
+
+	auto missing_config = model::resolve_api_key( model::auth_spec{ }, from_config );
+	REQUIRE_FALSE( static_cast< bool >( missing_config ) );
+
+	auto none_auth = model::auth_spec{ };
+	auto bare = model::resolve_api_key( none_auth, { } );
+	REQUIRE( static_cast< bool >( bare ) );
+	REQUIRE( bare->empty( ) );
+}
+
+TEST_CASE( "the auth header carries the scheme, or the bare key without one", "[credentials]" ) {
+	auto bearer = model::auth_spec{ };
+	bearer.scheme = "Bearer";
+
+	auto value = model::auth_header_value( bearer, "key123" );
+	REQUIRE( static_cast< bool >( value ) );
+	REQUIRE( *value == "Bearer key123" );
+
+	auto bare = model::auth_spec{ };
+	bearer.scheme = "";
+
+	auto raw = model::auth_header_value( bare, "key123" );
+	REQUIRE( static_cast< bool >( raw ) );
+	REQUIRE( *raw == "key123" );
+
+	auto none = model::auth_spec{ };
+	auto empty = model::auth_header_value( none, "unused" );
+	REQUIRE( static_cast< bool >( empty ) );
+	REQUIRE( empty->empty( ) );
+
+	auto missing = model::auth_header_value( bearer, "" );
+	REQUIRE_FALSE( static_cast< bool >( missing ) );
+}
+
+TEST_CASE( "a transient failure is retried", "[retry]" ) {
+	auto server = scripted_server{ {
+		sse_response( 503, R"({"error":{"type":"server_error"}})" ),
+		sse_response( 200, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n" ),
+	} };
+
+	auto transport = net::http_client{ };
+	auto sleeps = std::vector< std::chrono::milliseconds >{ };
+
+	auto options = model::http_model_client::options{ };
+	options.sleep = [ &sleeps ]( const std::chrono::milliseconds duration ) { sleeps.push_back( duration ); };
+	options.random = zero_random;
+
+	auto client = model::http_model_client{ transport, options };
+
+	auto events = std::vector< model::chat_event >{ };
+	auto request = make_request( server.url( ) );
+
+	const auto result = client.stream( request, collect( events ) );
+
+	REQUIRE( static_cast< bool >( result ) );
+	REQUIRE( server.requests_seen( ) == 2 );
+	REQUIRE( sleeps.size( ) == 1 );
+
+	auto text = std::string{ };
+
+	for ( const auto& event : events ) {
+		if ( event.type == model::chat_event::kind::text_delta ) {
+			text += event.text;
+		}
+	}
+
+	REQUIRE( text == "ok" );
+}
+
+TEST_CASE( "a fatal failure is not retried", "[retry]" ) {
+	auto server = scripted_server{ {
+		sse_response( 401, R"({"error":{"type":"authentication_error"}})" ),
+	} };
+
+	auto transport = net::http_client{ };
+
+	auto options = model::http_model_client::options{ };
+	options.sleep = no_sleep;
+	options.random = zero_random;
+
+	auto client = model::http_model_client{ transport, options };
+
+	auto events = std::vector< model::chat_event >{ };
+	auto request = make_request( server.url( ) );
+
+	const auto result = client.stream( request, collect( events ) );
+
+	REQUIRE_FALSE( static_cast< bool >( result ) );
+	REQUIRE( server.requests_seen( ) == 1 );
+	REQUIRE( result.error( ).msg.find( "401" ) != std::string::npos );
+}
+
+TEST_CASE( "a quota 429 is never retried but a rate-limit 429 is", "[retry]" ) {
+	{
+		auto server = scripted_server{ {
+			sse_response( 429, R"({"error":{"type":"insufficient_quota"}})" ),
+		} };
+
+		auto transport = net::http_client{ };
+
+		auto options = model::http_model_client::options{ };
+		options.sleep = no_sleep;
+		options.random = zero_random;
+
+		auto client = model::http_model_client{ transport, options };
+
+		auto request = make_request( server.url( ) );
+		const auto result = client.stream( request, [ ]( const model::chat_event& ) { } );
+
+		REQUIRE_FALSE( static_cast< bool >( result ) );
+		REQUIRE( server.requests_seen( ) == 1 );
+	}
+
+	{
+		auto server = scripted_server{ {
+			sse_response( 429, R"({"error":{"type":"rate_limit_exceeded"}})" ),
+			sse_response( 200, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n" ),
+		} };
+
+		auto transport = net::http_client{ };
+
+		auto options = model::http_model_client::options{ };
+		options.sleep = no_sleep;
+		options.random = zero_random;
+
+		auto client = model::http_model_client{ transport, options };
+
+		auto events = std::vector< model::chat_event >{ };
+		auto request = make_request( server.url( ) );
+
+		const auto result = client.stream( request, collect( events ) );
+
+		REQUIRE( static_cast< bool >( result ) );
+		REQUIRE( server.requests_seen( ) == 2 );
+	}
+}
+
+TEST_CASE( "a partial stream is never retried", "[retry]" ) {
+	// Two events, then the connection drops with no terminal event. The sink
+	// has already seen text, so replaying would duplicate it in history.
+	auto server = scripted_server{ {
+		sse_response( 200, "data: {\"choices\":[{\"delta\":{\"content\":\"partial \"}}]}\n\n" ),
+		sse_response( 200, "data: {\"choices\":[{\"delta\":{\"content\":\"text\"}}]}\n\n" ),
+	} };
+
+	auto transport = net::http_client{ };
+
+	auto options = model::http_model_client::options{ };
+	options.sleep = no_sleep;
+	options.random = zero_random;
+
+	auto client = model::http_model_client{ transport, options };
+
+	auto events = std::vector< model::chat_event >{ };
+	auto request = make_request( server.url( ) );
+
+	const auto result = client.stream( request, collect( events ) );
+
+	REQUIRE_FALSE( static_cast< bool >( result ) );
+	REQUIRE( server.requests_seen( ) == 1 );
+
+	auto text = std::string{ };
+
+	for ( const auto& event : events ) {
+		if ( event.type == model::chat_event::kind::text_delta ) {
+			text += event.text;
+		}
+	}
+
+	// The partial text is surfaced, not swallowed.
+	REQUIRE( text == "partial text" );
+}
+
+TEST_CASE( "retry honours Retry-After", "[retry]" ) {
+	auto body = std::string{ R"({"error":{"type":"rate_limit_exceeded"}})" };
+	auto head = std::string{ "HTTP/1.1 429 reason\r\n"
+		"Content-Type: application/json\r\n"
+		"Retry-After: 7\r\n"
+		"Content-Length: " } + std::to_string( body.size( ) ) + "\r\n"
+		"Connection: close\r\n\r\n" + body;
+
+	auto server = scripted_server{ {
+		head,
+		sse_response( 200, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n" ),
+	} };
+
+	auto transport = net::http_client{ };
+
+	auto options = model::http_model_client::options{ };
+	options.sleep = no_sleep;
+	options.random = zero_random;
+
+	auto client = model::http_model_client{ transport, options };
+
+	auto request = make_request( server.url( ) );
+	const auto result = client.stream( request, [ ]( const model::chat_event& ) { } );
+
+	REQUIRE( static_cast< bool >( result ) );
+	REQUIRE( server.requests_seen( ) == 2 );
+}
+
+TEST_CASE( "classification maps the taxonomy", "[retry]" ) {
+	using model::failure_class;
+
+	REQUIRE( model::classify_failure( 429, R"({"error":{"type":"rate_limit_exceeded"}})" )
+		== failure_class::transient );
+	REQUIRE( model::classify_failure( 429, R"({"error":{"type":"insufficient_quota"}})" )
+		== failure_class::fatal );
+	REQUIRE( model::classify_failure( 429, R"({"error":{"code":"insufficient_quota"}})" )
+		== failure_class::fatal );
+	REQUIRE( model::classify_failure( 500, "" ) == failure_class::transient );
+	REQUIRE( model::classify_failure( 529, "" ) == failure_class::transient );
+	REQUIRE( model::classify_failure( 401, "" ) == failure_class::fatal );
+	REQUIRE( model::classify_failure( 403, "" ) == failure_class::fatal );
+	REQUIRE( model::classify_failure( 402, "" ) == failure_class::fatal );
+	REQUIRE( model::classify_failure( 413, "" ) == failure_class::fatal );
+	REQUIRE( model::classify_failure( 400,
+		R"({"error":{"message":"This model's maximum context length is 8192 tokens"}})" )
+		== failure_class::context_overflow );
+	REQUIRE( model::classify_failure( 400, R"({"error":{"type":"content_policy_violation"}})" )
+		== failure_class::content_filter );
+	REQUIRE( model::classify_failure( 400, R"({"error":{"type":"invalid_request_error"}})" )
+		== failure_class::fatal );
+}
+
+TEST_CASE( "usage folds by max across events", "[usage]" ) {
+	auto client_usage = model::usage{ };
+
+	auto first = model::chat_event{ };
+	first.type = model::chat_event::kind::usage;
+	first.input_tokens = 100;
+	first.output_tokens = 10;
+	client_usage.add( first );
+
+	auto final_event = model::chat_event{ };
+	final_event.type = model::chat_event::kind::usage;
+	final_event.input_tokens = 90;
+	final_event.output_tokens = 50;
+	client_usage.add( final_event );
+
+	REQUIRE( client_usage.input == 100 );
+	REQUIRE( client_usage.output == 50 );
+}
+
+TEST_CASE( "an unknown model id does not price as free", "[capabilities]" ) {
+	REQUIRE_FALSE( model::lookup_capabilities( "totally-made-up-model" ).has_value( ) );
+	REQUIRE_FALSE( model::lookup_capabilities( "" ).has_value( ) );
+
+	const auto known = model::lookup_capabilities( "claude-sonnet-4-5" );
+	REQUIRE( known.has_value( ) );
+
+	if ( known ) {
+		REQUIRE( known->price_input == 3.0 );
+		REQUIRE( known->price_output == 15.0 );
+		REQUIRE( known->caching == model::cache_mode::explicit_markers );
+		REQUIRE( known->context_window == 200'000 );
+	}
+}

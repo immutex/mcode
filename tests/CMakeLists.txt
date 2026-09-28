@@ -11,6 +11,8 @@ add_executable(mcode_tests
     test_model_types.cxx
     test_provider.cxx
     test_dogfood_providers.cxx
+    test_render.cxx
+    test_model_client.cxx
     test_config_and_platform.cxx
     test_event_log.cxx
     test_events.cxx

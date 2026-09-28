@@ -222,3 +222,23 @@ TEST_CASE( "a successful stream leaves the failure struct untouched", "[http]" )
 	CHECK( failure.status == -1 );
 	CHECK( failure.body.empty( ) );
 }
+
+TEST_CASE( "https is not refused", "[http][tls]" ) {
+	// T1's acceptance: the https path is wired, not stubbed. The connection to
+	// the loopback TLS-less port fails as an IO error, not as `unsupported` --
+	// `unsupported` here would mean TLS is not linked, which is the regression
+	// this test exists to catch. No external network: the host is loopback.
+	auto request = http_request{ };
+	request.url = "https://127.0.0.1:1/v1/chat";
+	request.timeout_seconds = 1;
+
+	const auto result = http_client{ }.stream_sse( request, []( sse_event&& ) { } );
+
+	REQUIRE_FALSE( static_cast< bool >( result ) );
+	CHECK( result.error( ).code != mcode::errc::unsupported );
+
+	const auto sent = http_client{ }.send( request );
+
+	REQUIRE_FALSE( static_cast< bool >( sent ) );
+	CHECK( sent.error( ).code != mcode::errc::unsupported );
+}
