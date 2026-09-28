@@ -19,7 +19,7 @@ namespace mcode::ext {
 
 	namespace {
 
-		// The two fields docs/18 freezes: `mcode.ext.name` and `mcode.api_version`.
+		// The two frozen identity fields: `mcode.ext.name` and `mcode.api_version`.
 		// Nothing else is written into the surface, because the freeze is closed and
 		// an unlisted field is exactly the drift the table exists to prevent.
 		constexpr auto EXTENSION_NAME_PATH = "ext.name";
@@ -124,7 +124,7 @@ namespace mcode::ext {
 		}
 
 		// The schema is data. Rendering it here rather than per turn keeps the
-		// prompt cache stable (docs/23), and it is the only place the host walks
+		// prompt cache stable, and it is the only place the host walks
 		// it.
 		auto schema = std::string{ };
 		{
@@ -174,7 +174,7 @@ namespace mcode::ext {
 		definition_value.owner = tool.owner;
 		definition_value.deferrable = true;
 
-		// A name collision is a contract violation (docs/18): the caller gets an
+		// A name collision is a contract violation: the caller gets an
 		// error, not a silently replaced tool. The reference is released first so
 		// a rejected registration does not leak it.
 		if ( auto added = self->registry_->add( std::move( definition_value ) ); !added ) {
@@ -265,7 +265,7 @@ namespace mcode::ext {
 			lua_error( state );
 		}
 
-		// The descriptor is data (docs/18), so it crosses the boundary as JSON and
+		// The descriptor is data, so it crosses the boundary as JSON and
 		// is parsed by the same validator the C++ tests use. A second parser here
 		// would be a second set of rules.
 		auto rendered = json_from_lua( state, 1 );
@@ -288,7 +288,7 @@ namespace mcode::ext {
 			lua_error( state );
 		}
 
-		// `net` is required to declare a provider (docs/18): a descriptor names an
+		// `net` is required to declare a provider: a descriptor names an
 		// endpoint, and declaring one without the permission to reach it would
 		// defer the denial to the first request.
 		if ( !self->manifest_.has_permission( "net" ) ) {
@@ -432,7 +432,7 @@ namespace mcode::ext {
 			}
 		}
 
-		// The payload is plain data by contract (docs/18): no functions, no
+		// The payload is plain data by contract: no functions, no
 		// userdata, no cycles. Encoding enforces it rather than documenting it.
 		auto payload = std::string{ "{}" };
 

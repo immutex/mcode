@@ -15,6 +15,7 @@ add_executable(mcode_tests
     test_events.cxx
     test_eval.cxx
     test_loader.cxx
+    test_loader_failures.cxx
     test_manifest.cxx
     test_hooks.cxx
 )

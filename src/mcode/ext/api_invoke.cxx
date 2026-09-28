@@ -72,7 +72,7 @@ namespace mcode::ext {
 				"arguments are not a JSON object: " + pushed.error( ).msg ) );
 		}
 
-		// Context: a plain-data table, never a live reference (docs/18).
+		// Context: a plain-data table, never a live reference.
 		lua_createtable( state, 0, 3 );
 		lua_pushlstring( state, tool->owner.data( ), tool->owner.size( ) );
 		lua_setfield( state, -2, "extension" );
@@ -91,7 +91,7 @@ namespace mcode::ext {
 		}
 
 		// `run` returns `value, err`. An error string alongside a value is still a
-		// failure: docs/18 makes the second return the environmental-failure
+		// failure: the second return is the environmental-failure
 		// channel, and a tool that returns both is reporting a failure.
 		if ( lua_type( state, -1 ) != LUA_TNIL ) {
 			auto length = std::size_t{ 0 };
