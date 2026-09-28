@@ -1,0 +1,218 @@
+#include "mcode/model/provider.hxx"
+
+#include <array>
+#include <map>
+
+#include "mcode/support/json.hxx"
+
+namespace mcode::model {
+
+	namespace {
+
+		auto is_json_pointer( const std::string_view text ) -> bool {
+			// A JSON pointer is empty (whole document) or starts with '/'.
+			return text.empty( ) || text.front( ) == '/';
+		}
+
+		auto is_absolute_url( const std::string_view text ) -> bool {
+			return text.starts_with( "http://" ) || text.starts_with( "https://" );
+		}
+
+		auto string_member( const json::document& doc, const std::string_view key,
+			std::string& target ) -> status {
+			if ( doc.get_string( key ) ) {
+				target = *doc.get_string( key );
+			}
+
+			return { };
+		}
+
+	}
+
+	auto validate( const provider_descriptor& descriptor ) -> status {
+		if ( descriptor.name.empty( ) ) {
+			return std::unexpected( fail( errc::config, "provider has no name" ) );
+		}
+
+		if ( descriptor.endpoint.empty( ) ) {
+			return std::unexpected( fail( errc::config,
+				"provider '" + descriptor.name + "' has no endpoint" ) );
+		}
+
+		if ( !is_absolute_url( descriptor.endpoint ) ) {
+			// An unvalidated endpoint would let a descriptor point at file:// or a
+			// bare host, which the egress policy cannot reason about.
+			return std::unexpected( fail( errc::config,
+				"provider '" + descriptor.name + "' endpoint must be an absolute http(s) URL" ) );
+		}
+
+		if ( descriptor.stream.text_delta.empty( ) && descriptor.stream.tool_call_args.empty( ) ) {
+			return std::unexpected( fail( errc::config,
+				"provider '" + descriptor.name + "' maps neither text nor tool-call deltas" ) );
+		}
+
+		const auto pointers = std::array< std::pair< const char*, const std::string* >, 11 >{ {
+			{ "stream.text_delta", &descriptor.stream.text_delta },
+			{ "stream.thinking_delta", &descriptor.stream.thinking_delta },
+			{ "stream.tool_call_index", &descriptor.stream.tool_call_index },
+			{ "stream.tool_call_id", &descriptor.stream.tool_call_id },
+			{ "stream.tool_call_name", &descriptor.stream.tool_call_name },
+			{ "stream.tool_call_args", &descriptor.stream.tool_call_args },
+			{ "stream.finish_reason", &descriptor.stream.finish_reason },
+			{ "stream.usage_input", &descriptor.stream.usage_input },
+			{ "stream.usage_output", &descriptor.stream.usage_output },
+			{ "stream.usage_cached_read", &descriptor.stream.usage_cached_read },
+			{ "stream.usage_cache_write", &descriptor.stream.usage_cache_write },
+		} };
+
+		for ( const auto& [ field, value ] : pointers ) {
+			if ( !is_json_pointer( *value ) ) {
+				return std::unexpected( fail( errc::config,
+					"provider '" + descriptor.name + "' field " + field +
+					" is not a JSON pointer: " + *value ) );
+			}
+		}
+
+		if ( descriptor.auth.from != auth_spec::source::none ) {
+			if ( descriptor.auth.name.empty( ) ) {
+				return std::unexpected( fail( errc::config,
+					"provider '" + descriptor.name + "' declares an auth source but no name" ) );
+			}
+
+			if ( descriptor.auth.header.empty( ) ) {
+				return std::unexpected( fail( errc::config,
+					"provider '" + descriptor.name + "' declares auth but no header" ) );
+			}
+		}
+
+		return { };
+	}
+
+	auto descriptor_from_json( const std::string_view json_text ) -> result< provider_descriptor > {
+		auto parsed = json::document::parse( json_text );
+
+		if ( !parsed ) {
+			return std::unexpected( fail( errc::json,
+				"provider descriptor is not valid JSON: " + parsed.error( ).msg ) );
+		}
+
+		auto descriptor = provider_descriptor{ };
+
+		if ( auto name = parsed->get_string( "name" ) ) {
+			descriptor.name = *name;
+		}
+
+		if ( auto endpoint = parsed->get_string( "endpoint" ) ) {
+			descriptor.endpoint = *endpoint;
+		}
+
+		if ( auto headers = parsed->pointer( "/extra_headers" ) ) {
+			descriptor.extra_headers_json = *headers;
+		}
+
+		if ( auto header = parsed->pointer_string( "/auth/header" ) ) {
+			descriptor.auth.header = *header;
+		}
+
+		if ( auto name = parsed->pointer_string( "/auth/from" ) ) {
+			if ( *name == "env" ) {
+				descriptor.auth.from = auth_spec::source::environment;
+			} else if ( *name == "config" ) {
+				descriptor.auth.from = auth_spec::source::config;
+			} else {
+				return std::unexpected( fail( errc::config,
+					"unknown auth source '" + *name + "', expected 'env' or 'config'" ) );
+			}
+		}
+
+		// An `auth` block that is present but names no source is a typo, not an
+		// intentional "no auth": `auth = { header = "..." }` would otherwise
+		// validate and send an unauthenticated request. Same rule as the manifest's
+		// unknown-key rejection (`19`).
+		if ( parsed->has_pointer( "/auth" ) && descriptor.auth.from == auth_spec::source::none ) {
+			return std::unexpected( fail( errc::config,
+				"provider '" + descriptor.name +
+				"' has an auth block but no source; expected auth.from = \"env\" or \"config\"" ) );
+		}
+
+		if ( auto name = parsed->pointer_string( "/auth/name" ) ) {
+			descriptor.auth.name = *name;
+		}
+
+		if ( auto scheme = parsed->pointer_string( "/auth/scheme" ) ) {
+			descriptor.auth.scheme = *scheme;
+		}
+
+		string_member( *parsed, "model", descriptor.request.model );
+		string_member( *parsed, "messages", descriptor.request.messages );
+		string_member( *parsed, "tools", descriptor.request.tools );
+
+		if ( auto field = parsed->pointer_string( "/request/max_output_tokens" ) ) {
+			descriptor.request.max_output_tokens = *field;
+		}
+
+		if ( auto field = parsed->pointer_string( "/request/temperature" ) ) {
+			descriptor.request.temperature = *field;
+		}
+
+		if ( auto field = parsed->pointer_string( "/request/response_schema" ) ) {
+			descriptor.request.response_schema = *field;
+		}
+
+		// The Lua-facing form nests the stream mapping, matching docs/26.
+		if ( auto text = parsed->pointer_string( "/stream/text_delta" ) ) {
+			descriptor.stream.text_delta = *text;
+		}
+
+		if ( auto thinking = parsed->pointer_string( "/stream/thinking_delta" ) ) {
+			descriptor.stream.thinking_delta = *thinking;
+		}
+
+		if ( auto index = parsed->pointer_string( "/stream/tool_calls/index" ) ) {
+			descriptor.stream.tool_call_index = *index;
+		}
+
+		if ( auto id = parsed->pointer_string( "/stream/tool_calls/id" ) ) {
+			descriptor.stream.tool_call_id = *id;
+		}
+
+		if ( auto name = parsed->pointer_string( "/stream/tool_calls/name" ) ) {
+			descriptor.stream.tool_call_name = *name;
+		}
+
+		if ( auto args = parsed->pointer_string( "/stream/tool_calls/args" ) ) {
+			descriptor.stream.tool_call_args = *args;
+		}
+
+		if ( auto finish = parsed->pointer_string( "/stream/finish" ) ) {
+			descriptor.stream.finish_reason = *finish;
+		}
+
+		if ( auto usage = parsed->pointer_string( "/stream/usage/in" ) ) {
+			descriptor.stream.usage_input = *usage;
+		}
+
+		if ( auto usage = parsed->pointer_string( "/stream/usage/out" ) ) {
+			descriptor.stream.usage_output = *usage;
+		}
+
+		if ( auto usage = parsed->pointer_string( "/stream/usage/cached_read" ) ) {
+			descriptor.stream.usage_cached_read = *usage;
+		}
+
+		if ( auto usage = parsed->pointer_string( "/stream/usage/cache_write" ) ) {
+			descriptor.stream.usage_cache_write = *usage;
+		}
+
+		if ( auto usage = parsed->pointer_string( "/stream/usage/reasoning" ) ) {
+			descriptor.stream.usage_reasoning = *usage;
+		}
+
+		if ( auto validated = validate( descriptor ); !validated ) {
+			return std::unexpected( validated.error( ) );
+		}
+
+		return descriptor;
+	}
+
+}

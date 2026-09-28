@@ -190,6 +190,71 @@ namespace mcode::json {
 		return std::string{ rendered.get( ) };
 	}
 
+	auto document::pointer_string( const std::string_view path ) const -> result< std::string > {
+		if ( doc_ == nullptr ) {
+			return std::unexpected( fail( errc::json, "pointer on a non-parse document" ) );
+		}
+
+		auto* found = yyjson_ptr_getn( yyjson_doc_get_root( doc_ ), path.data( ), path.size( ) );
+
+		if ( found == nullptr ) {
+			return std::unexpected( fail( errc::json, "pointer not found: " + std::string{ path } ) );
+		}
+
+		if ( !yyjson_is_str( found ) ) {
+			return std::unexpected( fail( errc::json,
+				"pointer is not a string: " + std::string{ path } ) );
+		}
+
+		return std::string{ yyjson_get_str( found ), yyjson_get_len( found ) };
+	}
+
+	auto document::pointer_int( const std::string_view path ) const -> result< std::int64_t > {
+		if ( doc_ == nullptr ) {
+			return std::unexpected( fail( errc::json, "pointer on a non-parse document" ) );
+		}
+
+		auto* found = yyjson_ptr_getn( yyjson_doc_get_root( doc_ ), path.data( ), path.size( ) );
+
+		if ( found == nullptr ) {
+			return std::unexpected( fail( errc::json, "pointer not found: " + std::string{ path } ) );
+		}
+
+		if ( !yyjson_is_num( found ) ) {
+			return std::unexpected( fail( errc::json,
+				"pointer is not a number: " + std::string{ path } ) );
+		}
+
+		return yyjson_get_sint( found );
+	}
+
+	auto document::pointer_bool( const std::string_view path ) const -> result< bool > {
+		if ( doc_ == nullptr ) {
+			return std::unexpected( fail( errc::json, "pointer on a non-parse document" ) );
+		}
+
+		auto* found = yyjson_ptr_getn( yyjson_doc_get_root( doc_ ), path.data( ), path.size( ) );
+
+		if ( found == nullptr ) {
+			return std::unexpected( fail( errc::json, "pointer not found: " + std::string{ path } ) );
+		}
+
+		if ( !yyjson_is_bool( found ) ) {
+			return std::unexpected( fail( errc::json,
+				"pointer is not a boolean: " + std::string{ path } ) );
+		}
+
+		return yyjson_get_bool( found );
+	}
+
+	auto document::has_pointer( const std::string_view path ) const noexcept -> bool {
+		if ( doc_ == nullptr ) {
+			return false;
+		}
+
+		return yyjson_ptr_getn( yyjson_doc_get_root( doc_ ), path.data( ), path.size( ) ) != nullptr;
+	}
+
 	auto document::set_string( const std::string_view key, const std::string_view text ) -> status {
 		if ( !mutable_ ) {
 			return std::unexpected( fail( errc::json, "set_string on a non-mutable document" ) );

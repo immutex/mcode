@@ -13,6 +13,8 @@ add_library(mcode_core STATIC
     mcode/ext/lua_host.cxx
 
     mcode/model/types.cxx
+    mcode/model/provider.cxx
+    mcode/model/delta_applier.cxx
 
     mcode/fs/workspace.cxx
 
