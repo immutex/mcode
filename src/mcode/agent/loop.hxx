@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -62,7 +63,7 @@ namespace mcode {
 		[[nodiscard]] auto to_json( ) const -> std::string;
 	};
 
-	// Append-only JSONL session log (docs/26 E2).
+	// Append-only JSONL session log.
 	//
 	// Each event is written and FLUSHED as it happens, so a crash leaves a valid
 	// file with every complete line intact. That is the whole point: a log that
@@ -99,6 +100,15 @@ namespace mcode {
 		[[nodiscard]] auto write_failures( ) const noexcept -> std::uint64_t { return write_failures_; }
 
 		auto append( std::string kind, std::string payload_json = "{}" ) -> event;
+
+		// Adds an event that was read back from disk, preserving its recorded
+		// sequence, timestamp, run, turn, step and payload.
+		//
+		// NOT the same as append(): append assigns a fresh sequence and writes to
+		// the sink, which is right for a new event and destroys a replayed one. The
+		// payloads are the only reason the log exists, so replay must not renumber
+		// or blank them.
+		auto restore( event recorded ) -> void;
 
 		[[nodiscard]] auto events( ) const noexcept -> const std::vector< event >& { return events_; }
 		[[nodiscard]] auto size( ) const noexcept -> std::size_t { return events_.size( ); }
@@ -176,7 +186,11 @@ namespace mcode {
 		tool_registry& registry_;
 		event_log& log_;
 		session_budget budget_;
-		std::vector< std::pair< std::string, tool_handler > > handlers_;
+
+		// Keyed by tool name with heterogeneous lookup, matching tool_registry. A
+		// vector here meant every dispatch paid a linear scan for a name the
+		// registry had already resolved through a hash.
+		std::map< std::string, tool_handler, std::less<> > handlers_;
 	};
 
 }

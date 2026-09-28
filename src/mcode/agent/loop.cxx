@@ -1,8 +1,10 @@
 #include "mcode/agent/loop.hxx"
 
+#include <exception>
 #include <fstream>
 
 #include "mcode/support/json.hxx"
+#include "mcode/support/time.hxx"
 
 #include <array>
 #include <chrono>
@@ -10,37 +12,6 @@
 #include <utility>
 
 namespace mcode {
-
-	namespace {
-
-		[[nodiscard]] auto now_ms( ) -> std::int64_t {
-			return std::chrono::duration_cast< std::chrono::milliseconds >(
-				std::chrono::system_clock::now( ).time_since_epoch( ) ).count( );
-		}
-
-		auto append_escaped( std::string& out, const std::string_view text ) -> void {
-			for ( const auto character : text ) {
-				switch ( character ) {
-					case '"': out += "\\\""; break;
-					case '\\': out += "\\\\"; break;
-					case '\n': out += "\\n"; break;
-					case '\r': out += "\\r"; break;
-					case '\t': out += "\\t"; break;
-
-					default:
-						if ( static_cast< unsigned char >( character ) < 0x20 ) {
-							auto buffer = std::array< char, 8 >{ };
-							std::snprintf( buffer.data( ), buffer.size( ), "\\u%04x",
-								static_cast< unsigned char >( character ) );
-							out += buffer.data( );
-						} else {
-							out += character;
-						}
-				}
-			}
-		}
-
-	}
 
 	auto event::to_json( ) const -> std::string {
 		auto out = std::string{ };
@@ -53,9 +24,9 @@ namespace mcode {
 		out += ",\"ts\":";
 		out += std::to_string( timestamp_ms );
 		out += ",\"kind\":\"";
-		append_escaped( out, kind );
+		json::append_escaped( out, kind );
 		out += "\",\"run\":\"";
-		append_escaped( out, run );
+		json::append_escaped( out, run );
 		out += "\",\"turn\":";
 		out += std::to_string( turn );
 		out += ",\"step\":";
@@ -111,6 +82,14 @@ namespace mcode {
 			}
 		}
 
+		// Whether there is prior content, sampled BEFORE the open. A file that
+		// exists but cannot be replayed is not an empty file: treating it as one
+		// would reissue sequences already on disk, so an unreadable log is an error
+		// the caller must see.
+		auto error = std::error_code{ };
+		const auto prior_bytes = std::filesystem::file_size( path, error );
+		const auto had_content = !error && prior_bytes > 0;
+
 		// Append mode, and never truncate: a resumed session continues the same
 		// file so the whole run stays in one place.
 		auto* handle = std::fopen( path.string( ).c_str( ), "ab" );
@@ -124,11 +103,23 @@ namespace mcode {
 		} };
 		path_ = path;
 
+		if ( !had_content ) {
+			return { };
+		}
+
 		// Adopt the existing file's sequence numbers, so a resumed session does not
 		// restart at zero and collide with what is already on disk.
-		if ( auto existing = replay_event_log( path ); existing && existing->events_read > 0 ) {
-			next_sequence_ = existing->log.next_sequence( );
+		auto existing = replay_event_log( path );
+
+		if ( !existing ) {
+			close( );
+
+			return std::unexpected( fail( errc::io, "cannot replay the existing log " +
+				path.string( ) + ": " + existing.error( ).msg ) );
 		}
+
+		// Even a log whose every line is malformed still occupies sequences.
+		next_sequence_ = existing->log.next_sequence( );
 
 		return { };
 	}
@@ -143,7 +134,7 @@ namespace mcode {
 	auto event_log::append( std::string kind, std::string payload_json ) -> event {
 		auto appended = event{ };
 		appended.sequence = next_sequence_++;
-		appended.timestamp_ms = now_ms( );
+		appended.timestamp_ms = support::epoch_milliseconds( );
 		appended.kind = std::move( kind );
 		appended.payload_json = std::move( payload_json );
 		appended.run = branch_id_;
@@ -162,6 +153,15 @@ namespace mcode {
 		events_.push_back( std::move( appended ) );
 
 		return events_.back( );
+	}
+
+	auto event_log::restore( event recorded ) -> void {
+		// The next append must not reuse a sequence already on disk.
+		if ( recorded.sequence >= next_sequence_ ) {
+			next_sequence_ = recorded.sequence + 1;
+		}
+
+		events_.push_back( std::move( recorded ) );
 	}
 
 	auto event_log::to_jsonl( ) const -> std::string {
@@ -216,10 +216,35 @@ namespace mcode {
 				continue;
 			}
 
-			// Rebuilt through the log's own append path, so a replayed event is
-			// indistinguishable from a live one.
-			auto restored = result.log.append( *kind, "{}" );
-			(void)restored;
+			// Rebuilt with its recorded envelope, so a replayed event IS
+			// indistinguishable from a live one. Going through append() here would
+			// renumber it and discard the payload -- which is the one thing a
+			// post-mortem needs.
+			auto recorded = event{ };
+			recorded.sequence = static_cast< std::uint64_t >( *sequence );
+			recorded.kind = *kind;
+
+			if ( auto timestamp = parsed->get_int( "ts" ) ) {
+				recorded.timestamp_ms = *timestamp;
+			}
+
+			if ( auto run = parsed->get_string( "run" ) ) {
+				recorded.run = *run;
+			}
+
+			if ( auto turn = parsed->get_int( "turn" ) ) {
+				recorded.turn = static_cast< std::uint32_t >( *turn );
+			}
+
+			if ( auto step = parsed->get_int( "step" ) ) {
+				recorded.step = static_cast< std::uint32_t >( *step );
+			}
+
+			if ( auto payload = parsed->pointer_raw( "/payload" ) ) {
+				recorded.payload_json = *payload;
+			}
+
+			result.log.restore( std::move( recorded ) );
 
 			++result.events_read;
 		}
@@ -228,15 +253,9 @@ namespace mcode {
 	}
 
 	auto agent_loop::register_handler( std::string name, tool_handler handler ) -> void {
-		for ( auto& [ existing, function ] : handlers_ ) {
-			if ( existing == name ) {
-				function = std::move( handler );
-
-				return;
-			}
-		}
-
-		handlers_.emplace_back( std::move( name ), std::move( handler ) );
+		// Re-registering a name replaces the handler rather than appending a second
+		// entry, so a reload cannot leave two implementations competing.
+		handlers_[ std::move( name ) ] = std::move( handler );
 	}
 
 	auto agent_loop::execute( const tool_call& call ) -> tool_outcome {
@@ -253,7 +272,7 @@ namespace mcode {
 
 		{
 			auto payload = std::string{ "{\"tool\":\"" };
-			append_escaped( payload, call.name );
+			json::append_escaped( payload, call.name );
 			payload += "\",\"args\":";
 			payload += call.args_json.empty( ) ? "{}" : call.args_json;
 			payload += "}";
@@ -263,7 +282,7 @@ namespace mcode {
 
 		if ( budget_.exhausted( ) ) {
 			outcome.ok = false;
-			outcome.code = errc::cancelled;
+			outcome.code = errc::budget_exhausted;
 			outcome.error_message = "session budget exhausted";
 			log_.append( "tool.result", "{\"ok\":false,\"error\":\"budget_exhausted\"}" );
 
@@ -278,7 +297,7 @@ namespace mcode {
 			outcome.error_message = "unknown tool: " + call.name;
 
 			auto payload = std::string{ "{\"ok\":false,\"error\":\"unknown_tool\",\"tool\":\"" };
-			append_escaped( payload, call.name );
+			json::append_escaped( payload, call.name );
 			payload += "\"}";
 
 			log_.append( "tool.result", std::move( payload ) );
@@ -286,15 +305,8 @@ namespace mcode {
 			return finish( );
 		}
 
-		const auto* handler = static_cast< const tool_handler* >( nullptr );
-
-		for ( const auto& [ name, function ] : handlers_ ) {
-			if ( name == call.name ) {
-				handler = &function;
-
-				break;
-			}
-		}
+		const auto found = handlers_.find( call.name );
+		const auto* handler = found != handlers_.end( ) ? &found->second : nullptr;
 
 		if ( handler == nullptr ) {
 			outcome.ok = false;
@@ -305,7 +317,24 @@ namespace mcode {
 			return finish( );
 		}
 
-		auto produced = ( *handler )( call.args_json );
+		// A tool handler is third-party code -- an extension's closure, a subprocess
+		// wrapper -- so it can throw. Dispatch is noexcept at this boundary for the
+		// same reason the event bus is: the alternative is an exception escaping into
+		// the loop and a session log with a tool.call that never gets its
+		// tool.result, which corrupts replay.
+		auto produced = result< std::string >{ std::unexpected( fail( errc::tool_failed,
+			"tool handler threw" ) ) };
+
+		try {
+			produced = ( *handler )( call.args_json );
+		} catch ( const std::exception& error ) {
+			produced = std::unexpected( fail( errc::tool_failed,
+				std::string{ "tool handler threw: " } + error.what( ) ) );
+		} catch ( ... ) {
+			produced = std::unexpected( fail( errc::tool_failed,
+				"tool handler threw a non-standard exception" ) );
+		}
+
 		budget_.charge( 0, 0.0 );
 
 		if ( !produced ) {
@@ -314,9 +343,9 @@ namespace mcode {
 			outcome.error_message = produced.error( ).msg;
 
 			auto payload = std::string{ "{\"ok\":false,\"tool\":\"" };
-			append_escaped( payload, call.name );
+			json::append_escaped( payload, call.name );
 			payload += "\",\"error\":\"";
-			append_escaped( payload, produced.error( ).msg );
+			json::append_escaped( payload, produced.error( ).msg );
 			payload += "\"}";
 
 			log_.append( "tool.result", std::move( payload ) );
@@ -329,7 +358,7 @@ namespace mcode {
 
 		{
 			auto payload = std::string{ "{\"ok\":true,\"tool\":\"" };
-			append_escaped( payload, call.name );
+			json::append_escaped( payload, call.name );
 			payload += "\",\"source\":\"";
 			payload += to_string( definition->source );
 			payload += "\"}";

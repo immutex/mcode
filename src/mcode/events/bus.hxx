@@ -14,7 +14,7 @@
 
 namespace mcode::events {
 
-	// A closed tagged union, not std::variant (docs/20).
+	// A closed tagged union, not std::variant.
 	//
 	// The argument is serialization stability, not speed: `kind` is the stable
 	// integer the session log keys on, and an open hierarchy would make the log
@@ -65,6 +65,13 @@ namespace mcode::events {
 
 		return "unknown";
 	}
+
+	// Events drained per publish before the bus gives up and reports it.
+	//
+	// A handler that publishes on every event it receives would otherwise spin
+	// forever: the pending deque is drained in a loop, and each drain appends more
+	// work. The cap makes that a counted failure rather than a hang.
+	inline constexpr std::size_t MAX_EVENTS_PER_PUBLISH = 10'000;
 
 	// The three kinds that accept a veto. Everything else is notification-only,
 	// so a handler cannot accidentally block a turn by returning a value.
@@ -125,9 +132,16 @@ namespace mcode::events {
 			return pending_.size( );
 		}
 
-		// Dispatch depth at the deepest point so far. Exposed so a test can assert
-		// that nested publishes never recurse.
-		[[nodiscard]] auto max_depth( ) const noexcept -> std::size_t { return max_depth_; }
+		// Events dropped because a single publish exceeded
+		// MAX_EVENTS_PER_PUBLISH. Non-zero means a handler is publishing in
+		// response to its own output.
+		[[nodiscard]] auto overflow_drops( ) const noexcept -> std::uint64_t {
+			return overflow_drops_;
+		}
+
+		// True while a dispatch is in progress. A nested publish is queued rather
+		// than recursed, so there is no depth to report -- only this flag.
+		[[nodiscard]] auto dispatching( ) const noexcept -> bool { return dispatching_; }
 
 		[[nodiscard]] auto subscriber_count( kind type ) const noexcept -> std::size_t;
 
@@ -154,10 +168,9 @@ namespace mcode::events {
 
 		std::deque< event > pending_;
 		subscription_id next_id_ = 1;
-		std::size_t depth_ = 0;
-		std::size_t max_depth_ = 0;
 		bool dispatching_ = false;
 		std::uint64_t handler_failures_ = 0;
+		std::uint64_t overflow_drops_ = 0;
 	};
 
 }
