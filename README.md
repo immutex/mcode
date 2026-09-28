@@ -328,7 +328,12 @@ code comments.
     interesting is a gate that fails on load. It is the 1 ms budget from docs/01
     now, which still catches an order-of-magnitude regression.
 
-43. **Sorting before comparison is not optional in reports.** Extension discovery
+43. **`grep` is not on PATH in a plain `cmd.exe`.** The local gate filters
+    compiler output with `findstr` on Windows and `grep` elsewhere, chosen per
+    platform rather than assumed. A `|| true` on a cmd pipeline does not suppress
+    "command not found" either, so the filter would silently report nothing.
+
+44. **Sorting before comparison is not optional in reports.** Extension discovery
     sorts by name, and JSON object keys are emitted in sorted order, so two runs
     are byte-identical. An unsorted report makes a duplicate-name or load-order
     failure unreproducible.
