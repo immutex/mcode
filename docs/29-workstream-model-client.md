@@ -6,7 +6,7 @@
 > resolution. **Depends on nothing another branch is writing.**
 
 Branch: `feat/model-client`
-Base: `master` at the commit that lands this plan
+Base: `master` **after Phase 0** (`docs/26` §Phase 0) — P3 and P4 land there
 Owner: agent 1
 
 ---
@@ -43,6 +43,8 @@ assembly — those are the other two branches.
 | Usage | Fold `chat_event::kind::usage` into a `model::usage` |
 | CLI wiring | `exec` sends one real request and streams text to stdout |
 | Provider lookup | Resolve a descriptor by name from the registry the Lua provider extension already populates |
+| Capabilities table | The compiled-in JSON table `docs/15` specifies, keyed by model id, fail-closed on an unknown id |
+| `net/http_client` | Surface `{status, headers, body}` on a failed SSE response — T4's blocker |
 | Tests | Unit + a loopback integration test with a stub HTTP server |
 
 ### Explicitly NOT in scope
@@ -144,8 +146,22 @@ Byte-stable rendering. This is the prompt-cache contract from `docs/05`:
   breakpoints — a left-to-right implementation corrupts the second one, and the
   symptom is a silent cache miss, not an error.
 
-Build the JSON with `mcode::json::document` and `dump()`, not string
-concatenation — `json::document` already emits sorted keys.
+**`mcode::json::document` cannot build this body.** Verified: its mutable API is
+`set_string` and `set_int` only, both flat — no arrays, no nested objects. A
+request body is `messages[]` of nested objects containing `tools[]`. Two options,
+and you must pick one and say which in the PR:
+
+- **Preferred:** extend `json::document` with `set_array` / `set_object`. It is the
+  one JSON writer (`AGENTS.md` §Correctness: one implementation per concept), the
+  addition is additive, and you are the only branch touching `support/`.
+- Use yyjson's mut API directly in a dedicated TU. Faster to write, but it becomes
+  a second JSON writer that will drift from the first.
+
+**Key order is not automatic.** `dump()` passes `YYJSON_WRITE_PRETTY` or
+`YYJSON_WRITE_NOFLAG` — there is no `YYJSON_WRITE_SORT_KEYS` in this version, and
+the non-mutable path re-emits the parsed order verbatim. The mutable path happens
+to emit sorted order only because it iterates a `std::map`. **Do not rely on that
+as a contract** — emit keys in an explicitly chosen order and assert it.
 
 **Acceptance:** two calls with equal inputs produce byte-identical output.
 Assert it. Use `tools` in a non-sorted insertion order in the test so the sort
@@ -187,8 +203,34 @@ Flow:
    - feed `e.event` and `e.data` to `applier.feed( name, data )`
    - forward each produced `chat_event` to `sink`
 5. On stream end, call `applier.finish()` and forward those events too.
-6. Emit a `turn_done` when the applier saw a terminal event; if the stream ended
-   **without** one, that is a truncated turn → error.
+6. `applier.finish()` **always** appends a `turn_done`, terminal or not
+   (verified in `delta_applier.cxx`). So `turn_done` is not the truncation signal.
+   Use `applier.saw_terminal_event()`: when it is false, the turn was truncated —
+   surface the partial text and fail. Do not add a second `turn_done`; the applier
+   already emitted one and a duplicate would read as a completed turn.
+
+**Blocker: `stream_sse` cannot report what T5 needs to classify.**
+
+Verified in `net/http_client.cxx`: a non-200 response is collapsed to
+`fail( errc::protocol, "SSE request returned HTTP " + status )`. The typed status,
+the response **headers**, and the error **body** are all discarded. T5 requires
+all three:
+
+| T5 needs | Why | Available today |
+|---|---|---|
+| the numeric status | 429 vs 5xx vs 401 | string only |
+| the error **body** | `rate_limit_exceeded` vs `insufficient_quota` — the entire 429 split | **no** |
+| `Retry-After` | the backoff delay | **no** |
+
+`Retry-After` is not a header you can re-derive; the 429 split is not decidable
+from the status. So this branch **must change `net/http_client`** — add an outcome
+that carries `{status, headers, body}` for the failure case, or an overload of
+`stream_sse` that does. That file is currently on plan 2's and plan 3's "do not
+touch" list, so **add it to your conflict surface and say so in the PR**; the
+other two branches never read it.
+
+Do not work around this by string-matching `"HTTP 429"`. The body is the only
+place the quota distinction lives.
 
 **Traps**
 - `applier.feed` returns `result<vector<chat_event>>` — a malformed payload is an
@@ -196,6 +238,8 @@ Flow:
 - `sse_parser::event_callback` takes `sse_event&&`.
 - **`feed` must not be called with an empty data payload** — the parser already
   handles `[DONE]`; check what it does before adding a second guard.
+- The `[DONE]` sentinel and declared `terminal_events` both set `terminal_seen_`
+  in the applier. Read `delta_applier.cxx` before adding a third path.
 
 ### T5 — Retry and error taxonomy
 
@@ -287,6 +331,64 @@ it by hardcoding a descriptor.
 **Acceptance:** `mcode exec "hi"` against the loopback stub prints streamed text
 and exits 0. Record the transcript in the PR.
 
+### T8 — Capabilities, and the fail-closed rule for an unknown model
+
+`stream_request.caps` is a required input, and **nothing in the repository
+produces it**. Verified: `[model]` in `docs/22` has no pricing or capability keys,
+the provider descriptor has none, and there is no model registry. Without a
+source, `capabilities{}` is zero-initialised, `compute_cost()` returns `0.0`,
+`session_budget::usd_used` never advances — and **budget enforcement silently
+becomes a no-op**. A check that can never fail is worse than no check
+(`AGENTS.md` §Correctness).
+
+`docs/15` already specifies the fix: *"`Capabilities` per model id, data-driven
+from a compiled-in registry (JSON table in binary), not code."* Build it:
+
+- One JSON table embedded in the binary, keyed by model id, each entry carrying
+  `caching`, the `supports_*` flags, `context_window`, `max_output_tokens`, and
+  the four prices.
+- `lookup( model_id ) -> std::optional< capabilities >`.
+- **Unknown model id → fail closed.** Do not default to zeros and proceed. Two
+  acceptable behaviours, pick one and state it: refuse the run with a named error
+  naming the unknown id, or run with USD tracking explicitly marked unavailable
+  and the budget charged on steps and tokens only. What is **not** acceptable is
+  reporting `$0.00` spent for a model whose price is unknown.
+- `docs/15` owns the table's contents. Do not invent prices — an invented price is
+  a fabricated benchmark, which `AGENTS.md` forbids. Seed it with entries you can
+  source, and leave the rest absent so the fail-closed path fires honestly.
+
+**Acceptance:** a test asserting an unknown model id does not yield a zero-cost
+`capabilities`, and that a known id yields the table's values.
+
+### T9 — The request shape is not expressible for every provider
+
+`request_spec` carries field **names** (`model`, `messages`, `tools`,
+`max_tokens`, `temperature`, `response_schema`) and four role names. It carries no
+field **shapes**. That is enough for an [OI]-compatible endpoint and **not enough
+for Anthropic**, whose body is `{model, max_tokens, system, messages:[{role,
+content:[blocks]}]}` — a top-level `system` string instead of a system message,
+and content as a block array instead of a string.
+
+The stream direction is fully descriptor-driven (`delta_applier`, D2's acceptance
+criterion). The request direction is not, and `extensions/providers/init.luau`
+ships `anthropic-messages` with a `stream` block only.
+
+**Scope decision for v1: render the [OI] Chat Completions request shape, and
+refuse a descriptor you cannot render.** Concretely:
+
+- `openai-chat-completions` works.
+- `openai-responses` and `anthropic-messages` are resolved but rejected with a
+  named "request shape not supported" error until `request_spec` grows shape
+  fields.
+
+State this in the PR and in `docs/15` — a provider that loads, validates, and then
+fails at first request is exactly the silent failure the descriptor rules exist to
+prevent. The alternative (extending `request_spec` with shape fields now) is a
+design change that belongs in a doc first, not in a branch.
+
+**Acceptance:** a test asserting `anthropic-messages` produces a named, actionable
+refusal rather than a malformed request.
+
 ---
 
 ## Tests
@@ -304,6 +406,9 @@ and exits 0. Record the transcript in the PR.
 | `usage folds by max` | Two usage events, cumulative; result is the max |
 | `https is not refused` | `parse_url` + client path accepts an `https` URL |
 | `the loopback stub drives a full turn` | End-to-end: SSE text → sink → stdout |
+| `a failed SSE response carries its status and body` | T4's blocker: 429 body reaches the classifier |
+| `an unknown model id does not price as free` | T8's fail-closed rule |
+| `an unrenderable request shape is refused by name` | T9 |
 
 Loopback stub: a minimal TCP server on `127.0.0.1:0` in the test process,
 speaking canned HTTP/SSE. **No external network in any test.**
@@ -335,9 +440,11 @@ Files this branch touches that another branch also touches:
 | `conanfile.py` | none | safe |
 | `src/CMakeLists.txt` | 2 and 3 | **Expected conflict.** Add your sources in the same block, alphabetical. Trivial to resolve |
 | `src/cli_commands.cxx` | 2 (replaces `run_exec`'s body) | **Expected conflict.** Yours adds the single-request path; branch 2 replaces it. Prefer branch 2's structure and keep your provider selection |
+| `src/mcode/net/http_client.{hxx,cxx}` | none | **You own this change.** T4 needs `{status, headers, body}` on a failed SSE response. Announce it in the PR; 2 and 3 never read this file |
+| `src/mcode/support/json.{hxx,cxx}` | none | **You own this change.** T2 needs nested/array writing. Additive |
 
-Nothing else. Do **not** touch `agent/loop.*`, `model/types.*`,
-`model/provider.*`, `model/delta_applier.*`, or `tools/` — those are frozen or
+Do **not** touch `agent/loop.*`, `model/types.*`, `model/provider.*`,
+`model/delta_applier.*`, `core/registry.*`, or `tools/` — those are frozen or
 owned elsewhere.
 
 ---

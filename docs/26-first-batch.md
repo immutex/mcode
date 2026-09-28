@@ -251,6 +251,63 @@ The only shared files are `src/CMakeLists.txt` (three-way, mechanical) and
 `src/cli_commands.cxx` (`29` adds a single-request path, `30` replaces `run_exec`'s
 body; take `30`'s structure and keep `29`'s provider selection).
 
+### Phase 0 — the shared-interface changes, landed before any branch
+
+Reviewing the three plans against the code found four places where a branch needs
+an interface that **does not exist**. Each is small, each is needed by more than
+one branch, and each would otherwise be invented three times and merged as a
+rewrite. They land on `master` as **Phase 0**, before `feat/*` is cut.
+
+| # | Change | Why it is shared | Blocks |
+|---|---|---|---|
+| P1 | `tool_def` gains `schema_json` | The loop builds the request's `tools` array from the registry; `tool_search` expands a match back to its schema | 2, 3 |
+| P2 | `workspace::write_file( path, content, write_mode ) -> result< write_receipt >` | `workspace` is read-only today: no write, no create. `write`, `edit`, the artifact spill and policy persistence have no primitive | 3 |
+| P3 | `json::document` gains array/nested-object writing | Its mutable API is flat `set_string`/`set_int` only; a request body is nested objects containing arrays | 1 |
+| P4 | `net/http_client` reports `{status, headers, body}` on a failed SSE response | Today the status is stringified and the headers and body are discarded — `Retry-After` and the 429 quota/rate-limit split are undecidable | 1 |
+
+**P1 also fixes a live bug.** `ext/api.cxx` renders a Lua tool's schema into
+`registered_tool::schema_json` and then drops it when building the `tool_def`.
+Every extension tool is currently callable but never advertised, and no test
+notices — the fixture's own `hello` tool has a schema that nothing can read. P1
+carries the schema through and adds the regression test.
+
+**Each of P1–P4 is a single-purpose commit with its own test**, on the branch that
+needs it least so the diff stays reviewable. None of them is a design change: P1
+and P3 extend an existing type additively, P2 adds a function to a class that
+already owns the concept, and P4 adds an outcome to a failure path that currently
+loses information.
+
+**What Phase 0 deliberately does not do:** it does not add a capability/pricing
+registry (workstream 1's T8), does not extend `request_spec` with body-shape
+fields (T9), and does not add a permission engine. Those are branch work, and each
+is a decision that belongs in a doc before it belongs in code.
+
+### Scope divergence from `docs/16`, stated deliberately
+
+`docs/16` splits this work across two milestones: **M1** ships *six* tools
+(`read`, `edit`, `write`, `glob`, `grep`, `bash`) and **M2** owns the context
+manager and compaction. These plans ship **eight** tools and the context manager in
+one batch.
+
+The divergence is intentional and it is recorded here rather than left implicit:
+
+- `docs/06` names eight core tools as the canonical set, including `ask_user`
+  (silent-failure: its absence makes the agent guess) and `tool_search` (the
+  loading mechanism itself). M1's six-tool list is a subset, not a different
+  decision.
+- `ask_user` is **cheap and load-bearing**: it is one schema and one prompt. It
+  has no dependency on the context manager. Deferring it costs a known failure
+  mode for no saving.
+- `tool_search` is included as a **registration and ranking** concern only. Its
+  deferral behaviour — moving schemas behind the search — needs the cache-neutral
+  append-to-history path, which *is* the context manager's. So the tool ships and
+  the deferral stays off until M2's machinery exists.
+
+**`docs/16` is not edited to match.** It sequences milestones by feature, these
+plans sequence one batch by dependency, and the two are allowed to differ as long
+as the difference is stated. If the batch succeeds, `docs/16` M1/M2 should be
+re-cut to match what actually shipped; that is a follow-up, not a prerequisite.
+
 ### Who owns the object graph after the three merge
 
 **This is the gap the split creates, and it has to be named before the branches
@@ -276,10 +333,14 @@ therefore has to build what the loop consumes:
 auto run_exec( const exec_options& options ) -> exit_code;
 ```
 
-Order after the merge: **`29` → `31` → `30` → integration.** The integration is
-its own commit, and its acceptance evidence is the only test that matters for the
-merge: **`mcode exec "…"` against the loopback stub returns real file content from
-the real `read` tool.** Not a state sequence, not a schema — an actual read.
+Order: **Phase 0 → `29` → `31` → `30` → integration.** The integration is its own
+commit, and its acceptance evidence is the only test that matters for the merge:
+**`mcode exec "…"` against the loopback stub returns real file content from the
+real `read` tool.** Not a state sequence, not a schema — an actual read.
+
+`30` merges last because it owns `run_exec` and therefore needs both other slices
+present to construct the graph. `31` before `30` because the loop dispatches into
+the tool registry.
 
 If that test is green, the three slices compose. If it is not, the failure is in
 the wiring, and the wiring was never any single branch's acceptance criterion.

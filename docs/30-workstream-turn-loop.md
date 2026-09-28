@@ -6,7 +6,7 @@
 > on the model client branch.
 
 Branch: `feat/turn-loop`
-Base: `master` at the commit that lands this plan
+Base: `master` **after Phase 0** (`docs/26` §Phase 0) — P1 lands there
 Owner: agent 2
 
 ---
@@ -229,6 +229,28 @@ Rules:
   behind `tool_search` — but `tool_search` itself is workstream 3, so for now
   just compute the number and log it.
 
+**Blocker: `tool_def` carries no schema, so the `tools` array cannot be built.**
+
+Verified in `core/registry.hxx`: `tool_def` is `{name, description, klass, source,
+owner, deferrable}`. No schema. `chat_request.tools` is
+`std::vector< tool_spec >` where `tool_spec` is `{name, description,
+schema_json}` — and **nothing in the repository constructs a `tool_spec` from a
+`tool_def`**, because the field does not exist to copy.
+
+Two consequences:
+
+1. Your T7 assembly has no schema text to send, so the model is told a tool exists
+   but not how to call it.
+2. There is a **live latent bug** behind this: `ext/api.cxx` renders a Lua tool's
+   schema into `registered_tool::schema_json` and then **drops it** when building
+   the `tool_def`. Every extension tool is currently callable but unadvertised,
+   and no test notices.
+
+This is a shared-interface gap, so it is fixed once in **Phase 0** (`docs/26`
+§Phase 0), before any branch starts — not by you, and not by workstream 3
+independently. You consume `tool_def::schema_json`. If Phase 0 has not landed,
+stop and say so rather than inventing a parallel field.
+
 **Model tiering per state** (`docs/15` §Model-tier policy, §Reasoning-effort
 scheduling): `Plan`/`Replan` and `Verify`/`Reflect` use the `plan` tier at high
 effort; `Act` uses `act` at medium; the compaction summarizer uses `side` at
@@ -236,7 +258,8 @@ low. The three tier names come from `model.tier.plan`/`.act`/`.side` in config
 (`docs/22`). **Routing is by call site, not by token count** — you tag each call.
 Never auto-downgrade mid-task.
 
-Cache breakpoints (`docs/05:106`): one at end-of-tools+system, one at the newest
+Cache breakpoints (`docs/05` §KV-cache-friendly prompt construction): one at
+end-of-tools+system, one at the newest
 message boundary. **You compute them** and write byte offsets into
 `cache_plan::breakpoints`; **workstream 1 renders them** (see `29` §T2). Set
 `cache.mode` correctly: `explicit_markers` only for a provider that needs
@@ -245,7 +268,7 @@ wrong either sends useless markers or loses the cache entirely.
 `cache_plan` already exists in `chat_request`.
 
 **Trap:** the tool array is **frozen for the session**. Adding or removing a tool
-mid-session invalidates the cache and `docs/05:24` marks it "doesn't work".
+mid-session invalidates the cache and `docs/05` marks it "Doesn't work".
 
 ### T8 — System prompt
 
@@ -256,13 +279,15 @@ session id in sections 1–8 (`docs/21:46`).
 The prompt is assembled from the **effective tool set**: a rule referencing an
 unloaded tool is **omitted, never dangling** (`docs/00` decision 47).
 
-Instruction-count lint: warn at 150, fail at 200 (`docs/21:123`). The evidence is
+Instruction-count lint: warn at 150, fail at 200 (`docs/21` §Lint). The evidence is
 that reasoning models are near-perfect to 100–250 instructions then decline
 steeply.
 
-**Do not invent prompt content.** `docs/21` owns it. If the doc does not specify
-a section, ask rather than writing prose — an unsourced prompt rule is exactly
-the kind of claim `AGENTS.md` forbids.
+**Do not invent prompt content.** `docs/21` owns it, including the ordered section
+list. Build the sections it names and no others; if a section is missing from the
+doc, ask rather than writing prose — an unsourced prompt rule is exactly the kind
+of claim `AGENTS.md` forbids. The prompt is a doc artifact, so quote the doc's
+section headings in the PR to show the mapping.
 
 **Acceptance:** word count ≤ 1200 core; a test asserts no timestamp/cwd/session
 id appears in sections 1–8.
@@ -287,14 +312,14 @@ summary loses exactly the tokens a coding agent needs.
 
 **Traps**
 - **Budget in tokens, not events.** 120 events can be 5K or 500K tokens.
-- **Do not compact away errors.** `docs/05:136`: the model repeats failed actions
+- **Do not compact away errors.** `docs/05` §Traps: the model repeats failed actions
   without the evidence.
 - Failed tool calls are kept until the task phase completes, then clearable.
 - Compaction is **last**, after prevention → clearing → isolation.
 
 ### T10 — Tool-result clearing
 
-Restorable stubs. `clear_at_least ≥ 20%` (`docs/05:101`) — a clear smaller than
+Restorable stubs. `clear_at_least ≥ 20%` (`docs/05` §Numeric guidance) — a clear smaller than
 that costs a full cache re-write without buying enough room.
 
 Cleared results must be **restorable**: the stub carries enough to re-read the
@@ -354,10 +379,37 @@ That single assertion protects the cache contract, which is where the cost is.
 2. Every one of the 10 states is visited by at least one test.
 3. Prefix byte-stability asserted.
 4. **You own `run_exec`'s body, and therefore the object graph after the merge**
-   (`docs/26` §Who owns the object graph). Construct the registry, workspace,
-   session reads, client and loop in that order. Your own tests use a scripted
-   fake and a stub registry — that is correct and it is why the integration is a
-   separate step, not a gap in your tests.
+   (`docs/26` §Who owns the object graph). Your own tests use a scripted fake and
+   a stub registry — that is correct, and it is why the integration is a separate
+   step rather than a gap in your tests.
+
+   **The construction order is load-bearing, and it is not the obvious one.**
+   Verified: `main.cxx` calls `run_exec` at the top of `main`, *before* any config
+   load or extension load, and `ext::load_extensions` is called **only** from
+   `smoke_cli_extensions.cxx` — never on the real `exec` path. So `run_exec` must
+   build the whole stack itself, in this order:
+
+   ```
+   config layers -> tool_registry -> ext::load_extensions(registry, providers, hooks)
+                 -> workspace::open(cwd) -> session_reads -> model client
+                 -> register_core_tools(registry, loop, context) -> agent_loop
+   ```
+
+   Two things break if you reorder:
+
+   - **Extensions before the client.** `extensions/providers/init.luau` is what
+     populates `provider_registry`. Resolve a descriptor before loading extensions
+     and you get an empty registry, and workstream 1's correct "unknown provider"
+     error fires on a provider that is actually installed.
+   - **The registry before `register_core_tools`.** Workstream 3's registration
+     writes into the same registry the loader populates, and a core/extension name
+     collision is a load error — so core tools must be registered in a defined
+     order relative to the loader. Register core first, then extensions, so a
+     colliding extension fails loudly instead of shadowing a core tool.
+
+   This ordering is the seam between all three branches. It is the single most
+   likely place for the merge to produce a binary that compiles, passes every
+   slice test, and still cannot run.
 5. `ctest` 100% pass; `_clgate.py` exit 0; smoke exit 0; bench gate pass.
 6. Every new file ≤ 600 lines; no `docs/NN` citations; no magic numbers; trailing
    return types; spaced parens; `≤4` positional parameters (use a request struct).

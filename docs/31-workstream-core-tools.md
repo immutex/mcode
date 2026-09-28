@@ -6,7 +6,7 @@
 > nothing another branch is writing.**
 
 Branch: `feat/core-tools`
-Base: `master` at the commit that lands this plan
+Base: `master` **after Phase 0** (`docs/26` §Phase 0) — P1 and P2 land there
 Owner: agent 3
 
 ---
@@ -67,10 +67,69 @@ no loop state and no transport, which is what makes it independent.
 
 ## Tasks
 
+### T0 — The write path does not exist
+
+**Blocker, and the first thing to resolve.** `workspace` is **read-only**.
+Verified against `fs/workspace.hxx`: `resolve`, `contains`, `glob`,
+`read_viewport`, `read_file`, `content_hash`, `display_path` — no write, no
+create, no remove. Nothing else in the tree writes a file either; the only
+`ofstream` is in the eval harness, and `create_directories` appears twice, both
+unrelated.
+
+So `write`, `edit`, the artifact spill, and the "don't ask again" policy
+persistence all have **no primitive to stand on**. You cannot write `write` on top
+of an API that cannot write.
+
+Add to `workspace`, as a Phase 0 change (see `docs/26` §Phase 0):
+
+```cpp
+enum class write_mode { create, overwrite };
+
+struct write_receipt {
+    std::string content_hash;   // the hash AFTER the write, for session_reads
+    std::uintmax_t bytes_written = 0;
+};
+
+[[nodiscard]] auto write_file( std::string_view relative_path, std::string_view content,
+    write_mode mode ) -> result< write_receipt >;
+```
+
+Requirements, each of which is a documented failure mode rather than a preference:
+
+| Requirement | Why |
+|---|---|
+| `write_mode { create, overwrite }` explicit | The read-before-write invariant is enforced by the **caller**, and it needs to distinguish "new file" from "replacing content" — create needs no prior read, overwrite does |
+| Path resolved through `resolve()` then checked with `contains()` | The workspace boundary is the security control (`docs/12`); a write path that skips it is the whole boundary gone |
+| Atomic: temp file in the same directory, then rename | A crash mid-write must not leave a truncated source file. `docs/03` makes the event log crash-safe; a half-written `.cxx` is worse than a lost turn |
+| Parent directories created only for `create` | Otherwise a typo'd path silently creates a tree |
+| Returns the new `content_hash` | `session_reads` needs it to record the write, or the next `edit` in the same turn reads as stale |
+| Refuses a path inside `.mcode/` or `.git/` | `docs/12` deny-write; see T8's actor-scoped rule |
+| Long-path handling via `platform::to_extended_path` | `read_file` already does this; a write that does not will fail on the same deep path that reads fine |
+
+**Ownership:** this is Phase 0 because two branches need it — you for `write`/
+`edit`, and workstream 1 for nothing, but the artifact directory is created by
+your spill helper. Land it before branching and both stay conflict-free.
+
+**Acceptance:** a round-trip test — write, read back, hash matches; a write outside
+the root is refused; a write to `.mcode/config.toml` is refused; an interrupted
+write leaves the original file intact.
+
 ### T1 — The tool-schema table
 
 Eight schemas as JSON-Schema text, authored **in one place** and registered
 through `tool_registry::add`.
+
+**The schema has to go somewhere, and today there is nowhere.** Verified:
+`tool_def` is `{name, description, klass, source, owner, deferrable}` — no schema
+field. `chat_request.tools` is `tool_spec{name, description, schema_json}`, and
+nothing constructs one from a `tool_def`. This is fixed in Phase 0 (`docs/26`
+§Phase 0): `tool_def` gains `schema_json`. You set it at registration; workstream
+2 reads it to build the request. **Do not add a parallel field or a side table** —
+the registry is the one place both branches read.
+
+The Phase 0 change also fixes a live bug this exposes: `ext/api.cxx` renders a Lua
+tool's schema and then drops it, so every extension tool is currently callable but
+never advertised. A regression test belongs with the Phase 0 commit, not here.
 
 | Tool | Class | Notes |
 |---|---|---|
@@ -123,12 +182,31 @@ tested. `looks_binary` exists.
 **Record the read** in `session_reads` with `workspace::content_hash`. This is
 what makes `write` and `edit` safe.
 
-**Traps**
+**Traps, and one conflict the table hides**
+
 - The 100-line default is `DEFAULT_READ_LINES` — do not redefine it.
 - Binary refusal happens on **bytes**, before decoding. Decoding first and
   checking after is how binary reaches the context.
 - "Closest existing path" needs a bounded search — do not walk the whole tree.
   Use the parent directory plus a small edit distance.
+- **The "very large" row is not implementable through `read_file`.** Verified:
+  `read_file` hard-fails above `MAX_TEXT_FILE_BYTES` (8 MiB) with
+  `"file exceeds the 8388608-byte read cap"`. The table above says a >1 MiB file
+  should still *serve a window*, and `write` refuses only above 10 MiB. So a 9 MiB
+  file is one the model may legitimately edit but **cannot read at all**, and
+  `read` would return a size error instead of a window.
+
+  Resolve it explicitly, and state the resolution in the PR:
+  - Read the first N bytes with a bounded streaming read rather than calling
+    `read_file`, so the window is served regardless of total size; **or**
+  - Extend `workspace` with a windowed reader in Phase 0 (`docs/26` §Phase 0).
+
+  Either way the numbers must agree across the three tools: `read`'s
+  window threshold, `read_file`'s hard cap, and `write`'s 10 MiB cap. Three caps
+  that disagree are three bugs waiting for a file that lands between them.
+- `read_viewport` returns `read_result` with `first_line`/`last_line`/`total_lines`
+  and text already prefixed `"<n>\t"`. Use those fields for the truncation notice
+  instead of recomputing line numbers.
 
 ### T3 — `write`
 
@@ -177,12 +255,27 @@ Exact-anchor replacement, **never a silent whole-file rewrite**.
 the `**` cycle guard, and `DEFAULT_GLOB_LIMIT`. Return **paths relative to the
 workspace root** via `workspace::display_path`.
 
+**But it is not ignore-aware.** Verified: `workspace.cxx` contains no `.gitignore`
+handling and no dot-directory or `build/` filter — it walks the tree and only sets
+`skip_permission_denied`. So `glob "**/*.o"` will descend `.git/` and `build/` and
+burn the whole `DEFAULT_GLOB_LIMIT` (1000) on artifacts. `docs/06` says `glob` has
+an "expansion budget" as an invariant.
+
+Add a filter in **your** layer, not in `workspace` (it is read-only for you):
+
+- Always skip `.git/` and `.mcode/` — the first is never interesting, the second is
+  your own artifact directory (T8).
+- Honour the root `.gitignore` at minimum, and say in the PR that full gitignore
+  semantics (nested files, negation, `**` rules) are out of scope for this slice.
+- Report how many paths the filter removed when the result is truncated, so a
+  surprising empty result is explainable.
+
 **`grep`** — regex content search:
 - gitignore-aware: honour `.gitignore` at the root at minimum. A full gitignore
   implementation is out of scope; say so in the PR.
-- **Return summarized hits, not raw matches** (`docs/06:185` measured +6pp).
+- **Return summarized hits, not raw matches** (`docs/06` §Tool authoring rules, measured +6pp).
   One line per match: `path:line: text`, with the match highlighted.
-- Cap: **50 matches or 2K tokens**, then paginate. `docs/05:62` owns that number.
+- Cap: **50 matches or 2K tokens**, then paginate. `docs/05` §Numeric guidance owns that number.
 - Skip binary files (reuse `looks_binary`).
 - Compile the regex once; a bad pattern is a **fatal, actionable** error naming
   the regex engine's complaint.
@@ -220,7 +313,7 @@ For this slice: a `permission_policy` interface with:
 - **fail-closed default**: with no policy configured, `exec`-class calls are
   **denied** unless `--yolo` was passed
 - on "don't ask again", persist the **exact parsed argv**, never a wildcard
-  prefix (`docs/06:202`)
+  prefix (`docs/06` §Permission gating)
 - a test-visible decision function, so policy is testable without a terminal
 
 **Explicitly deferred and to be stated in the PR:** OS-level enforcement
@@ -228,7 +321,7 @@ For this slice: a `permission_policy` interface with:
 policy above is a gate, not a sandbox. `docs/16` M1 says exactly this for Windows
 and macOS; Linux's Landlock is the follow-up slice.
 
-**Trap:** `docs/06:206` — exec-class calls are **not assumed idempotent**. The
+**Trap:** `docs/06` §Idempotency rules — exec-class calls are **not assumed idempotent**. The
 harness must never auto-retry them. Nothing in this slice may retry `bash`.
 
 ### T7 — `ask_user` and `tool_search`
@@ -245,7 +338,7 @@ absence makes the agent **guess instead of asking**, and nothing surfaces that.
 
 **`tool_search`** — the bootstrapping meta-tool:
 - **BM25-class** name/description matching over the registry. **No embedding
-  model, no dependency** (`docs/06:158`).
+  model, no dependency** (`docs/06` §Tool search).
 - Returns **name + one-line description**; a second level (`expand`) returns the
   full schema. That is Anthropic's two-stage disclosure without their API.
 - ≈100–200 tokens per matched tool instead of the whole catalog.
@@ -269,8 +362,15 @@ Applies to **every** tool result.
   (`"... truncated; re-call with offset=200"`).
 - **Evidence loss is the hardest perturbation** (`docs/06`: scored 0.142 vs 0.460
   for structural noise). **Prioritize not-dropping over prettiness.**
-- The artifact directory is under the workspace and must be created lazily and
-  **not** be listed by `glob`/`grep` by default.
+- **The artifact path is run-scoped.** `docs/01` and `docs/03` both put artifacts
+  at `.mcode/artifacts/<run-id>/`, not a flat directory. Use the run id from the
+  event log so two runs cannot collide, and so an artifact referenced by a
+  replayed session still resolves.
+- The artifact directory must be created lazily and **not** be listed by
+  `glob`/`grep`. `.mcode/` is **not** in `.gitignore` today (verified) — so either
+  add it there, or the artifacts your helper writes show up as untracked files in
+  the user's `git status`. Adding `.mcode/` to `.gitignore` is the right call and
+  is a one-line change; do it and say so in the PR.
 
 One shared helper, used by all eight tools. Eight hand-rolled truncators is
 eight behaviours.
@@ -325,13 +425,34 @@ than two that drift.
 
 ```cpp
 // tools/register.hxx
-auto register_core_tools( tool_registry& registry, agent_loop& loop,
+auto register_core_tools( tool_registry& registry, tool_handler_sink& sink,
     const tool_context& context ) -> status;
 ```
 
 `tool_context` carries: the workspace, the session reads, the approval policy,
 the artifact directory, and the config. **A request struct, not six positional
 parameters.**
+
+**Take a sink, not an `agent_loop&`.** `docs/03` §Dependency rule is explicit that
+layers point down only, and `agent/loop.hxx` is *above* the tools layer. A
+`tools/register.hxx` that includes `agent/loop.hxx` inverts the dependency and
+makes the tools layer un-testable without the loop — which is precisely what your
+own slice tests need to avoid.
+
+`tool_handler_sink` is one method:
+
+```cpp
+struct tool_handler_sink {
+    virtual ~tool_handler_sink( ) = default;
+    virtual auto add_handler( std::string name, tool_handler handler ) -> void = 0;
+};
+```
+
+`agent_loop` already has `register_handler( std::string, tool_handler )` with
+exactly that signature (verified), so workstream 2 makes it implement the
+interface — a one-line change, no behaviour moved. Your tests pass a stub. This is
+the standard dependency-inversion move, and it is what keeps `tools/` free of
+`agent/`.
 
 `main.cxx`'s smoke test calls this, then `loop.register_handler` per tool. The
 stub handlers (`"<file contents for …>"`) are deleted, not kept as a fallback —
@@ -382,6 +503,12 @@ file content from a fixture.
 | `write refuses .mcode/artifacts/x` | Forged evidence |
 | `write refuses .git/hooks/pre-commit` | Trust boundary |
 | `the spill helper still writes an artifact` | Harness is not the model |
+| `write is atomic` | An interrupted write leaves the original intact |
+| `write refuses a path outside the root` | Boundary |
+| `write returns the new hash` | Feeds session_reads |
+| `read serves a window past the 8 MiB read cap` | The T2 conflict, whichever way it is resolved |
+| `glob skips .git and .mcode` | Expansion budget |
+| `glob reports how many paths it filtered` | Explainable truncation |
 
 ---
 
