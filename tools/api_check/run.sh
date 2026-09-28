@@ -58,9 +58,15 @@ echo "ok: invalid.luau was rejected as expected"
 
 # Shipped extensions must type-check too. A first-party extension that does not
 # is a broken example for every author who copies it.
+#
+# The fixture extensions are checked as well, and that is not redundant: the
+# shipped `providers` extension only exercises `model.register`, so without the
+# fixture nothing in this job would catch a regression in `tool.register`, `on`,
+# or `emit` -- the three entries an extension author is most likely to touch.
 echo
-echo "== shipped extensions must type-check =="
-for extension in "${repo_root}"/extensions/*/init.luau; do
+echo "== shipped and fixture extensions must type-check =="
+for extension in "${repo_root}"/extensions/*/init.luau \
+                 "${repo_root}"/tests/fixtures/extensions/*/init.luau; do
     [ -e "${extension}" ] || continue
 
     name="$(basename "$(dirname "${extension}")")"
