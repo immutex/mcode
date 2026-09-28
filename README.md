@@ -203,7 +203,18 @@ code comments.
     of letting a misspelled `{veto = …}` compile — a guard the author believes is
     active but that never blocks. The explicit `return nil` is the cheaper side.
 
-22. **Sorting before comparison is not optional in reports.** Extension discovery
+22. **`conan --profile` sets only the HOST context.** The build profile still
+    defaults to `~/.conan2/profiles/default`, which a fresh CI runner does not
+    have — so `conan create --profile <file>` fails with "The default build
+    profile ... doesn't exist" on every platform. `conan profile detect --force`
+    must run first. Confirmed against `conan create --help`.
+
+23. **LuaJIT's Makefile refuses to build on Darwin without
+    `MACOSX_DEPLOYMENT_TARGET`.** It must be *exported*, not passed as a make
+    variable: the check reads the environment. The error is
+    `*** missing: export MACOSX_DEPLOYMENT_TARGET=XX.YY`.
+
+24. **Sorting before comparison is not optional in reports.** Extension discovery
     sorts by name, and JSON object keys are emitted in sorted order, so two runs
     are byte-identical. An unsorted report makes a duplicate-name or load-order
     failure unreproducible.

@@ -115,6 +115,13 @@ jobs:
           python -m pip install "conan==${{ env.CONAN_VERSION }}"
           conan --version
 
+      # `--profile` sets the HOST context only; the BUILD profile still defaults
+      # to ~/.conan2/profiles/default, which a fresh runner does not have. Without
+      # this, `conan create` fails with "The default build profile ... doesn't
+      # exist" on every platform.
+      - name: Detect the default Conan profile
+        run: conan profile detect --force
+
       - name: Cache Conan packages
         uses: actions/cache@v4
         with:

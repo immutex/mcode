@@ -52,6 +52,13 @@ git -C LuaJIT checkout -q "$LUAJIT_COMMIT"
 # Setting only LUAJIT_DISABLE_FFI breaks the build: dynasm still emits FFI call
 # helpers (buildvm_arch.h references CTState/CCallState) while the C side has
 # LJ_HASFFI=0, which is a hard compile error.
+# LuaJIT's Makefile hard-refuses to build on Darwin without this, and it must be
+# exported rather than passed as a make variable: the check is on the environment.
+if [ "$platform" = "Darwin" ]; then
+    export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-$(sw_vers -productVersion | cut -d. -f1-2)}"
+    echo "macosx_deployment_target=$MACOSX_DEPLOYMENT_TARGET"
+fi
+
 make -C LuaJIT -j"$jobs" BUILDMODE=static \
     XCFLAGS="-DLUAJIT_DISABLE_FFI" \
     DASMFLAGS="-D ENDIAN_LE -D FPU -D P64" >/dev/null
