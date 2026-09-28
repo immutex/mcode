@@ -75,8 +75,9 @@ Our resolver is ~80 lines, resolves only inside the extension root, executes no 
 | `mcode.mcp.register(def)` | declare/configure an MCP server: `{name, transport, command/url, tools?}`; tools land in the registry as `mcp__<server>__<tool>` (`07`) | Kong declarative config |
 | `mcode.context.add_instructions(text, opts?)` | contribute to the system prompt; **budgeted and counted** (`19`) | Neovim `before_agent_start`-style rewrite, but budgeted |
 | `mcode.ext.name` | the calling extension's own name, as a string | Needed for self-attribution without a `debug` API that we removed |
+| `mcode.model.register(def)` | declare a provider: endpoint, auth, and the JSON-pointer mapping from its stream to the canonical event model (`15` §Provider seam). **Requires `net`.** The hot path stays in C++; this is data, not a callback | `26` decision 2 |
 
-**That is 22 rows: 25 callable names and 3 fields, and v1 is closed.** `require` is deliberately *not* in this table — Luau treats it as a language-level global, so the host injects it as one. It is a capability all the same, and it is listed under "Extension layout" above. Anything beyond this — string helpers, path manipulation, table utilities — belongs in a pure-Luau companion library, **not** the C-exposed surface. Neovim's `vim.*` utility creep is the cautionary case.
+**That is 23 rows: 26 callable names and 3 fields, and v1 is closed.** `require` is deliberately *not* in this table — Luau treats it as a language-level global, so the host injects it as one. It is a capability all the same, and it is listed under "Extension layout" above. Anything beyond this — string helpers, path manipulation, table utilities — belongs in a pure-Luau companion library, **not** the C-exposed surface. Neovim's `vim.*` utility creep is the cautionary case.
 
 Deliberate omissions, each for a stated reason:
 
@@ -91,6 +92,12 @@ Deliberate omissions, each for a stated reason:
 
 **The asymmetry is the argument.** Every cut entry is addable later — `api_version` is additive-only, and `capabilities` exists for feature detection. The reverse does not hold: an entry shipped and later found wrong can only be deprecated, never removed. So the v1 bar is "proven need", not "probably useful".
 
+### One amendment before release
+
+`mcode.model.register` was added after the initial freeze, because `C1` closed the surface before `D2`/`D3` defined the provider seam. It is not a loosening of the rule — it is the rule working: the entry was added while `api_version = 1` had never shipped, so nothing published depends on the old count.
+
+The lesson is recorded rather than glossed: **a freeze declared before the feature that needs it is premature.** The surface was frozen at 22 while `26` still listed the provider seam as an open track. Freezing after `D2` would have produced 23 the first time.
+
 ## Capability model
 
 **Default deny.** The manifest declares permissions; absent means none. Every gated entry is checked at call time against the *calling* extension's manifest — never the loading extension's, and never a session-wide setting.
@@ -100,7 +107,7 @@ Deliberate omissions, each for a stated reason:
 | *(none)* | `api_version`, `capabilities`, `ext.name`, `log.*`, `notify`, `cfg.get`, `on`, `off`, `emit`, `defer`, `timer.*`, `tool.register`, `tool.unregister`, `cmd.register`, `skill.register`, `require`, `session.snapshot` | — always available |
 | `fs_read` | `fs.read` | `nil, "permission denied"` |
 | `fs_write` | `fs.write` | `nil, "permission denied"` |
-| `net` | `net.get`, `net.search` | `nil, "permission denied"` |
+| `net` | `net.get`, `net.search`, `model.register` | `nil, "permission denied"` |
 | `spawn` | `spawn` | `nil, "permission denied"` |
 | `mcp` | `mcp.register` | `nil, "permission denied"` |
 | `context` | `context.add_instructions` | `nil, "permission denied"` |
@@ -129,7 +136,7 @@ The interrupt cannot preempt *inside* a host call, so an unbounded entry defeats
 
 | Class | Entries | Bound |
 |---|---|---|
-| Constant time | everything except the rows below | No I/O, no input-proportional allocation; returns immediately |
+| Constant time | everything except the rows below | No I/O, no input-proportional allocation; returns immediately. `model.register` validates and stores a descriptor; it performs no request |
 | Filesystem | `fs.read`, `fs.write` | Byte cap (32 MiB default); workspace-scoped path resolution |
 | Network | `net.get`, `net.search` | Connect + total timeout; response byte cap; egress allowlist |
 | Process | `spawn` | Wall-clock timeout, killed on expiry; stdout/stderr caps |
@@ -319,7 +326,7 @@ Extension authors hit these immediately, so they are stated rather than discover
 
 - When (if ever) does registration order stop being enough? Revisit only when extensions actually contend for the same hook.
 - Do we need `mcode.on` for *async* handlers (coroutine-based), or is synchronous-with-budget enough? Luau coroutines exist in the VM; the question is whether the dispatch model wants them.
-- Is 22 the right number, or does an extension that renders need `mcode.ui.*`? Nothing in the first-party set (`23`) needs it, which is why it is not in v1.
+- Is 23 the right number, or does an extension that renders need `mcode.ui.*`? Nothing in the first-party set (`23`) needs it, which is why it is not in v1.
 
 ## Sources
 

@@ -208,6 +208,19 @@ namespace mcode::model {
 			descriptor.stream.usage_reasoning = *usage;
 		}
 
+		// Terminal markers differ per provider -- [OI] Chat Completions sends the
+		// [DONE] sentinel, Anthropic sends a message_stop event, Responses sends
+		// response.completed -- so this is a descriptor field, not a hardcoded list.
+		if ( parsed->has_pointer( "/stream/terminal_events" ) ) {
+			auto terminal = parsed->pointer_string_array( "/stream/terminal_events" );
+
+			if ( !terminal ) {
+				return std::unexpected( terminal.error( ) );
+			}
+
+			descriptor.stream.terminal_events = *terminal;
+		}
+
 		if ( auto validated = validate( descriptor ); !validated ) {
 			return std::unexpected( validated.error( ) );
 		}

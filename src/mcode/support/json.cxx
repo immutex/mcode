@@ -247,6 +247,41 @@ namespace mcode::json {
 		return yyjson_get_bool( found );
 	}
 
+	auto document::pointer_string_array( const std::string_view path ) const
+		-> result< std::vector< std::string > > {
+		if ( doc_ == nullptr ) {
+			return std::unexpected( fail( errc::json, "pointer on a non-parse document" ) );
+		}
+
+		auto* found = yyjson_ptr_getn( yyjson_doc_get_root( doc_ ), path.data( ), path.size( ) );
+
+		if ( found == nullptr ) {
+			return std::unexpected( fail( errc::json, "pointer not found: " + std::string{ path } ) );
+		}
+
+		if ( !yyjson_is_arr( found ) ) {
+			return std::unexpected( fail( errc::json,
+				"pointer is not an array: " + std::string{ path } ) );
+		}
+
+		auto out = std::vector< std::string >{ };
+		auto index = std::size_t{ 0 };
+		auto count = std::size_t{ 0 };
+		yyjson_val* item = nullptr;
+
+		yyjson_arr_foreach( found, index, count, item ) {
+			if ( !yyjson_is_str( item ) ) {
+				return std::unexpected( fail( errc::json,
+					"array element " + std::to_string( index ) + " is not a string: " +
+					std::string{ path } ) );
+			}
+
+			out.emplace_back( yyjson_get_str( item ), yyjson_get_len( item ) );
+		}
+
+		return out;
+	}
+
 	auto document::has_pointer( const std::string_view path ) const noexcept -> bool {
 		if ( doc_ == nullptr ) {
 			return false;

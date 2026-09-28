@@ -9,6 +9,7 @@ add_executable(mcode_tests
     test_workspace.cxx
     test_model_types.cxx
     test_provider.cxx
+    test_dogfood_providers.cxx
 )
 
 target_link_libraries(mcode_tests

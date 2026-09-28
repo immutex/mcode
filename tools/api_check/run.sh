@@ -56,5 +56,17 @@ if "${checker}" "${definition}" invalid.luau 2>/dev/null; then
 fi
 echo "ok: invalid.luau was rejected as expected"
 
+# Shipped extensions must type-check too. A first-party extension that does not
+# is a broken example for every author who copies it.
+echo
+echo "== shipped extensions must type-check =="
+for extension in "${repo_root}"/extensions/*/init.luau; do
+    [ -e "${extension}" ] || continue
+
+    name="$(basename "$(dirname "${extension}")")"
+    cp "${extension}" "${work}/${name}.luau"
+    "${checker}" "${definition}" "${name}.luau"
+done
+
 echo
 echo "API definition check passed."

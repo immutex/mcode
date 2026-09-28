@@ -6,6 +6,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "mcode/core/error.hxx"
 
@@ -50,6 +51,12 @@ namespace mcode::json {
 		[[nodiscard]] auto pointer_string( std::string_view path ) const -> result< std::string >;
 		[[nodiscard]] auto pointer_int( std::string_view path ) const -> result< std::int64_t >;
 		[[nodiscard]] auto pointer_bool( std::string_view path ) const -> result< bool >;
+
+		// Reads an array of strings. A non-array, or an array containing a
+		// non-string, is an error rather than a silently filtered list -- a
+		// descriptor with one bad entry should not load with the rest.
+		[[nodiscard]] auto pointer_string_array( std::string_view path ) const
+			-> result< std::vector< std::string > >;
 
 		// True when the pointer resolves to anything at all. A missing pointer is
 		// the normal case for a streaming delta -- most payloads carry one field --

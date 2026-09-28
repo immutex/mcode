@@ -189,6 +189,70 @@ declare mcode: {
 		}) -> (boolean?, string?),
 	},
 
+	model: {
+		-- Declares a provider. Requires the `net` permission.
+		--
+		-- This is DATA, not a callback: it maps the provider's JSON to the
+		-- canonical event model with JSON pointers, and C++ applies it natively.
+		-- HTTP, SSE framing, retry, the error taxonomy, and egress policy all stay
+		-- in C++, so per-token parsing never crosses into the VM.
+		--
+		-- Validation is strict and happens here: a missing endpoint, a non-http
+		-- URL, a pointer that is not a JSON pointer, or an `auth` block with no
+		-- source is refused rather than failing at first token.
+		register: (definition: {
+			name: string,
+			endpoint: string,
+
+			-- Omit entirely for a local endpoint. If present, `from` and `name`
+			-- are required -- an auth block without a source is a typo, not
+			-- "no auth".
+			auth: {
+				from: string, -- "env" | "config"
+				name: string,
+				header: string,
+				scheme: string?,
+			}?,
+
+			-- JSON pointers into one SSE event's data object. At least one of
+			-- text_delta or tool_calls.args must be mapped.
+			stream: {
+				text_delta: string?,
+				thinking_delta: string?,
+
+				tool_calls: {
+					index: string?,
+					id: string?,
+					name: string?,
+					args: string?,
+				}?,
+
+				finish: string?,
+				usage: {
+					-- `in` is a reserved word, so the key is bracketed. This is also
+					-- what a descriptor written in JSON uses, and the two forms must
+					-- agree.
+					["in"]: string?,
+					out: string?,
+					cached_read: string?,
+					cache_write: string?,
+					reasoning: string?,
+				}?,
+
+				-- SSE event names that end the stream, for providers that do not
+				-- send the [DONE] sentinel.
+				terminal_events: { string }?,
+			},
+
+			-- Where the canonical request fields go in the outgoing body.
+			request: {
+				max_output_tokens: string?,
+				temperature: string?,
+				response_schema: string?,
+			}?,
+		}) -> (boolean?, string?),
+	},
+
 	context: {
 		-- Contributes to the system prompt. Budgeted and counted; requires the
 		-- `context` permission. Over-budget contributions are truncated, not
