@@ -38,6 +38,10 @@ namespace mcode {
 		std::string owner;
 		bool deferrable = true;
 
+		// Pre-rendered JSON Schema. The loop builds the request's tool array from
+		// the registry, so a tool without one is callable but never advertised.
+		std::string schema_json;
+
 		[[nodiscard]] auto is_core( ) const noexcept -> bool {
 			return source == tool_source::core;
 		}

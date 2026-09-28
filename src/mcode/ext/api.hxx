@@ -29,10 +29,6 @@ namespace mcode::ext {
 
 		// The `run` closure, by registry reference.
 		int function_reference = 0;
-
-		// Schema as JSON, pre-rendered. Rendered once at registration because
-		// computing it per turn would invalidate the prompt cache.
-		std::string schema_json;
 	};
 
 	// The `mcode` API a first-party or third-party extension sees. Owns the

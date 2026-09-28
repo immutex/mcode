@@ -149,8 +149,6 @@ namespace mcode::ext {
 
 		lua_pop( state, 1 );
 
-		tool.schema_json = std::move( schema );
-
 		// The `run` closure is kept by registry reference. It cannot be copied into
 		// C++: a Luau function is a value in this VM, and the reference is what
 		// keeps it alive while the registry holds the tool.
@@ -173,6 +171,7 @@ namespace mcode::ext {
 		definition_value.source = tool_source::user_extension;
 		definition_value.owner = tool.owner;
 		definition_value.deferrable = true;
+		definition_value.schema_json = std::move( schema );
 
 		// A name collision is a contract violation: the caller gets an
 		// error, not a silently replaced tool. The reference is released first so

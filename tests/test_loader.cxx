@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "mcode/support/json.hxx"
+
 using namespace mcode;
 using namespace ext_test;
 
@@ -226,6 +228,15 @@ TEST_CASE( "a registered tool is callable and reaches the extension", "[loader]"
 
 	REQUIRE( definition->owner == "hello-tool" );
 	REQUIRE_FALSE( definition->is_core( ) );
+
+	// The schema has to survive registration: the loop builds the request's tool
+	// array from the registry, so a tool whose schema is dropped here is callable
+	// but never advertised to the model.
+	REQUIRE_FALSE( definition->schema_json.empty( ) );
+
+	if ( auto parsed = json::document::parse( definition->schema_json ); !parsed ) {
+		FAIL( "the registered schema is not JSON: " << parsed.error( ).msg );
+	}
 
 	// And it runs. The extension reads README.md through mcode.fs.read, which is
 	// the fixture's own file, so the result proves the round trip: C++ registry ->
