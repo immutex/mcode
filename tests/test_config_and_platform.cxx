@@ -260,11 +260,22 @@ TEST_CASE( "the seven platform seams exist and report honestly", "[platform]" ) 
 	REQUIRE( static_cast< bool >( temp ) );
 	REQUIRE( std::filesystem::exists( *temp ) );
 
-#if defined( _WIN32 )
+#if defined( _WIN32 ) || defined( __APPLE__ )
+	// Windows and macOS are both case-insensitive by default. macOS can be
+	// formatted case-sensitive, and the seam deliberately still reports true: the
+	// workspace boundary compares case-folded, which is the conservative direction.
+	// A test asserting false here would be asserting the wrong thing, not catching
+	// a bug.
 	REQUIRE( platform::case_insensitive_paths( ) );
+#endif
+
+#if defined( _WIN32 )
 	auto extended = platform::to_extended_path( "C:\\Windows" );
 	REQUIRE( extended.wstring( ).starts_with( L"\\\\?\\" ) );
-#else
+#endif
+
+#if !defined( _WIN32 ) && !defined( __APPLE__ )
+	// Linux is case-sensitive.
 	REQUIRE_FALSE( platform::case_insensitive_paths( ) );
 #endif
 
