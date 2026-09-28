@@ -204,13 +204,15 @@ namespace mcode::ext {
 					stripped.erase( 0, 2 );
 				}
 
-				const auto candidates = std::array{
+				// Not `candidates`: that name is already the extension list in the
+				// enclosing function, and GCC's -Wshadow rejects the reuse.
+				const auto spellings = std::array{
 					std::filesystem::path{ stripped },
 					std::filesystem::path{ stripped + ".luau" },
 					std::filesystem::path{ stripped } / "init.luau",
 				};
 
-				for ( const auto& attempt : candidates ) {
+				for ( const auto& attempt : spellings ) {
 					auto resolved = std::filesystem::weakly_canonical( extension_root / attempt );
 
 					// The resolved path must still be under the extension root.

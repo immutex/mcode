@@ -27,7 +27,12 @@ repo = pathlib.Path(__file__).parent
 build = repo / "build" / "Release"
 
 WARN = (
-    "-Wall -Wextra -Wpedantic -Wshadow -Wnon-virtual-dtor -Wold-style-cast "
+    # -Wshadow-all, not -Wshadow: GCC's -Wshadow rejects a local that shadows an
+    # enclosing local, and clang's plain -Wshadow does NOT. A name reuse inside a
+    # nested lambda or block therefore passed this gate and failed the GCC leg of
+    # CI. -Wshadow-all closes the gap; -Wno-unknown-warning-option keeps an older
+    # clang from failing on the flag itself.
+    "-Wall -Wextra -Wpedantic -Wshadow-all -Wnon-virtual-dtor -Wold-style-cast "
     "-Wcast-align -Wunused -Woverloaded-virtual -Wconversion -Wsign-conversion "
     "-Wdouble-promotion -Wformat=2 -Wimplicit-fallthrough -Werror "
     "-Wno-unknown-warning-option"
