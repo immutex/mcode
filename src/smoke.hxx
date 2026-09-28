@@ -25,10 +25,6 @@ namespace smoke {
 			return;
 		}
 
-// Defined in smoke_cli_extensions.cxx. Split so no single smoke file exceeds the
-// project's file-length limit.
-auto smoke_cli_and_extensions( ) -> void;
-
 		++g_failures;
 
 		std::printf( "  [FAIL] %.*s", static_cast< int >( label.size( ) ), label.data( ) );

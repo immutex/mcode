@@ -17,6 +17,7 @@
 #include "mcode/core/error.hxx"
 #include "mcode/platform/seams.hxx"
 #include "mcode/support/config.hxx"
+#include "mcode/support/parse.hxx"
 #include "mcode/support/toml.hxx"
 
 using namespace mcode;
@@ -442,4 +443,45 @@ TEST_CASE( "a UTF-8 BOM does not make the file unreadable", "[toml]" ) {
 	const auto bom_mid_file = std::string{ "ok = 1\n" } + "\xEF\xBB\xBF" + "bad = 2\n";
 
 	CHECK_FALSE( static_cast< bool >( toml::parse( bom_mid_file ) ) );
+}
+
+TEST_CASE( "the float parser accepts and refuses exactly what it says", "[toml]" ) {
+	// Written because the compiler's own floating-point from_chars is missing on
+	// Xcode 15, so this parser IS the implementation. Every branch needs a case:
+	// the grammar is small and a wrong branch silently accepts a malformed number.
+	auto value = 0.0;
+
+	// Accepted.
+	for ( const auto& [ text, expected ] : std::vector< std::pair< const char*, double > >{
+		{ "0", 0.0 },
+		{ "1", 1.0 },
+		{ "-1", -1.0 },
+		{ "+2", 2.0 },
+		{ "0.25", 0.25 },
+		{ "-0.25", -0.25 },
+		{ "1.5e3", 1500.0 },
+		{ "1.5E3", 1500.0 },
+		{ "1e-3", 0.001 },
+		{ "1.5e+3", 1500.0 },
+		{ "123456789012345678", 123456789012345678.0 },
+		{ "0.0", 0.0 },
+		{ "100", 100.0 },
+	} ) {
+		CHECK( support::parse_double( text, value ) );
+		CHECK( value == expected );
+	}
+
+	// Refused: every way the grammar can be violated, plus the range edges.
+	for ( const auto* text : {
+		"", "+", "-", ".", ".5", "5.", "e5", "1e", "1e+", "1E-",
+		"0.25.9", "1.2e5.6", "1.2.3", "abc", "1a", "1 ", " 1", "1_000",
+		"0x10", "inf", "nan", "--1", "1..2", "1e99999", "1e-99999",
+		"1234567890123456789", "1.7976931348623157e309",
+	} ) {
+		CHECK_FALSE( support::parse_double( text, value ) );
+	}
+
+	// A value that underflows to zero is refused rather than reported as 0: the
+	// author wrote a number, and 0 is not it.
+	CHECK_FALSE( support::parse_double( "1e-400", value ) );
 }
