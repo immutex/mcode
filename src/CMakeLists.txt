@@ -22,6 +22,8 @@ add_library(mcode_core STATIC
 
     mcode/events/bus.cxx
 
+    mcode/cli/exec.cxx
+
     mcode/fs/workspace.cxx
 
     mcode/net/sse.cxx

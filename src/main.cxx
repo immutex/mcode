@@ -6,6 +6,8 @@
 #include <vector>
 
 #include "mcode/agent/loop.hxx"
+#include "mcode/cli/exec.hxx"
+#include "mcode/events/bus.hxx"
 #include "mcode/core/registry.hxx"
 #include "mcode/core/version.hxx"
 #include "mcode/ext/lua_host.hxx"
@@ -79,8 +81,94 @@ namespace {
 
 }
 
+namespace {
+
+	// `mcode exec [options] [prompt]` -- the headless surface (docs/22 E4).
+	// Returns the process exit code.
+	auto run_exec( const std::vector< std::string >& arguments ) -> int {
+		auto parsed = mcode::cli::parse_exec_options( arguments );
+
+		if ( !parsed ) {
+			std::fprintf( stderr, "mcode: %s\n\n", parsed.error( ).msg.c_str( ) );
+			std::fputs( mcode::cli::usage_text( "mcode" ).c_str( ), stderr );
+
+			return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
+		}
+
+		// Unknown flags are refused, never ignored: a typo like `--max-step` would
+		// otherwise run with the default budget and the user would never know.
+		if ( !parsed->unknown_arguments.empty( ) ) {
+			std::fprintf( stderr, "mcode: unknown argument '%s'\n\n",
+				parsed->unknown_arguments.front( ).c_str( ) );
+			std::fputs( mcode::cli::usage_text( "mcode" ).c_str( ), stderr );
+
+			return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
+		}
+
+		auto stream = mcode::cli::json_stream{ parsed->json };
+		stream.emit_run_start( parsed->prompt );
+
+		auto bus = mcode::events::bus{ };
+		auto sequence = std::uint64_t{ 0 };
+
+		// Mirror every event onto the JSON stream. This is the coupling docs/20
+		// describes: the TUI, the session log, and the headless stream are all
+		// subscribers, and none of them is special.
+		bus.subscribe( mcode::events::kind::session_start,
+			[&stream, &sequence]( const mcode::events::event& value ) {
+				auto mirrored = value;
+				mirrored.sequence = sequence++;
+				stream.emit_event( mirrored );
+			} );
+
+		auto start = mcode::events::event{ };
+		start.type = mcode::events::kind::session_start;
+		start.payload_json = R"({"headless":true})";
+		bus.publish( start );
+
+		auto end = mcode::events::event{ };
+		end.type = mcode::events::kind::session_end;
+		end.payload_json = R"({"reason":"m0-skeleton"})";
+		bus.publish( end );
+
+		// M0 has no model client, so a run cannot yet produce a result. Saying so
+		// with the provider-error code is honest; exiting 0 would claim a
+		// verification that never ran.
+		stream.emit_run_end( mcode::cli::exit_code::provider_error,
+			"no model client in M0 (docs/16 M0)" );
+
+		if ( parsed->verbose ) {
+			std::fprintf( stderr, "mcode: exec finished (M0 skeleton, no model client)\n" );
+		}
+
+		return mcode::cli::to_int( mcode::cli::exit_code::provider_error );
+	}
+
+}
+
 auto main( int argument_count, char** arguments ) -> int {
-	( void )arguments;
+	auto argv = std::vector< std::string >{ };
+
+	for ( auto index = 1; index < argument_count; ++index ) {
+		argv.emplace_back( arguments[ index ] );
+	}
+
+	if ( !argv.empty( ) && argv.front( ) == "exec" ) {
+		return run_exec( { argv.begin( ) + 1, argv.end( ) } );
+	}
+
+	if ( !argv.empty( ) && ( argv.front( ) == "--help" || argv.front( ) == "-h" ) ) {
+		std::fputs( mcode::cli::usage_text( "mcode" ).c_str( ), stdout );
+
+		return 0;
+	}
+
+	if ( !argv.empty( ) ) {
+		std::fprintf( stderr, "mcode: unknown command '%s'\n\n", argv.front( ).c_str( ) );
+		std::fputs( mcode::cli::usage_text( "mcode" ).c_str( ), stderr );
+
+		return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
+	}
 
 	std::printf( "mcode %.*s -- startup smoke test\n", static_cast< int >( mcode::VERSION.size( ) ),
 		mcode::VERSION.data( ) );
@@ -465,6 +553,69 @@ auto main( int argument_count, char** arguments ) -> int {
 		const auto jsonl = log.to_jsonl( );
 		check( jsonl.find( "\"seq\":0" ) != std::string::npos, "event seq starts at 0" );
 		check( jsonl.find( "\"v\":1" ) != std::string::npos, "event envelope carries v=1" );
+	}
+
+	section( "cli (headless surface)" );
+
+	{
+		// Exit codes are an interface a script branches on, so each one is asserted.
+		check( mcode::cli::to_int( mcode::cli::exit_code::success ) == 0, "exit 0 is success" );
+		check( mcode::cli::to_int( mcode::cli::exit_code::usage_error ) == 2,
+			"exit 2 is a usage error" );
+		check( mcode::cli::to_int( mcode::cli::exit_code::interrupted ) == 130,
+			"exit 130 is interrupted" );
+
+		// Unknown flags are collected, not ignored -- and they do NOT consume the
+		// following token, because a flag we do not recognise has no arity. So in
+		// this line "5" is the prompt, not the value of the typo.
+		auto parsed = mcode::cli::parse_exec_options(
+			{ "--json", "--model", "m", "do the thing", "--max-step" } );
+
+		check( static_cast< bool >( parsed ), "parsed a valid command line" );
+
+		if ( parsed ) {
+			check( parsed->json, "--json was recognised" );
+			check( parsed->model == "m", "--model took its value" );
+			check( parsed->prompt == "do the thing", "the bare argument became the prompt" );
+			check( parsed->unknown_arguments.size( ) == 1,
+				"the typo --max-step was collected rather than ignored" );
+			check( parsed->unknown_arguments.front( ) == "--max-step",
+				"the collected argument is the typo itself" );
+		}
+
+		// An unknown flag does not swallow the next token: a second bare argument is
+		// also collected, so nothing is silently dropped.
+		auto arity = mcode::cli::parse_exec_options( { "--max-step", "5", "prompt" } );
+
+		check( static_cast< bool >( arity ), "parsed with an unknown flag present" );
+
+		if ( arity ) {
+			check( arity->prompt == "5", "the unknown flag did not consume its neighbour" );
+			check( arity->unknown_arguments.size( ) == 2,
+				"both the typo and the extra bare argument were collected" );
+		}
+
+		// A flag missing its value is an error, not an empty string.
+		auto missing = mcode::cli::parse_exec_options( { "--model" } );
+		check( !missing, "a flag without a value is refused" );
+
+		auto bad_number = mcode::cli::parse_exec_options( { "--max-steps", "lots" } );
+		check( !bad_number, "a non-numeric flag value is refused" );
+
+		// The JSON stream pairs run.start with exactly one run.end.
+		auto stream = mcode::cli::json_stream{ true };
+		stream.emit_run_start( "prompt" );
+
+		auto event = mcode::events::event{ };
+		event.type = mcode::events::kind::tool_call;
+		event.payload_json = R"({"name":"read"})";
+		stream.emit_event( event );
+
+		stream.emit_run_end( mcode::cli::exit_code::success, "done" );
+		stream.emit_run_end( mcode::cli::exit_code::provider_error, "second" );
+
+		check( stream.run_end_emitted( ), "run.end was emitted" );
+		check( stream.lines_emitted( ) == 3, "run.start, one event, and exactly one run.end" );
 	}
 
 	section( "summary" );
