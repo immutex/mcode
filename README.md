@@ -228,7 +228,15 @@ code comments.
     compiles, because both are `yyjson_val*`, and silently produces a list of
     keys where values were expected.
 
-26. **A `docs/NN` citation in a code comment is banned, and prose around it
+26. **Windows caps a path at MAX_PATH unless it carries the `\\?\` prefix.**
+    `LongPathsEnabled` defaults to 0, so a deep cloned repository fails to
+    resolve on a stock machine even though it works on a developer's. Every
+    filesystem call in `workspace` therefore goes through
+    `platform::to_extended_path` — including the `file_size` stat, which runs
+    BEFORE the open and fails first. The prefix is applied at the call, never
+    stored, so the paths the model and the logs see stay readable.
+
+27. **A `docs/NN` citation in a code comment is banned, and prose around it
     breaks when the citation is removed.** Stripping `(docs/22 E4)` from
     `// ... the headless surface (docs/22 E4).` is safe; stripping
     `docs/22. A consumer script branches on these, so the` leaves a sentence

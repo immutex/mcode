@@ -11,6 +11,7 @@
 #endif
 
 #include "mcode/fs/workspace.hxx"
+#include "mcode/platform/seams.hxx"
 
 using mcode::workspace;
 
@@ -371,4 +372,73 @@ TEST_CASE( "a directory symlink loop does not hang the glob", "[workspace]" ) {
 	}
 
 	std::filesystem::remove_all( root );
+}
+
+TEST_CASE( "a path past MAX_PATH is read, not refused", "[workspace]" ) {
+	// Windows caps a path at 260 characters unless it carries the \\?\ prefix or
+	// the machine sets LongPathsEnabled -- and that value defaults to 0. A deep
+	// cloned repository therefore failed to resolve on a stock machine, which the
+	// platform seam exists to prevent.
+	const auto root = std::filesystem::temp_directory_path( ) / "mcode-longpath-test";
+
+	// remove_all needs the extended form too, or the cleanup fails for the very
+	// reason this test is about and the failure looks like the test's own bug.
+	std::filesystem::remove_all( mcode::platform::to_extended_path( root ) );
+	std::filesystem::create_directories( root );
+
+	auto deep = root;
+	const auto segment = std::string( 20, 'a' );
+
+	// Deep enough that the file's full path exceeds 260 characters on any platform
+	// with a non-trivial temp root.
+	for ( auto level = 0; level < 14; ++level ) {
+		deep /= segment;
+	}
+
+	auto opened = workspace::open( root );
+	REQUIRE( static_cast< bool >( opened ) );
+
+	if ( !opened ) {
+		FAIL( opened.error( ).msg );
+	}
+
+	// Create the tree with the extended form, so the SETUP is not what fails.
+	auto error = std::error_code{ };
+	std::filesystem::create_directories( mcode::platform::to_extended_path( deep ), error );
+
+	if ( error ) {
+		WARN( "skipped: cannot create a deep tree (" << error.message( ) << ")" );
+		std::filesystem::remove_all( mcode::platform::to_extended_path( root ) );
+
+		return;
+	}
+
+	const auto file = deep / "deep.txt";
+	{
+		auto out = std::ofstream{ mcode::platform::to_extended_path( file ), std::ios::trunc };
+		out << "deep content\n";
+	}
+
+	REQUIRE( file.string( ).size( ) > 260 );
+
+	// Resolve through the workspace, which is where the seam is applied.
+	auto relative = std::filesystem::relative( file, root, error );
+	REQUIRE( !error );
+
+	auto resolved = opened->resolve( relative.string( ) );
+	REQUIRE( static_cast< bool >( resolved ) );
+
+	if ( !resolved ) {
+		FAIL( resolved.error( ).msg );
+	}
+
+	// And read it, which is the syscall boundary the prefix is applied at.
+	auto content = opened->read_file( relative.string( ) );
+	REQUIRE( static_cast< bool >( content ) );
+
+	if ( content ) {
+		REQUIRE( content->find( "deep content" ) != std::string::npos );
+	}
+
+	std::filesystem::remove_all( mcode::platform::to_extended_path( root ) );
 }

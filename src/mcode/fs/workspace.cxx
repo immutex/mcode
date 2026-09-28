@@ -8,6 +8,7 @@
 #include <set>
 #include <sstream>
 
+#include "mcode/platform/seams.hxx"
 #include "mcode/support/text.hxx"
 
 namespace mcode {
@@ -147,7 +148,7 @@ namespace mcode {
 
 				auto error_code = std::error_code{ };
 
-				for ( const auto& entry : std::filesystem::directory_iterator( base,
+				for ( const auto& entry : std::filesystem::directory_iterator( platform::to_extended_path( base ),
 						 std::filesystem::directory_options::skip_permission_denied, error_code ) ) {
 					if ( error_code ) {
 						break;
@@ -171,7 +172,7 @@ namespace mcode {
 
 			auto error_code = std::error_code{ };
 
-			for ( const auto& entry : std::filesystem::directory_iterator( base,
+			for ( const auto& entry : std::filesystem::directory_iterator( platform::to_extended_path( base ),
 					 std::filesystem::directory_options::skip_permission_denied, error_code ) ) {
 				if ( error_code ) {
 					break;
@@ -261,24 +262,28 @@ namespace mcode {
 			return std::unexpected( fail( errc::io, "empty path" ) );
 		}
 
-		auto error_code = std::error_code{ };
 		auto candidate = std::filesystem::path{ std::string{ path } };
 
 		if ( candidate.is_relative( ) ) {
 			candidate = canonical_root_ / candidate;
 		}
 
-		const auto canonical = std::filesystem::weakly_canonical( candidate, error_code );
+		// Through the platform seam, not std::filesystem directly: the seam owns the
+		// long-path form, and a second canonicalization here is the duplication that
+		// drifts. The result is stored WITHOUT the extended prefix, so the paths the
+		// model and the logs see stay readable.
+		auto canonical = platform::canonicalize( candidate );
 
-		if ( error_code ) {
-			return std::unexpected( fail( errc::io, "cannot resolve path: " + error_code.message( ) ) );
+		if ( !canonical ) {
+			return std::unexpected( fail( errc::io, "cannot resolve path: " + canonical.error( ).msg ) );
 		}
 
-		if ( !contains( canonical ) ) {
-			return std::unexpected( fail( errc::io, "path escapes the workspace: " + canonical.string( ) ) );
+		if ( !contains( *canonical ) ) {
+			return std::unexpected( fail( errc::io,
+				"path escapes the workspace: " + canonical->string( ) ) );
 		}
 
-		return canonical;
+		return *canonical;
 	}
 
 	auto workspace::contains( const std::filesystem::path& absolute ) const -> bool {
@@ -346,7 +351,8 @@ namespace mcode {
 		}
 
 		auto error_code = std::error_code{ };
-		const auto size = std::filesystem::file_size( *resolved, error_code );
+		const auto size = std::filesystem::file_size( platform::to_extended_path( *resolved ),
+			error_code );
 
 		if ( error_code ) {
 			return std::unexpected(
@@ -358,7 +364,12 @@ namespace mcode {
 				std::to_string( MAX_TEXT_FILE_BYTES ) + "-byte read cap: " + resolved->string( ) ) );
 		}
 
-		auto input = std::ifstream{ *resolved, std::ios::binary };
+		// The extended form at the syscall boundary only. Windows caps a path at
+		// MAX_PATH unless it carries the \\?\ prefix or the machine sets
+		// LongPathsEnabled -- and that registry value defaults to 0, so a deep cloned
+		// repository fails to open on a stock machine. The prefix is applied here and
+		// not to `resolved`, so the path the caller sees stays the readable one.
+		auto input = std::ifstream{ platform::to_extended_path( *resolved ), std::ios::binary };
 
 		if ( !input ) {
 			return std::unexpected( fail( errc::io, "cannot open " + resolved->string( ) ) );
