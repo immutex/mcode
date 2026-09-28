@@ -523,6 +523,11 @@ file content from a fixture.
 6. `ctest` 100% pass; `_clgate.py` exit 0; smoke exit 0; bench gate pass.
 7. Every new file ≤ 600 lines; no `docs/NN` citations; no magic numbers; trailing
    return types; spaced parens; `≤4` positional parameters.
+   **Comments: default none.** Justified only where a reader would otherwise get
+   the code *wrong*; lowercase; **max one line**; never restate a name, narrate the
+   next line, or explain the obvious. A multi-paragraph comment on a one-line field
+   is a review rejection, not a style preference — the rationale belongs in the
+   commit message or the doc that owns the decision.
 8. `docs/06` updated if the implementation revealed a gap in the table — say
    which in the PR.
 
@@ -530,15 +535,15 @@ file content from a fixture.
 
 ## Merge-conflict surface
 
-| File | Other branch | Resolution |
-|---|---|---|
-| `src/CMakeLists.txt` | 1 and 2 | **Expected conflict.** Add sources in the same block |
-| `src/main.cxx` | none | you replace the stub handlers |
-| `src/mcode/tools/*` | none | you own the directory |
-| `src/mcode/tools/session_reads.hxx` | none | **frozen — implement, do not edit** |
-| `src/mcode/fs/workspace.*` | none | read-only; if it needs a fix, say so in the PR |
+| File | You | Others | Resolution |
+|---|---|---|---|
+| `src/CMakeLists.txt` | edit | 1 and 2 edit | **Expected conflict.** Add sources in the same block |
+| `src/main.cxx` | edit | none | You replace the stub handlers |
+| `src/mcode/tools/*` | edit | none | You own the directory |
+| `src/mcode/tools/session_reads.hxx` | **implement** | 2 reads it | **Frozen header — implement, do not edit.** Branch 2 compiles against it |
+| `src/mcode/fs/workspace.{hxx,cxx}` | **consume** | none | **P2 lands there in Phase 0.** You call `write_file`; you do not add it |
 
-Do **not** touch `agent/loop.*`, `model/*`, `net/*`, `cli_commands.cxx`.
+Do **not** touch `agent/loop.*`, `model/*`, `net/*`, or `cli_commands.cxx`.
 
 ---
 
@@ -564,3 +569,4 @@ Do **not** touch `agent/loop.*`, `model/*`, `net/*`, `cli_commands.cxx`.
 - `docs/03-architecture.md` §Persistence layout — where artifacts live
 - `docs/16-roadmap.md` — what M1 gates and what is deferred to M6
 - `docs/01-north-star.md` — the core tool-schema budget
+- `docs/26-first-batch.md` §Phase 0 — P1 and P2, the two interfaces this branch consumes but does not add

@@ -413,6 +413,11 @@ That single assertion protects the cache contract, which is where the cost is.
 5. `ctest` 100% pass; `_clgate.py` exit 0; smoke exit 0; bench gate pass.
 6. Every new file ≤ 600 lines; no `docs/NN` citations; no magic numbers; trailing
    return types; spaced parens; `≤4` positional parameters (use a request struct).
+   **Comments: default none.** Justified only where a reader would otherwise get
+   the code *wrong*; lowercase; **max one line**; never restate a name, narrate the
+   next line, or explain the obvious. A multi-paragraph comment on a one-line field
+   is a review rejection, not a style preference — the rationale belongs in the
+   commit message or the doc that owns the decision.
 7. `docs/04` and `docs/05` updated where the implementation revealed the doc was
    wrong — say which in the PR.
 8. The state machine is **one function**. If it needs a framework, the design is
@@ -422,13 +427,14 @@ That single assertion protects the cache contract, which is where the cost is.
 
 ## Merge-conflict surface
 
-| File | Other branch | Resolution |
-|---|---|---|
-| `src/CMakeLists.txt` | 1 and 3 | **Expected conflict.** Add sources in the same block |
-| `src/cli_commands.cxx` | 1 (adds a single-request path) | **Expected conflict.** Yours replaces `run_exec`'s body; keep branch 1's provider selection and call your loop |
-| `src/mcode/agent/loop.hxx` | none | you own it |
-| `src/mcode/model/client.hxx` | none | **frozen — do not edit.** If a signature is wrong, say so in the PR |
-| `src/mcode/tools/session_reads.hxx` | 3 | frozen; 3 implements it |
+| File | You | Others | Resolution |
+|---|---|---|---|
+| `src/CMakeLists.txt` | edit | 1 and 3 edit | **Expected conflict.** Add sources in the same block |
+| `src/cli_commands.cxx` | edit | 1 edits | **Expected conflict.** Yours replaces `run_exec`'s body; keep branch 1's provider selection and call your loop |
+| `src/mcode/agent/loop.{hxx,cxx}` | edit | none | You own it |
+| `src/mcode/model/client.hxx` | **read** | none | **Frozen — do not edit.** If a signature is wrong, say so in the PR |
+| `src/mcode/tools/session_reads.hxx` | **read** | 3 implements | Frozen; 3 implements it |
+| `src/mcode/core/registry.hxx` | **read** | none | **P1 lands there in Phase 0.** You read `tool_def::schema_json` |
 
 Do **not** touch `model/types.*`, `model/provider.*`, `model/delta_applier.*`,
 `net/*`, or `fs/workspace.*`.
@@ -456,3 +462,4 @@ Do **not** touch `model/types.*`, `model/provider.*`, `model/delta_applier.*`,
 - `docs/15-model-layer.md` — tiering and reasoning-effort scheduling per phase
 - `docs/22-config-and-cli.md` — `[agent]`, `[context]`, and `[model].tier.*`
 - `docs/01-north-star.md` — vocabulary, and the session-start context budget
+- `docs/26-first-batch.md` §Phase 0 — P1 (`tool_def::schema_json`), and §Who owns the object graph, which this branch implements

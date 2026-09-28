@@ -44,7 +44,7 @@ assembly — those are the other two branches.
 | CLI wiring | `exec` sends one real request and streams text to stdout |
 | Provider lookup | Resolve a descriptor by name from the registry the Lua provider extension already populates |
 | Capabilities table | The compiled-in JSON table `docs/15` specifies, keyed by model id, fail-closed on an unknown id |
-| `net/http_client` | Surface `{status, headers, body}` on a failed SSE response — T4's blocker |
+| `net/http_client` | **Consume** Phase 0's `{status, headers, body}` failure outcome (P4) — do not add it yourself |
 | Tests | Unit + a loopback integration test with a stub HTTP server |
 
 ### Explicitly NOT in scope
@@ -146,16 +146,12 @@ Byte-stable rendering. This is the prompt-cache contract from `docs/05`:
   breakpoints — a left-to-right implementation corrupts the second one, and the
   symptom is a silent cache miss, not an error.
 
-**`mcode::json::document` cannot build this body.** Verified: its mutable API is
-`set_string` and `set_int` only, both flat — no arrays, no nested objects. A
-request body is `messages[]` of nested objects containing `tools[]`. Two options,
-and you must pick one and say which in the PR:
-
-- **Preferred:** extend `json::document` with `set_array` / `set_object`. It is the
-  one JSON writer (`AGENTS.md` §Correctness: one implementation per concept), the
-  addition is additive, and you are the only branch touching `support/`.
-- Use yyjson's mut API directly in a dedicated TU. Faster to write, but it becomes
-  a second JSON writer that will drift from the first.
+**`mcode::json::document` cannot build this body, and Phase 0 (P3) fixes that.**
+Verified: its mutable API is `set_string` and `set_int` only, both flat — no
+arrays, no nested objects. A request body is `messages[]` of nested objects
+containing `tools[]`. Phase 0 extends `json::document` with `set_array` /
+`set_object` (`docs/26` §Phase 0). You consume it; do not add a second JSON
+writer, and do not hand-roll the body as string concatenation.
 
 **Key order is not automatic.** `dump()` passes `YYJSON_WRITE_PRETTY` or
 `YYJSON_WRITE_NOFLAG` — there is no `YYJSON_WRITE_SORT_KEYS` in this version, and
@@ -223,11 +219,10 @@ all three:
 | `Retry-After` | the backoff delay | **no** |
 
 `Retry-After` is not a header you can re-derive; the 429 split is not decidable
-from the status. So this branch **must change `net/http_client`** — add an outcome
-that carries `{status, headers, body}` for the failure case, or an overload of
-`stream_sse` that does. That file is currently on plan 2's and plan 3's "do not
-touch" list, so **add it to your conflict surface and say so in the PR**; the
-other two branches never read it.
+from the status. **Phase 0 (P4) adds that outcome** — `docs/26` §Phase 0. You
+consume it. If Phase 0 has not landed, stop and say so rather than editing
+`net/http_client` yourself: it is a shared file and a second version of the failure
+path is worse than the missing field.
 
 Do not work around this by string-matching `"HTTP 429"`. The body is the only
 place the quota distinction lives.
@@ -424,6 +419,11 @@ speaking canned HTTP/SSE. **No external network in any test.**
 4. `ctest` 100% pass; `python _clgate.py` exit 0; smoke exit 0; bench gate pass.
 5. Every new file ≤ 600 lines; no `docs/NN` citations in code; no magic numbers;
    trailing return types; spaced parens; `≤4` positional parameters.
+   **Comments: default none.** Justified only where a reader would otherwise get
+   the code *wrong*; lowercase; **max one line**; never restate a name, narrate the
+   next line, or explain the obvious. A multi-paragraph comment on a one-line field
+   is a review rejection, not a style preference — the rationale belongs in the
+   commit message or the doc that owns the decision.
 6. `docs/14` updated: OpenSSL is now linked, with the measured size delta. If
    `docs/14`'s open question is resolved by this, resolve it there.
 7. `docs/15` unchanged unless the implementation contradicted it — then fix
@@ -440,9 +440,6 @@ Files this branch touches that another branch also touches:
 | `conanfile.py` | none | safe |
 | `src/CMakeLists.txt` | 2 and 3 | **Expected conflict.** Add your sources in the same block, alphabetical. Trivial to resolve |
 | `src/cli_commands.cxx` | 2 (replaces `run_exec`'s body) | **Expected conflict.** Yours adds the single-request path; branch 2 replaces it. Prefer branch 2's structure and keep your provider selection |
-| `src/mcode/net/http_client.{hxx,cxx}` | none | **You own this change.** T4 needs `{status, headers, body}` on a failed SSE response. Announce it in the PR; 2 and 3 never read this file |
-| `src/mcode/support/json.{hxx,cxx}` | none | **You own this change.** T2 needs nested/array writing. Additive |
-
 Do **not** touch `agent/loop.*`, `model/types.*`, `model/provider.*`,
 `model/delta_applier.*`, `core/registry.*`, or `tools/` — those are frozen or
 owned elsewhere.
@@ -471,3 +468,4 @@ owned elsewhere.
 - `docs/26-first-batch.md` §Decision 2 — the provider seam and the dogfood rule
 - `extensions/providers/init.luau` — the three reference descriptors, verified
   this session
+- `docs/26-first-batch.md` §Phase 0 — P3 (`json::document`) and P4 (`net/http_client`), the two interfaces this branch consumes but does not add
