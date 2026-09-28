@@ -59,7 +59,7 @@ namespace mcode::ext {
 			"no loaded extension provides a tool named '" + std::string{ tool_name } + "'" ) );
 	}
 
-	auto load_extensions( const std::vector< std::filesystem::path >& roots, tool_registry& registry,
+	auto load_extensions( const std::vector< std::filesystem::path >& roots,
 		model::provider_registry& providers, hook_registry& hooks,
 		const loader_options& options ) -> load_result {
 		auto outcome = load_result{ };

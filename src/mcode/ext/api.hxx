@@ -100,7 +100,14 @@ namespace mcode::ext {
 		tool_registry* registry_ = nullptr;
 		model::provider_registry* providers_ = nullptr;
 		hook_registry* hooks_ = nullptr;
-		const manifest* manifest_ = nullptr;
+
+		// A COPY, not a pointer. The loader builds a manifest per candidate and
+		// destroys it at the end of the iteration, so a pointer here dangles the
+		// moment loading moves on -- and the surface is still live, reading
+		// `manifest_.name` on every `mcode.log.*` call. A manifest is a handful of
+		// small strings; owning one per extension costs nothing and removes the
+		// aliasing entirely.
+		manifest manifest_;
 
 		// Returned by `providers()` before install. Static so the accessor needs no
 		// branch on a nullable member in its return type.

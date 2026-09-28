@@ -100,7 +100,7 @@ namespace mcode::ext {
 		auto tool = registered_tool{ };
 		tool.name = read_field_string( state, definition, "name" );
 		tool.description = read_field_string( state, definition, "description" );
-		tool.owner = self->manifest_ != nullptr ? self->manifest_->name : std::string{ };
+		tool.owner = self->manifest_.name;
 		tool.host = self->host_;
 
 		if ( tool.name.empty( ) ) {
@@ -230,9 +230,7 @@ namespace mcode::ext {
 
 		auto message = std::string{ };
 
-		if ( self->manifest_ != nullptr ) {
-			message += "[" + self->manifest_->name + "] ";
-		}
+		message += "[" + self->manifest_.name + "] ";
 
 		message += level;
 		message += ": ";
@@ -289,9 +287,9 @@ namespace mcode::ext {
 		// `net` is required to declare a provider (docs/18): a descriptor names an
 		// endpoint, and declaring one without the permission to reach it would
 		// defer the denial to the first request.
-		if ( self->manifest_ != nullptr && !self->manifest_->has_permission( "net" ) ) {
+		if ( !self->manifest_.has_permission( "net" ) ) {
 			const auto message = std::string{ "mcode.model.register: extension '" } +
-				self->manifest_->name + "' declares no 'net' permission";
+				self->manifest_.name + "' declares no 'net' permission";
 
 			lua_pushlstring( state, message.data( ), message.size( ) );
 			lua_error( state );
@@ -364,7 +362,7 @@ namespace mcode::ext {
 		lua_pop( state, 1 );
 
 		auto identifier = self->hooks_->subscribe( *self->host_, name, reference,
-			self->manifest_ != nullptr ? self->manifest_->name : std::string{ } );
+			self->manifest_.name );
 
 		if ( !identifier ) {
 			lua_unref( state, reference );
@@ -407,14 +405,14 @@ namespace mcode::ext {
 		// An extension may only emit under its OWN namespace. Subscribing to another
 		// extension's events is legitimate; emitting them is spoofing, and the two
 		// are deliberately asymmetric.
-		if ( self->manifest_ != nullptr ) {
+		{
 			const auto separator = name.find( '.' );
 			const auto prefix = separator == std::string_view::npos
 				? name : name.substr( 0, separator );
 
-			if ( prefix != self->manifest_->name ) {
+			if ( prefix != self->manifest_.name ) {
 				const auto message = std::string{ "mcode.emit: '" } + std::string{ name } +
-					"' is outside this extension's namespace ('" + self->manifest_->name +
+					"' is outside this extension's namespace ('" + self->manifest_.name +
 					".')";
 
 				lua_pushlstring( state, message.data( ), message.size( ) );
@@ -499,7 +497,7 @@ namespace mcode::ext {
 		registry_ = &registry;
 		providers_ = &providers;
 		hooks_ = &hooks;
-		manifest_ = &manifest_value;
+		manifest_ = manifest_value;
 
 		// Identity first: `mcode.ext.name` is read by tools and by the log prefix,
 		// and the definition file declares it as a field rather than a call.

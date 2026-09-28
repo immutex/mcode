@@ -168,7 +168,7 @@ TEST_CASE( "loading registers nothing when extensions are disabled", "[loader]" 
 	options.disabled = true;
 	options.register_api = register_api;
 
-	auto report = ext::load_extensions( { extensions_root( ) }, registry, providers, hooks, options ).report;
+	auto report = ext::load_extensions( { extensions_root( ) }, providers, hooks, options ).report;
 
 	REQUIRE( report.loaded.empty( ) );
 	REQUIRE( report.total_tools( ) == 0 );
@@ -189,7 +189,7 @@ TEST_CASE( "a disabled-name list skips without failing", "[loader]" ) {
 	options.disabled_names = { "hello-tool" };
 	options.register_api = register_api;
 
-	auto report = ext::load_extensions( { extensions_root( ) }, registry, providers, hooks, options ).report;
+	auto report = ext::load_extensions( { extensions_root( ) }, providers, hooks, options ).report;
 
 	REQUIRE( report.disabled == 1 );
 
@@ -209,7 +209,7 @@ TEST_CASE( "a bad manifest fails the extension, not the session", "[loader]" ) {
 	auto options = ext::loader_options{ };
 	options.register_api = register_api;
 
-	auto report = ext::load_extensions( { extensions_root( ) }, registry, providers, hooks, options ).report;
+	auto report = ext::load_extensions( { extensions_root( ) }, providers, hooks, options ).report;
 
 	if ( report.loaded.size( ) != 1 ) {
 		auto reasons = std::string{ };
@@ -245,7 +245,7 @@ TEST_CASE( "load order is deterministic", "[loader]" ) {
 		auto options = ext::loader_options{ };
 		options.register_api = register_api;
 
-		auto report = ext::load_extensions( { extensions_root( ) }, registry, providers, hooks, options ).report;
+		auto report = ext::load_extensions( { extensions_root( ) }, providers, hooks, options ).report;
 
 		if ( report.loaded.size( ) != 1 || report.failed.size( ) != 1 ) {
 			FAIL( "unexpected report:" << describe( report ) );
@@ -268,8 +268,8 @@ TEST_CASE( "a missing root is skipped, not an error", "[loader]" ) {
 	options.register_api = register_api;
 
 	auto report = ext::load_extensions(
-		{ std::filesystem::temp_directory_path( ) / "mcode-no-such-root" }, registry, providers,
-		hooks, options ).report;
+		{ std::filesystem::temp_directory_path( ) / "mcode-no-such-root" }, providers, hooks,
+		options ).report;
 
 	REQUIRE( report.loaded.empty( ) );
 	REQUIRE( report.failed.empty( ) );
@@ -328,8 +328,8 @@ TEST_CASE( "the shipped reference providers load", "[loader]" ) {
 	auto options = ext::loader_options{ };
 	options.register_api = register_api;
 
-	auto report = ext::load_extensions( { std::filesystem::path{ MCODE_EXTENSIONS_ROOT } },
-		registry, providers, hooks, options ).report;
+	auto report = ext::load_extensions( { std::filesystem::path{ MCODE_EXTENSIONS_ROOT } }, providers, hooks,
+		options ).report;
 
 	// It registers providers rather than tools, so the registry stays empty --
 	// but it must not be reported as failed.
@@ -355,7 +355,7 @@ TEST_CASE( "a registered tool is callable and reaches the extension", "[loader]"
 	auto options = ext::loader_options{ };
 	options.register_api = register_api;
 
-	auto loaded = ext::load_extensions( { extensions_root( ) }, registry, providers, hooks, options );
+	auto loaded = ext::load_extensions( { extensions_root( ) }, providers, hooks, options );
 
 	if ( loaded.report.loaded.size( ) != 1 ) {
 		FAIL( "unexpected report:" << describe( loaded.report ) );
@@ -398,7 +398,7 @@ TEST_CASE( "invoking an unknown tool is an error, not a crash", "[loader]" ) {
 	auto options = ext::loader_options{ };
 	options.register_api = register_api;
 
-	auto loaded = ext::load_extensions( { extensions_root( ) }, registry, providers, hooks, options );
+	auto loaded = ext::load_extensions( { extensions_root( ) }, providers, hooks, options );
 
 	auto missing = loaded.invoke( "no-such-tool", "{}" );
 	REQUIRE_FALSE( static_cast< bool >( missing ) );
@@ -418,7 +418,7 @@ TEST_CASE( "an environmental failure returns the extension's message", "[loader]
 	auto options = ext::loader_options{ };
 	options.register_api = register_api;
 
-	auto loaded = ext::load_extensions( { extensions_root( ) }, registry, providers, hooks, options );
+	auto loaded = ext::load_extensions( { extensions_root( ) }, providers, hooks, options );
 
 	auto missing_name = loaded.invoke( "hello", "{}" );
 
@@ -459,7 +459,7 @@ TEST_CASE( "a raised error does not become an empty result", "[loader]" ) {
 	auto options = ext::loader_options{ };
 	options.register_api = register_api;
 
-	auto loaded = ext::load_extensions( { root }, registry, providers, hooks, options );
+	auto loaded = ext::load_extensions( { root }, providers, hooks, options );
 
 	if ( loaded.report.loaded.size( ) != 1 ) {
 		FAIL( "unexpected report:" << describe( loaded.report ) );
@@ -495,8 +495,8 @@ TEST_CASE( "the providers extension declares three providers through the API", "
 	auto options = ext::loader_options{ };
 	options.register_api = register_api;
 
-	auto loaded = ext::load_extensions( { std::filesystem::path{ MCODE_EXTENSIONS_ROOT } },
-		registry, providers, hooks, options );
+	auto loaded = ext::load_extensions( { std::filesystem::path{ MCODE_EXTENSIONS_ROOT } }, providers, hooks,
+		options );
 
 	if ( loaded.report.loaded.size( ) != 1 ) {
 		FAIL( "unexpected report:" << describe( loaded.report ) );
@@ -539,8 +539,8 @@ TEST_CASE( "disabling every extension leaves a working registry", "[loader]" ) {
 	options.register_api = register_api;
 
 	auto loaded = ext::load_extensions(
-		{ extensions_root( ), std::filesystem::path{ MCODE_EXTENSIONS_ROOT } }, registry,
-		providers, hooks, options );
+		{ extensions_root( ), std::filesystem::path{ MCODE_EXTENSIONS_ROOT } }, providers,
+		hooks, options );
 
 	// Nothing loaded, nothing failed, everything accounted for as disabled.
 	REQUIRE( loaded.report.loaded.empty( ) );
@@ -576,7 +576,7 @@ TEST_CASE( "the surface exposes exactly the frozen fields", "[loader]" ) {
 	auto options = ext::loader_options{ };
 	options.register_api = register_api;
 
-	auto loaded = ext::load_extensions( { extensions_root( ) }, registry, providers, hooks, options );
+	auto loaded = ext::load_extensions( { extensions_root( ) }, providers, hooks, options );
 
 	REQUIRE( loaded.extensions.size( ) == 1 );
 
@@ -631,8 +631,7 @@ TEST_CASE( "a hook written in Luau vetoes through the bus", "[loader]" ) {
 	auto options = ext::loader_options{ };
 	options.register_api = register_api;
 
-	auto loaded = ext::load_extensions( { extensions_root( ) }, registry, providers, hooks,
-		options );
+	auto loaded = ext::load_extensions( { extensions_root( ) }, providers, hooks, options );
 
 	REQUIRE( loaded.report.loaded.size( ) == 1 );
 	REQUIRE( hooks.size( ) == 2 );
@@ -679,6 +678,12 @@ TEST_CASE( "a custom event reaches the extension and never the log", "[loader]" 
 	// docs/20's closed tagged union exists so the session log's schema stays
 	// explicit. An extension-invented event name must not become a kind, so custom
 	// events dispatch inside the hook registry and never touch the bus.
+	//
+	// This test also guards a lifetime rule that bit once: everything the API
+	// surface or a hook holds must outlive the LOAD, not just the loop iteration
+	// that created it. The handler here logs through `mcode.log.*`, which reads the
+	// extension's manifest -- so if the surface kept a pointer to the loader's
+	// local manifest, this is the call that reads freed memory.
 	auto registry = tool_registry{ };
 	g_registry = &registry;
 
@@ -689,8 +694,7 @@ TEST_CASE( "a custom event reaches the extension and never the log", "[loader]" 
 	auto options = ext::loader_options{ };
 	options.register_api = register_api;
 
-	auto loaded = ext::load_extensions( { extensions_root( ) }, registry, providers, hooks,
-		options );
+	auto loaded = ext::load_extensions( { extensions_root( ) }, providers, hooks, options );
 
 	REQUIRE( loaded.report.loaded.size( ) == 1 );
 
@@ -746,7 +750,7 @@ end)
 	auto options = ext::loader_options{ };
 	options.register_api = register_api;
 
-	auto loaded = ext::load_extensions( { root }, registry, providers, hooks, options );
+	auto loaded = ext::load_extensions( { root }, providers, hooks, options );
 
 	REQUIRE( loaded.report.loaded.size( ) == 1 );
 	REQUIRE( hooks.handlers_for( "tool.pre_call" ) == 2 );
@@ -786,8 +790,7 @@ TEST_CASE( "a clean call clears the consecutive-failure counter", "[loader]" ) {
 	auto options = ext::loader_options{ };
 	options.register_api = register_api;
 
-	auto loaded = ext::load_extensions( { extensions_root( ) }, registry, providers, hooks,
-		options );
+	auto loaded = ext::load_extensions( { extensions_root( ) }, providers, hooks, options );
 
 	REQUIRE( loaded.report.loaded.size( ) == 1 );
 
@@ -821,7 +824,7 @@ TEST_CASE( "an unrecognised hook name is refused, not silently inert", "[loader]
 	auto options = ext::loader_options{ };
 	options.register_api = register_api;
 
-	auto loaded = ext::load_extensions( { root }, registry, providers, hooks, options );
+	auto loaded = ext::load_extensions( { root }, providers, hooks, options );
 
 	REQUIRE( loaded.report.failed.size( ) == 1 );
 	REQUIRE( loaded.report.failed.front( ).reason.find( "tool.precal" ) != std::string::npos );
@@ -842,8 +845,7 @@ TEST_CASE( "unloading an extension detaches its hooks", "[loader]" ) {
 	auto options = ext::loader_options{ };
 	options.register_api = register_api;
 
-	auto loaded = ext::load_extensions( { extensions_root( ) }, registry, providers, hooks,
-		options );
+	auto loaded = ext::load_extensions( { extensions_root( ) }, providers, hooks, options );
 
 	REQUIRE( loaded.report.loaded.size( ) == 1 );
 	REQUIRE( hooks.size( ) == 2 );

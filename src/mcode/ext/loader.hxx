@@ -104,8 +104,16 @@ namespace mcode::ext {
 	// (docs/19 §Failure, quarantine, and doctor). Registration is expected to be
 	// cheap: an extension that does work at load time is a bug the report makes
 	// visible as a slow load.
+	// The tool registry is NOT a parameter: it arrives through
+	// `options.register_api`, which is the single place that decides where a
+	// registered tool lands. Passing it here as well threaded the same reference
+	// twice and left one copy unread.
+	//
+	// Providers and hooks ARE parameters. The caller inspects them afterwards, and
+	// the API surface holds pointers into them for the lifetime of every loaded
+	// extension -- so the loader must not own them.
 	[[nodiscard]] auto load_extensions( const std::vector< std::filesystem::path >& roots,
-		tool_registry& registry, model::provider_registry& providers, hook_registry& hooks,
+		model::provider_registry& providers, hook_registry& hooks,
 		const loader_options& options = { } ) -> load_result;
 
 	// The real API installer: everything in docs/18 that v1 implements. Passed as

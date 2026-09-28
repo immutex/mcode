@@ -153,7 +153,6 @@ namespace mcode::events {
 		std::vector< entry > subscribers_[ KIND_COUNT ];
 
 		std::deque< event > pending_;
-		std::uint64_t next_sequence_ = 0;
 		subscription_id next_id_ = 1;
 		std::size_t depth_ = 0;
 		std::size_t max_depth_ = 0;

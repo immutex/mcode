@@ -246,7 +246,15 @@ code comments.
     warn. When the only reader of a registry slot is such a function, the slot is
     dead too — remove both, do not suppress the warning.
 
-30. **Sorting before comparison is not optional in reports.** Extension discovery
+30. **Nothing loaded may point into the loader's per-candidate locals.** The
+    loader builds a `manifest` per directory inside the loop and destroys it at the
+    end of the iteration, while the `api_surface` it installed lives on and reads
+    `manifest_.name` on every `mcode.log.*` call. Keeping a `const manifest*`
+    there is a use-after-free whose symptom depends on stack layout: it crashed
+    only after an unrelated signature change, and resolving it needed the linker
+    map. The surface now OWNS a copy — a manifest is a handful of small strings.
+
+31. **Sorting before comparison is not optional in reports.** Extension discovery
     sorts by name, and JSON object keys are emitted in sorted order, so two runs
     are byte-identical. An unsorted report makes a duplicate-name or load-order
     failure unreproducible.

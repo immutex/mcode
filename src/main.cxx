@@ -683,8 +683,7 @@ auto main( int argument_count, char** arguments ) -> int {
 		auto options = mcode::ext::loader_options{ };
 		options.register_api = mcode::ext::default_register_api( registry, providers );
 
-		auto loaded = mcode::ext::load_extensions( { extensions }, registry, providers, hooks,
-			options );
+		auto loaded = mcode::ext::load_extensions( { extensions }, providers, hooks, options );
 
 		for ( const auto& failure : loaded.report.failed ) {
 			std::printf( "  loader: %s failed: %s\n", failure.name.c_str( ),
@@ -780,8 +779,8 @@ auto main( int argument_count, char** arguments ) -> int {
 		disabled_options.register_api = mcode::ext::default_register_api( bare_registry,
 			bare_providers );
 
-		auto bare = mcode::ext::load_extensions( { extensions }, bare_registry, bare_providers,
-			bare_hooks, disabled_options );
+		auto bare = mcode::ext::load_extensions( { extensions }, bare_providers, bare_hooks,
+			disabled_options );
 
 		check( bare.report.loaded.empty( ), "nothing loaded when disabled" );
 		check( bare.report.failed.empty( ), "disabling is not a failure" );
@@ -810,8 +809,8 @@ auto main( int argument_count, char** arguments ) -> int {
 			shipped_providers );
 
 		auto shipped = mcode::ext::load_extensions(
-			{ std::filesystem::path{ MCODE_SMOKE_SHIPPED_EXTENSIONS } }, shipped_registry,
-			shipped_providers, shipped_hooks, shipped_options );
+			{ std::filesystem::path{ MCODE_SMOKE_SHIPPED_EXTENSIONS } }, shipped_providers,
+			shipped_hooks, shipped_options );
 
 		for ( const auto& failure : shipped.report.failed ) {
 			std::printf( "  loader: %s failed: %s\n", failure.name.c_str( ),

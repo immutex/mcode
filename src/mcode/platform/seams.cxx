@@ -9,6 +9,8 @@
 #include <io.h>
 #include <process.h>
 #else
+#include <csignal>
+#include <signal.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
 #endif
