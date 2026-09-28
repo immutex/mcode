@@ -12,7 +12,7 @@
 
 namespace mcode::model {
 
-	// A provider described as data (docs/26 decision 2).
+	// A provider described as data.
 	//
 	// The hot path stays in C++: HTTP, SSE framing, retry, the error taxonomy,
 	// and egress policy are not negotiable, and per-token delta parsing through a
@@ -68,6 +68,19 @@ namespace mcode::model {
 		// SSE `event:` names that mean the stream is over. Checked against the
 		// event name, not the data.
 		std::vector< std::string > terminal_events;
+
+		// SSE `event:` names that gate the text pointer and the tool-call pointers
+		// respectively. Empty means "every event", which is right for a wire format
+		// that encodes meaning in the payload alone.
+		//
+		// A gate is required when a format puts two different things at the SAME
+		// pointer and distinguishes them only by the event name. OpenAI's Responses
+		// API does exactly that: text arrives as `response.output_text.delta` and
+		// tool arguments as `response.function_call_arguments.delta`, both at
+		// `/delta`. Without a gate the text of every turn would also be appended to
+		// the tool-call arguments.
+		std::vector< std::string > text_events;
+		std::vector< std::string > tool_call_events;
 	};
 
 	struct request_spec {
@@ -127,14 +140,18 @@ namespace mcode::model {
 
 	// Holds the descriptors declared at load time, by name.
 	//
-	// Descriptors are data, not callbacks (docs/18): the provider seam applies
+	// Descriptors are data, not callbacks: the provider seam applies
 	// them natively, so a registry of plain structs is all an extension can
 	// contribute. There is no per-provider code path in the VM.
 	class provider_registry {
 	public:
 		// A duplicate name is refused rather than shadowed: two providers claiming
 		// one name would make `--model` ambiguous.
-		auto add( provider_descriptor descriptor ) -> status;
+		//
+		// `owner` is the extension that declared it, and empty for a provider the
+		// host ships. It is what makes an unload drop exactly that extension's
+		// entries rather than all of them.
+		auto add( provider_descriptor descriptor, std::string owner = { } ) -> status;
 
 		[[nodiscard]] auto find( std::string_view name ) const -> const provider_descriptor*;
 

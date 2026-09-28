@@ -1,7 +1,10 @@
 #include "mcode/model/provider.hxx"
 
+#include <algorithm>
 #include <array>
 #include <map>
+#include <span>
+#include <string>
 
 #include "mcode/support/json.hxx"
 
@@ -10,8 +13,25 @@ namespace mcode::model {
 	namespace {
 
 		auto is_json_pointer( const std::string_view text ) -> bool {
-			// A JSON pointer is empty (whole document) or starts with '/'.
-			return text.empty( ) || text.front( ) == '/';
+			// Empty means the whole document. Otherwise a JSON pointer is a sequence
+			// of `/`-prefixed tokens.
+			if ( text.empty( ) ) {
+				return true;
+			}
+
+			if ( text.front( ) != '/' ) {
+				return false;
+			}
+
+			// The applier resolves pointers literally, so the two RFC 6901 forms it
+			// cannot honour are refused here rather than resolving to nothing at
+			// first token: `/-` means "append to the array" and `*` is not a
+			// wildcard in a JSON pointer at all.
+			if ( text.find( "/-" ) != std::string_view::npos ) {
+				return false;
+			}
+
+			return text.find( '*' ) == std::string_view::npos;
 		}
 
 		auto is_absolute_url( const std::string_view text ) -> bool {
@@ -54,7 +74,10 @@ namespace mcode::model {
 				"provider '" + descriptor.name + "' maps neither text nor tool-call deltas" ) );
 		}
 
-		const auto pointers = std::array< std::pair< const char*, const std::string* >, 11 >{ {
+		// Every pointer the descriptor can carry, so a typo is caught here rather
+		// than silently dropping a field at first token. Adding a pointer to the
+		// struct without adding it here is the bug this array exists to prevent.
+		const auto pointers = std::array< std::pair< const char*, const std::string* >, 12 >{ {
 			{ "stream.text_delta", &descriptor.stream.text_delta },
 			{ "stream.thinking_delta", &descriptor.stream.thinking_delta },
 			{ "stream.tool_call_index", &descriptor.stream.tool_call_index },
@@ -66,6 +89,7 @@ namespace mcode::model {
 			{ "stream.usage_output", &descriptor.stream.usage_output },
 			{ "stream.usage_cached_read", &descriptor.stream.usage_cached_read },
 			{ "stream.usage_cache_write", &descriptor.stream.usage_cache_write },
+			{ "stream.usage_reasoning", &descriptor.stream.usage_reasoning },
 		} };
 
 		for ( const auto& [ field, value ] : pointers ) {
@@ -91,12 +115,85 @@ namespace mcode::model {
 		return { };
 	}
 
+	namespace {
+
+		// The keys a descriptor accepts, per level. A typo such as `steam` for
+		// `stream` would otherwise be dropped silently, and the descriptor would load
+		// with the field unset -- the first-token failure validation exists to
+		// prevent exactly that.
+		inline constexpr auto ALLOWED_TOP_LEVEL = std::array< std::string_view, 7 >{
+			"name", "endpoint", "auth", "request", "stream", "extra_headers", "on_event",
+		};
+
+		inline constexpr auto ALLOWED_AUTH = std::array< std::string_view, 4 >{
+			"from", "name", "header", "scheme",
+		};
+
+		inline constexpr auto ALLOWED_STREAM = std::array< std::string_view, 8 >{
+			"text_delta", "thinking_delta", "tool_calls", "finish", "usage", "terminal_events",
+			"text_events", "tool_call_events",
+		};
+
+		inline constexpr auto ALLOWED_TOOL_CALLS = std::array< std::string_view, 4 >{
+			"index", "id", "name", "args",
+		};
+
+		inline constexpr auto ALLOWED_USAGE = std::array< std::string_view, 5 >{
+			"in", "out", "cached_read", "cache_write", "reasoning",
+		};
+
+		inline constexpr auto ALLOWED_REQUEST = std::array< std::string_view, 7 >{
+			"model", "messages", "tools", "max_output_tokens", "temperature",
+			"response_schema", "reasoning_effort",
+		};
+
+		auto reject_unknown_at( const json::document& document, const std::string_view path,
+			const std::span< const std::string_view > allowed ) -> status {
+			for ( const auto& key : document.keys_at( path ) ) {
+				if ( std::find( allowed.begin( ), allowed.end( ), key ) == allowed.end( ) ) {
+					return std::unexpected( fail( errc::config,
+						"unknown descriptor key '" + key + "' at '" +
+						( path.empty( ) ? std::string{ "<root>" } : std::string{ path } ) + "'" ) );
+				}
+			}
+
+			return { };
+		}
+
+		auto reject_unknown_keys( const json::document& document ) -> status {
+			// Every level is checked, including the ones the descriptor may omit. A
+			// block that is absent yields no keys, so this costs nothing when the
+			// descriptor is minimal.
+			const auto levels = std::array< std::pair< const char*, std::span< const std::string_view > >, 6 >{ {
+				{ "", ALLOWED_TOP_LEVEL },
+				{ "/auth", ALLOWED_AUTH },
+				{ "/stream", ALLOWED_STREAM },
+				{ "/stream/tool_calls", ALLOWED_TOOL_CALLS },
+				{ "/stream/usage", ALLOWED_USAGE },
+				{ "/request", ALLOWED_REQUEST },
+			} };
+
+			for ( const auto& [path, allowed] : levels ) {
+				if ( auto known = reject_unknown_at( document, path, allowed ); !known ) {
+					return known;
+				}
+			}
+
+			return { };
+		}
+
+	}
+
 	auto descriptor_from_json( const std::string_view json_text ) -> result< provider_descriptor > {
 		auto parsed = json::document::parse( json_text );
 
 		if ( !parsed ) {
 			return std::unexpected( fail( errc::json,
 				"provider descriptor is not valid JSON: " + parsed.error( ).msg ) );
+		}
+
+		if ( auto known = reject_unknown_keys( *parsed ); !known ) {
+			return std::unexpected( known.error( ) );
 		}
 
 		auto descriptor = provider_descriptor{ };
@@ -166,7 +263,7 @@ namespace mcode::model {
 			descriptor.request.response_schema = *field;
 		}
 
-		// The Lua-facing form nests the stream mapping, matching docs/26.
+		// The Lua-facing form nests the stream mapping.
 		if ( auto text = parsed->pointer_string( "/stream/text_delta" ) ) {
 			descriptor.stream.text_delta = *text;
 		}
@@ -215,6 +312,26 @@ namespace mcode::model {
 			descriptor.stream.usage_reasoning = *usage;
 		}
 
+		if ( parsed->has_pointer( "/stream/text_events" ) ) {
+			auto gated = parsed->pointer_string_array( "/stream/text_events" );
+
+			if ( !gated ) {
+				return std::unexpected( gated.error( ) );
+			}
+
+			descriptor.stream.text_events = *gated;
+		}
+
+		if ( parsed->has_pointer( "/stream/tool_call_events" ) ) {
+			auto gated = parsed->pointer_string_array( "/stream/tool_call_events" );
+
+			if ( !gated ) {
+				return std::unexpected( gated.error( ) );
+			}
+
+			descriptor.stream.tool_call_events = *gated;
+		}
+
 		// Terminal markers differ per provider -- [OI] Chat Completions sends the
 		// [DONE] sentinel, Anthropic sends a message_stop event, Responses sends
 		// response.completed -- so this is a descriptor field, not a hardcoded list.
@@ -236,7 +353,7 @@ namespace mcode::model {
 	}
 
 
-	auto provider_registry::add( provider_descriptor descriptor ) -> status {
+	auto provider_registry::add( provider_descriptor descriptor, std::string owner ) -> status {
 		if ( descriptor.name.empty( ) ) {
 			return std::unexpected( fail( errc::config, "a provider needs a name" ) );
 		}
@@ -252,6 +369,7 @@ namespace mcode::model {
 
 		auto record = entry{ };
 		record.descriptor = std::move( descriptor );
+		record.owner = std::move( owner );
 
 		entries_.emplace( record.descriptor.name, std::move( record ) );
 
@@ -260,7 +378,8 @@ namespace mcode::model {
 
 	auto provider_registry::find( const std::string_view name ) const
 		-> const provider_descriptor* {
-		const auto found = entries_.find( std::string{ name } );
+		// std::less<> makes the map transparent, so this does not build a string.
+		const auto found = entries_.find( name );
 
 		return found != entries_.end( ) ? &found->second.descriptor : nullptr;
 	}
@@ -269,8 +388,6 @@ namespace mcode::model {
 		auto out = std::vector< const provider_descriptor* >{ };
 
 		for ( const auto& [ name, record ] : entries_ ) {
-			(void)name;
-
 			out.push_back( &record.descriptor );
 		}
 
@@ -282,8 +399,6 @@ namespace mcode::model {
 		auto out = std::vector< const provider_descriptor* >{ };
 
 		for ( const auto& [ name, record ] : entries_ ) {
-			(void)name;
-
 			if ( record.owner == owner ) {
 				out.push_back( &record.descriptor );
 			}

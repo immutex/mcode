@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -52,12 +53,16 @@ namespace mcode::model {
 		[[nodiscard]] auto accumulated_usage( ) const noexcept -> const usage& { return usage_; }
 
 	private:
+		// A model does not issue more parallel calls than this, and the index is
+		// wire-supplied. Without a bound the pending set is an amplification
+		// primitive: one event per index, each retained for the whole stream.
+		inline static constexpr std::int64_t MAX_PARALLEL_CALLS = 256;
+
 		struct pending_call {
 			int index = 0;
 			std::string id;
 			std::string name;
 			std::string args_fragments;
-			bool emitted = false;
 		};
 
 		auto pending_for( const int index ) -> pending_call&;

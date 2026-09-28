@@ -1,5 +1,6 @@
 #include "mcode/model/delta_applier.hxx"
 
+#include <algorithm>
 #include <optional>
 
 #include "mcode/support/json.hxx"
@@ -37,6 +38,16 @@ namespace mcode::model {
 			return std::nullopt;
 		}
 
+		// An empty gate admits every event; otherwise the event name must be listed.
+		auto event_allowed( const std::string_view name, const std::vector< std::string >& gate )
+			-> bool {
+			if ( gate.empty( ) ) {
+				return true;
+			}
+
+			return std::find( gate.begin( ), gate.end( ), name ) != gate.end( );
+		}
+
 	}
 
 	delta_applier::delta_applier( const provider_descriptor& descriptor )
@@ -71,7 +82,17 @@ namespace mcode::model {
 		// The escape hatch replaces the whole mapping, including terminal detection:
 		// a provider exotic enough to need it is exotic enough that the sentinel and
 		// event-name rules do not apply.
-		if ( descriptor_.escape_hatch && escape_ ) {
+		if ( descriptor_.escape_hatch ) {
+			// Declared but not installed. Falling through to the declarative mapping
+			// would be the worst option: the descriptor maps nothing, so every event
+			// would be accepted and silently produce an empty turn with no terminal
+			// ever seen.
+			if ( !escape_ ) {
+				return std::unexpected( fail( errc::protocol,
+					"provider '" + descriptor_.name +
+					"' uses the on_event escape hatch but no hatch is installed" ) );
+			}
+
 			return escape_( event_name, data );
 		}
 
@@ -103,13 +124,20 @@ namespace mcode::model {
 				"stream event is not JSON: " + parsed.error( ).msg ) );
 		}
 
-		if ( auto text = optional_string( *parsed, descriptor_.stream.text_delta ) ) {
-			if ( !text->empty( ) ) {
-				auto event = chat_event{ };
-				event.type = chat_event::kind::text_delta;
-				event.text = *text;
+		// A pointer may be gated on the SSE event name, for wire formats that put two
+		// different things at the same pointer. An empty gate means "every event".
+		const auto text_applies = event_allowed( event_name, descriptor_.stream.text_events );
+		const auto tool_applies = event_allowed( event_name, descriptor_.stream.tool_call_events );
 
-				produced.push_back( std::move( event ) );
+		if ( text_applies ) {
+			if ( auto text = optional_string( *parsed, descriptor_.stream.text_delta ) ) {
+				if ( !text->empty( ) ) {
+					auto event = chat_event{ };
+					event.type = chat_event::kind::text_delta;
+					event.text = *text;
+
+					produced.push_back( std::move( event ) );
+				}
 			}
 		}
 
@@ -125,15 +153,31 @@ namespace mcode::model {
 
 		// Tool-call fragments. The index defaults to 0 for providers that only
 		// ever send one call and omit the field.
-		const auto index = optional_int( *parsed, descriptor_.stream.tool_call_index )
+		const auto raw_index = optional_int( *parsed, descriptor_.stream.tool_call_index )
 			.value_or( 0 );
 
-		auto id_fragment = optional_string( *parsed, descriptor_.stream.tool_call_id );
-		auto name_fragment = optional_string( *parsed, descriptor_.stream.tool_call_name );
-		auto args_fragment = optional_string( *parsed, descriptor_.stream.tool_call_args );
+		// The index comes off the wire, so it is untrusted. It addresses an array
+		// and is stored as an int: a negative or out-of-range value would be a
+		// truncating cast followed by unbounded growth, which is a hostile gateway's
+		// amplification primitive -- ten bytes in, megabytes retained.
+		if ( raw_index < 0 || raw_index >= MAX_PARALLEL_CALLS ) {
+			return std::unexpected( fail( errc::protocol,
+				"tool-call index " + std::to_string( raw_index ) + " is outside [0, " +
+				std::to_string( MAX_PARALLEL_CALLS ) + ")" ) );
+		}
+
+		auto id_fragment = tool_applies
+			? optional_string( *parsed, descriptor_.stream.tool_call_id )
+			: std::nullopt;
+		auto name_fragment = tool_applies
+			? optional_string( *parsed, descriptor_.stream.tool_call_name )
+			: std::nullopt;
+		auto args_fragment = tool_applies
+			? optional_string( *parsed, descriptor_.stream.tool_call_args )
+			: std::nullopt;
 
 		if ( id_fragment || name_fragment || args_fragment ) {
-			auto& call = pending_for( static_cast< int >( index ) );
+			auto& call = pending_for( static_cast< int >( raw_index ) );
 
 			// Fragments concatenate: a provider splits a call's arguments across
 			// arbitrary events, so the id and name are also treated as fragments
@@ -201,7 +245,11 @@ namespace mcode::model {
 		// as JSON is still emitted, with its raw fragments, so the caller sees a
 		// truncated call rather than a silently missing one.
 		for ( auto& call : pending_ ) {
-			if ( call.name.empty( ) ) {
+			// Only a call that carries nothing at all is skipped. Gating on a name
+			// would discard every call from a format that streams arguments without
+			// ever naming the function -- [OI] Responses does exactly that, and the
+			// caller would see a turn with no tool calls and no explanation.
+			if ( call.name.empty( ) && call.id.empty( ) && call.args_fragments.empty( ) ) {
 				continue;
 			}
 

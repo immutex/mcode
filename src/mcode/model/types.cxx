@@ -54,15 +54,15 @@ namespace mcode::model {
 		return input + output;
 	}
 
-	auto compute_cost( const capabilities& caps, const usage& counts ) -> double {
+	auto compute_cost( const capabilities& model_capabilities, const usage& counts ) -> double {
 		constexpr auto PER_MILLION = 1'000'000.0;
 
 		const auto billed_input = std::max< std::int64_t >( 0, counts.input - counts.cached_read );
 
-		return ( static_cast< double >( billed_input ) * caps.price_input +
-			static_cast< double >( counts.cached_read ) * caps.price_cached_read +
-			static_cast< double >( counts.cache_write ) * caps.price_cache_write +
-			static_cast< double >( counts.output ) * caps.price_output ) / PER_MILLION;
+		return ( static_cast< double >( billed_input ) * model_capabilities.price_input +
+			static_cast< double >( counts.cached_read ) * model_capabilities.price_cached_read +
+			static_cast< double >( counts.cache_write ) * model_capabilities.price_cache_write +
+			static_cast< double >( counts.output ) * model_capabilities.price_output ) / PER_MILLION;
 	}
 
 }

@@ -47,10 +47,14 @@ mcode.model.register({
 	-- pointer on both, distinguished by the event name.
 	stream = {
 		text_delta = "/delta",
+		text_events = { "response.output_text.delta" },
+
 		tool_calls = {
 			id = "/item_id",
 			args = "/delta",
 		},
+		tool_call_events = { "response.function_call_arguments.delta" },
+
 		terminal_events = { "response.completed", "response.failed", "response.incomplete" },
 	},
 })

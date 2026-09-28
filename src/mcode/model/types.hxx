@@ -10,7 +10,7 @@
 
 namespace mcode::model {
 
-	// Canonical provider-neutral model (docs/15). Providers are thin: translate a
+	// Canonical provider-neutral model. Providers are thin: translate a
 	// request, parse a stream, own no policy. Everything here is a value type so
 	// a request can be copied for a retry or a branch without aliasing.
 	//
@@ -53,7 +53,7 @@ namespace mcode::model {
 
 		// tool_call: the provider's call id, the tool name, and the arguments as
 		// a JSON object. Tool arguments arrive as string fragments and are only
-		// parsed once the call is complete (docs/15 §Streaming), so an incomplete
+		// parsed once the call is complete, so an incomplete
 		// call is represented by an empty args_json, never by partial JSON.
 		std::string tool_call_id;
 		std::string tool_name;
@@ -90,7 +90,7 @@ namespace mcode::model {
 	};
 
 	// Reasoning effort. Providers that lack it ignore the field; the registry
-	// says which levels a model accepts (docs/15 §Capabilities).
+	// says which levels a model accepts.
 	enum class effort {
 		provider_default,
 		low,
@@ -177,13 +177,12 @@ namespace mcode::model {
 		std::int64_t cached_read = 0;
 		std::int64_t cache_write = 0;
 		std::int64_t reasoning = 0;
-		double cost_usd = 0.0;
 
 		auto add( const chat_event& event ) -> void;
 		[[nodiscard]] auto total_tokens( ) const noexcept -> std::int64_t;
 	};
 
-	// What a model accepts. Compiled-in JSON table, not code (docs/15).
+	// What a model accepts. Compiled-in JSON table, not code.
 	struct capabilities {
 		std::string model;
 
@@ -205,7 +204,7 @@ namespace mcode::model {
 	};
 
 	// Cost is computed from provider-reported usage only, never estimated from a
-	// tokenizer (docs/15). An unknown model prices at zero rather than guessing.
+	// tokenizer. An unknown model prices at zero rather than guessing.
 	[[nodiscard]] auto compute_cost( const capabilities& caps, const usage& counts ) -> double;
 
 }
