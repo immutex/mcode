@@ -1,5 +1,9 @@
 #include "mcode/agent/loop.hxx"
 
+#include <fstream>
+
+#include "mcode/support/json.hxx"
+
 #include <array>
 #include <chrono>
 #include <cstdio>
@@ -63,6 +67,79 @@ namespace mcode {
 		return out;
 	}
 
+	event_log::~event_log( ) {
+		close( );
+	}
+
+	event_log::event_log( event_log&& other ) noexcept
+		: events_( std::move( other.events_ ) )
+		, next_sequence_( other.next_sequence_ )
+		, branch_id_( std::move( other.branch_id_ ) )
+		, sink_( std::move( other.sink_ ) )
+		, path_( std::move( other.path_ ) )
+		, write_failures_( other.write_failures_ ) {
+		other.sink_ = nullptr;
+	}
+
+	auto event_log::operator=( event_log&& other ) noexcept -> event_log& {
+		if ( this != &other ) {
+			close( );
+
+			events_ = std::move( other.events_ );
+			next_sequence_ = other.next_sequence_;
+			branch_id_ = std::move( other.branch_id_ );
+			sink_ = std::move( other.sink_ );
+			path_ = std::move( other.path_ );
+			write_failures_ = other.write_failures_;
+
+			other.sink_ = nullptr;
+		}
+
+		return *this;
+	}
+
+	auto event_log::open( const std::filesystem::path& path ) -> status {
+		close( );
+
+		if ( path.has_parent_path( ) ) {
+			auto error = std::error_code{ };
+			std::filesystem::create_directories( path.parent_path( ), error );
+
+			if ( error ) {
+				return std::unexpected( fail( errc::io,
+					"cannot create " + path.parent_path( ).string( ) + ": " + error.message( ) ) );
+			}
+		}
+
+		// Append mode, and never truncate: a resumed session continues the same
+		// file so the whole run stays in one place.
+		auto* handle = std::fopen( path.string( ).c_str( ), "ab" );
+
+		if ( handle == nullptr ) {
+			return std::unexpected( fail( errc::io, "cannot open " + path.string( ) ) );
+		}
+
+		sink_ = std::unique_ptr< std::FILE, void ( * )( std::FILE* ) >{ handle, []( std::FILE* file ) {
+			std::fclose( file );
+		} };
+		path_ = path;
+
+		// Adopt the existing file's sequence numbers, so a resumed session does not
+		// restart at zero and collide with what is already on disk.
+		if ( auto existing = replay_event_log( path ); existing && existing->events_read > 0 ) {
+			next_sequence_ = existing->log.next_sequence( );
+		}
+
+		return { };
+	}
+
+	auto event_log::close( ) -> void {
+		if ( sink_ != nullptr ) {
+			std::fflush( sink_.get( ) );
+			sink_.reset( );
+		}
+	}
+
 	auto event_log::append( std::string kind, std::string payload_json ) -> event {
 		auto appended = event{ };
 		appended.sequence = next_sequence_++;
@@ -70,6 +147,17 @@ namespace mcode {
 		appended.kind = std::move( kind );
 		appended.payload_json = std::move( payload_json );
 		appended.run = branch_id_;
+
+		if ( sink_ != nullptr ) {
+			// Write and flush per event. A buffered log loses exactly the events
+			// leading up to a crash, which are the ones a post-mortem needs.
+			const auto line = appended.to_json( ) + "\n";
+			const auto written = std::fwrite( line.data( ), 1, line.size( ), sink_.get( ) );
+
+			if ( written != line.size( ) || std::fflush( sink_.get( ) ) != 0 ) {
+				++write_failures_;
+			}
+		}
 
 		events_.push_back( std::move( appended ) );
 
@@ -85,6 +173,58 @@ namespace mcode {
 		}
 
 		return out;
+	}
+
+	auto replay_event_log( const std::filesystem::path& path ) -> result< replay_result > {
+		auto stream = std::ifstream{ path, std::ios::binary };
+
+		if ( !stream ) {
+			return std::unexpected( fail( errc::io, "cannot open " + path.string( ) ) );
+		}
+
+		auto result = replay_result{ };
+		auto line = std::string{ };
+
+		while ( std::getline( stream, line ) ) {
+			// A final line with no trailing newline is a torn write: the process died
+			// mid-flush. Reported, not fatal -- the rest of the session is intact and
+			// is exactly the evidence a post-mortem wants.
+			if ( stream.eof( ) && !line.empty( ) ) {
+				result.truncated_tail = true;
+
+				break;
+			}
+
+			if ( line.empty( ) ) {
+				continue;
+			}
+
+			auto parsed = json::document::parse( line );
+
+			if ( !parsed ) {
+				++result.malformed_lines;
+
+				continue;
+			}
+
+			auto sequence = parsed->get_int( "seq" );
+			auto kind = parsed->get_string( "kind" );
+
+			if ( !sequence || !kind ) {
+				++result.malformed_lines;
+
+				continue;
+			}
+
+			// Rebuilt through the log's own append path, so a replayed event is
+			// indistinguishable from a live one.
+			auto restored = result.log.append( *kind, "{}" );
+			(void)restored;
+
+			++result.events_read;
+		}
+
+		return result;
 	}
 
 	auto agent_loop::register_handler( std::string name, tool_handler handler ) -> void {

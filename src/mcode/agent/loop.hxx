@@ -2,7 +2,10 @@
 
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
+#include <filesystem>
 #include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -59,8 +62,42 @@ namespace mcode {
 		[[nodiscard]] auto to_json( ) const -> std::string;
 	};
 
+	// Append-only JSONL session log (docs/26 E2).
+	//
+	// Each event is written and FLUSHED as it happens, so a crash leaves a valid
+	// file with every complete line intact. That is the whole point: a log that
+	// buffers is a log that loses the events leading up to the crash, which are
+	// the only interesting ones.
+	//
+	// The consequence is a torn final line if the process dies mid-write. Replay
+	// reports that rather than failing, because discarding an entire session
+	// because of one truncated line would lose exactly the evidence the log exists
+	// to preserve. A malformed line anywhere else is an error.
 	class event_log {
 	public:
+		event_log( ) = default;
+		~event_log( );
+
+		event_log( event_log&& other ) noexcept;
+		auto operator=( event_log&& other ) noexcept -> event_log&;
+
+		event_log( const event_log& ) = delete;
+		auto operator=( const event_log& ) -> event_log&;
+
+		// Opens (or creates) a log file and appends every subsequent event to it.
+		// Existing content is preserved and its sequence numbers are adopted, so a
+		// resumed session continues rather than restarting at zero.
+		auto open( const std::filesystem::path& path ) -> status;
+		auto close( ) -> void;
+
+		[[nodiscard]] auto is_open( ) const noexcept -> bool { return sink_ != nullptr; }
+		[[nodiscard]] auto path( ) const noexcept -> const std::filesystem::path& { return path_; }
+
+		// Events that could not be written. A failed flush is counted rather than
+		// thrown, because losing the log must not take down the session -- but it is
+		// never silent.
+		[[nodiscard]] auto write_failures( ) const noexcept -> std::uint64_t { return write_failures_; }
+
 		auto append( std::string kind, std::string payload_json = "{}" ) -> event;
 
 		[[nodiscard]] auto events( ) const noexcept -> const std::vector< event >& { return events_; }
@@ -68,6 +105,10 @@ namespace mcode {
 		[[nodiscard]] auto empty( ) const noexcept -> bool { return events_.empty( ); }
 
 		[[nodiscard]] auto branch_id( ) const noexcept -> const std::string& { return branch_id_; }
+
+		// The next sequence number this log will assign. Used when reopening an
+		// existing file so a resumed session continues numbering.
+		[[nodiscard]] auto next_sequence( ) const noexcept -> std::uint64_t { return next_sequence_; }
 
 		auto set_branch_id( std::string id ) -> void { branch_id_ = std::move( id ); }
 
@@ -77,7 +118,31 @@ namespace mcode {
 		std::vector< event > events_;
 		std::uint64_t next_sequence_ = 0;
 		std::string branch_id_;
+
+		std::unique_ptr< std::FILE, void ( * )( std::FILE* ) > sink_{ nullptr, nullptr };
+		std::filesystem::path path_;
+		std::uint64_t write_failures_ = 0;
 	};
+
+	struct replay_result {
+		event_log log;
+
+		// Complete, parseable events recovered.
+		std::size_t events_read = 0;
+
+		// True when the final line was incomplete. The session is still usable;
+		// the caller should report that the last event was lost.
+		bool truncated_tail = false;
+
+		// Lines that were complete but unparseable. Non-zero means the file is
+		// corrupt rather than merely cut short, which is a different problem.
+		std::size_t malformed_lines = 0;
+	};
+
+	// Reads a JSONL session log. Tolerates a torn final line; reports anything
+	// else as malformed.
+	[[nodiscard]] auto replay_event_log( const std::filesystem::path& path )
+		-> result< replay_result >;
 
 	struct tool_call {
 		std::string name;
