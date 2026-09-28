@@ -1,8 +1,10 @@
 #include <array>
 #include <cstdio>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "mcode/agent/loop.hxx"
@@ -21,7 +23,9 @@
 #include "mcode/support/json.hxx"
 #include "mcode/support/logging.hxx"
 #include "mcode/support/text.hxx"
-
+#include "mcode/tools/context.hxx"
+#include "mcode/tools/exec_policy.hxx"
+#include "mcode/tools/register.hxx"
 #include "smoke.hxx"
 
 using smoke::check;
@@ -31,35 +35,25 @@ using smoke::section;
 
 namespace {
 
-	auto build_core_registry( mcode::tool_registry& registry ) -> void {
-		const struct {
-			const char* name;
-			const char* description;
-			mcode::tool_class klass;
-		} CORE_TOOLS[] = {
-			{ "read", "Read a file window with line numbers", mcode::tool_class::read },
-			{ "edit", "Replace an exact string in a file", mcode::tool_class::write },
-			{ "write", "Create or overwrite a file", mcode::tool_class::write },
-			{ "glob", "Find files by pattern", mcode::tool_class::read },
-			{ "grep", "Search file contents by regex", mcode::tool_class::read },
-			{ "bash", "Run a shell command", mcode::tool_class::exec },
-			{ "ask_user", "Ask the user a question", mcode::tool_class::read },
-			{ "tool_search", "Find and load deferred tool schemas", mcode::tool_class::read },
-		};
+	// Handlers collected by the registration call, installed on the loop once it
+	// exists. Registration and dispatch are separate steps because the loop needs
+	// the registry and log built first.
+	std::vector< std::pair< std::string,
+		std::function< mcode::result< std::string >( std::string_view ) > > > pending_handlers;
 
-		for ( const auto& tool : CORE_TOOLS ) {
-			auto definition = mcode::tool_def{ };
-			definition.name = tool.name;
-			definition.description = tool.description;
-			definition.klass = tool.klass;
-			definition.source = mcode::tool_source::core;
-			definition.deferrable = false;
+	auto build_core_registry( mcode::tool_registry& registry, mcode::tools::tool_context& context )
+		-> mcode::status {
+		auto sink = mcode::tools::vector_sink{ };
 
-			if ( auto added = registry.add( std::move( definition ) ); !added ) {
-				std::printf( "  registry error: %s\n", added.error( ).msg.c_str( ) );
-				++g_failures;
-			}
+		auto registered = mcode::tools::register_core_tools( registry, sink, context );
+
+		if ( !registered ) {
+			return registered;
 		}
+
+		pending_handlers = sink.take( );
+
+		return { };
 	}
 
 }
@@ -71,8 +65,6 @@ namespace {
 auto run_exec( const std::vector< std::string >& arguments ) -> int;
 
 auto main( int argument_count, char** arguments ) -> int {
-	// `argument_count` is used only to build argv below.
-
 	auto argv = std::vector< std::string >{ };
 
 	for ( auto index = 1; index < argument_count; ++index ) {
@@ -236,11 +228,24 @@ auto main( int argument_count, char** arguments ) -> int {
 
 	{
 		auto registry = mcode::tool_registry{ };
-		build_core_registry( registry );
+		auto tools_context = mcode::tools::tool_context{ };
+		auto registration = build_core_registry( registry, tools_context );
+		check( static_cast< bool >( registration ), "registered the 8 core tools with schemas" );
 		check( registry.size( ) == 8, "registered exactly the 8 core tools" );
 
 		check( registry.find( "read" ) != nullptr, "found a tool by name" );
 		check( registry.find( "nope" ) == nullptr, "absent tool returns nullptr" );
+
+		auto schemas_valid = true;
+
+		for ( const auto* definition : registry.all( ) ) {
+			if ( definition->schema_json.empty( ) ||
+				!static_cast< bool >( mcode::tools::validate_schema( definition->schema_json ) ) ) {
+				schemas_valid = false;
+			}
+		}
+
+		check( schemas_valid, "every core tool carries a valid schema" );
 
 		auto duplicate = mcode::tool_def{ };
 		duplicate.name = "read";
@@ -506,18 +511,50 @@ auto main( int argument_count, char** arguments ) -> int {
 
 	{
 		auto registry = mcode::tool_registry{ };
-		build_core_registry( registry );
+
+		auto space = mcode::workspace::open( std::filesystem::current_path( ) );
+		check( static_cast< bool >( space ), "opened the workspace for tool dispatch" );
+
+		if ( !space ) {
+			::smoke_cli_and_extensions( );
+
+			section( "summary" );
+			std::printf( "  %d checks, %d failures\n", g_checks, g_failures );
+
+			mcode::shutdown_logging( );
+
+			return g_failures;
+		}
+
+		auto reads = mcode::tools::session_reads{ };
+		auto policy = mcode::tools::exec_policy{ };
+
+		auto tools_context = mcode::tools::tool_context{ };
+		tools_context.space = &*space;
+		tools_context.reads = &reads;
+		tools_context.policy = &policy;
+		tools_context.run_id = "smoke";
+		tools_context.headless = true;
+
+		auto registration = build_core_registry( registry, tools_context );
+		check( static_cast< bool >( registration ), "registered the core tools for dispatch" );
 
 		auto log = mcode::event_log{ };
 		auto budget = mcode::session_budget{ };
 		auto loop = mcode::agent_loop{ registry, log, budget };
 
-		loop.register_handler( "read", []( const std::string_view args ) -> mcode::result< std::string > {
-			return std::string{ "<file contents for " } + std::string{ args } + ">";
-		} );
+		auto pending = pending_handlers.size( );
+
+		for ( auto& [ name, handler ] : pending_handlers ) {
+			loop.register_handler( name, handler );
+		}
+
+		check( pending == 8, "collected a handler for every core tool" );
 
 		auto ok = loop.execute( { "read", R"({"path":"README.md"})" } );
-		check( ok.ok, "dispatched a registered tool" );
+		check( ok.ok, "dispatched the real read tool" );
+		check( ok.content.find( "Non-obvious constraints" ) != std::string::npos,
+			"read returned actual file content, not a placeholder" );
 		check( log.size( ) == 2, "logged both the call and the result" );
 
 		auto unknown = loop.execute( { "nope", "{}" } );

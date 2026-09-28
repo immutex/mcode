@@ -43,6 +43,17 @@ add_library(mcode_core STATIC
     mcode/fs/workspace.cxx
     mcode/fs/workspace_write.cxx
 
+    mcode/tools/session_reads.cxx
+    mcode/tools/truncate.cxx
+    mcode/tools/exec_policy.cxx
+    mcode/tools/errors.cxx
+    mcode/tools/tool_args.cxx
+    mcode/tools/read_tool.cxx
+    mcode/tools/write_tools.cxx
+    mcode/tools/search_tools.cxx
+    mcode/tools/exec_tools.cxx
+    mcode/tools/register.cxx
+
     mcode/net/sse.cxx
     mcode/net/http_client.cxx
 

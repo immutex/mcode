@@ -1,0 +1,510 @@
+#include <catch2/catch_test_macros.hpp>
+
+#include <filesystem>
+#include <fstream>
+#include <optional>
+#include <string>
+
+#include "mcode/core/registry.hxx"
+#include "mcode/fs/workspace.hxx"
+#include "mcode/tools/errors.hxx"
+#include "mcode/tools/exec_policy.hxx"
+#include "mcode/tools/exec_tools.hxx"
+#include "mcode/tools/file_tools.hxx"
+#include "mcode/tools/register.hxx"
+#include "mcode/tools/search_tools.hxx"
+#include "mcode/tools/session_reads.hxx"
+#include "mcode/tools/tool_args.hxx"
+#include "mcode/tools/truncate.hxx"
+
+using namespace mcode;
+using namespace mcode::tools;
+
+namespace {
+
+	inline constexpr std::size_t TOKEN_CHARS_PER_TOKEN = 4;
+	inline constexpr std::size_t CORE_SCHEMA_BUDGET_TOKENS = 3000;
+
+	struct fixture {
+		std::filesystem::path path;
+		workspace space;
+		session_reads reads;
+		exec_policy policy;
+		tool_context context;
+
+		explicit fixture( bool yolo = false )
+			: space( make_space( ) ), policy( make_policy( yolo ) ) {
+			path = std::filesystem::temp_directory_path( ) /
+				( "mcode-tools-test-" + std::to_string( ::rand( ) ) );
+			std::filesystem::create_directories( path / "src" );
+
+			write_raw( "src/main.cxx", "int main( ) {\n\treturn 0;\n}\n" );
+			write_raw( "src/util.cxx", "int helper( ) {\n\treturn 1;\n}\n" );
+			write_raw( "README.md", "# fixture\n\nhello\n" );
+			write_raw( "notes.txt", "alpha\nbeta\ngamma\n" );
+
+			space = workspace::open( path ).value( );
+			context.space = &space;
+			context.reads = &reads;
+			context.policy = &policy;
+			context.run_id = "test-run";
+			context.headless = true;
+		}
+
+		~fixture( ) {
+			auto error_code = std::error_code{ };
+			std::filesystem::remove_all( path, error_code );
+		}
+
+		auto write_raw( const std::string& name, const std::string& content ) const -> void {
+			const auto target = path / name;
+			std::filesystem::create_directories( target.parent_path( ) );
+
+			auto out = std::ofstream{ target, std::ios::binary };
+			out << content;
+		}
+
+		auto read_raw( const std::string& name ) const -> std::string {
+			auto in = std::ifstream{ path / name, std::ios::binary };
+			auto text = std::string{ };
+			auto line = std::string{ };
+
+			while ( std::getline( in, line ) ) {
+				text += line;
+				text += '\n';
+			}
+
+			return text;
+		}
+
+		auto call( const std::string& json ) const -> std::string {
+			const auto parsed = tool_args::parse( json );
+			REQUIRE( parsed );
+
+			auto mutable_context = context;
+			auto result = handle_read( *parsed, mutable_context );
+
+			if ( result ) {
+				return *result;
+			}
+
+			return result.error( ).msg;
+		}
+
+	private:
+		static auto make_space( ) -> workspace {
+			return workspace::open( std::filesystem::current_path( ) ).value( );
+		}
+
+		static auto make_policy( bool yolo ) -> exec_policy {
+			auto value = exec_policy{ };
+			value.yolo = yolo;
+
+			return value;
+		}
+	};
+
+	[[nodiscard]] auto run_tool(
+		const std::function< result< std::string >( const tool_args&, tool_context& ) >& handler,
+		const std::string& json, fixture& setup ) -> std::string {
+		auto parsed = tool_args::parse( json );
+		REQUIRE( parsed );
+
+		auto mutable_context = setup.context;
+		auto result = handler( *parsed, mutable_context );
+
+		if ( result ) {
+			return *result;
+		}
+
+		return result.error( ).msg;
+	}
+
+	[[nodiscard]] auto is_error_json( const std::string& text ) -> bool {
+		return text.find( "\"ok\":false" ) != std::string::npos &&
+			text.find( "\"error\":" ) != std::string::npos &&
+			text.find( "\"hint\":" ) != std::string::npos &&
+			text.find( "\"retryable\":" ) != std::string::npos;
+	}
+
+	class stub_sink final : public tool_handler_sink {
+	public:
+		using handler_type = std::function< result< std::string >( std::string_view ) >;
+
+		auto add_handler( std::string name, handler_type handler ) -> void override {
+			names.push_back( name );
+			handlers.push_back( std::move( handler ) );
+		}
+
+		std::vector< std::string > names;
+		std::vector< handler_type > handlers;
+	};
+
+}
+
+TEST_CASE( "every core schema parses, validates and fits the budget", "[tools][schemas]" ) {
+	auto registry = tool_registry{ };
+	auto sink = stub_sink{ };
+	auto setup = fixture{ };
+
+	const auto registered = register_core_tools( registry, sink, setup.context );
+	REQUIRE( registered );
+	REQUIRE( registry.size( ) == 8 );
+	REQUIRE( sink.names.size( ) == 8 );
+
+	auto total_bytes = std::size_t{ 0 };
+
+	for ( const auto* definition : registry.all( ) ) {
+		REQUIRE( !definition->schema_json.empty( ) );
+		REQUIRE( static_cast< bool >( validate_schema( definition->schema_json ) ) );
+
+		const auto parsed = json::document::parse( definition->schema_json );
+		REQUIRE( parsed );
+		REQUIRE( parsed->get_string( "type" ).value_or( "" ) == "object" );
+
+		total_bytes += definition->schema_json.size( );
+	}
+
+	INFO( "schema bytes: " << total_bytes );
+	CHECK( total_bytes / TOKEN_CHARS_PER_TOKEN <= CORE_SCHEMA_BUDGET_TOKENS );
+}
+
+TEST_CASE( "a malformed schema is refused at registration", "[tools][schemas]" ) {
+	CHECK_FALSE( static_cast< bool >( validate_schema( "{not json" ) ) );
+	CHECK_FALSE( static_cast< bool >( validate_schema( R"({"type":"array"})" ) ) );
+	CHECK_FALSE( static_cast< bool >(
+		validate_schema( R"({"type":"object","required":["missing"]})" ) ) );
+}
+
+TEST_CASE( "read returns numbered lines and records the hash", "[tools][read]" ) {
+	auto setup = fixture{ };
+
+	const auto out = run_tool( handle_read, R"({"path":"notes.txt"})", setup );
+	CHECK( out.find( "1\talpha" ) != std::string::npos );
+	CHECK( out.find( "2\tbeta" ) != std::string::npos );
+
+	const auto absolute = setup.space.resolve( "notes.txt" );
+	REQUIRE( absolute );
+	CHECK( setup.reads.contains( *absolute ) );
+}
+
+TEST_CASE( "read honours offset and limit and reports the next offset", "[tools][read]" ) {
+	auto setup = fixture{ };
+
+	const auto out = run_tool( handle_read, R"({"path":"notes.txt","offset":2,"limit":1})",
+		setup );
+	CHECK( out.find( "2\tbeta" ) != std::string::npos );
+	CHECK( out.find( "1\talpha" ) == std::string::npos );
+	CHECK( out.find( "\"next_offset\":3" ) != std::string::npos );
+}
+
+TEST_CASE( "read refuses binary with a stub, never emitting bytes", "[tools][read]" ) {
+	auto setup = fixture{ };
+	setup.write_raw( "blob.bin", std::string{ 'a', '\0', 'b', '\0', 'c' } );
+
+	const auto out = run_tool( handle_read, R"({"path":"blob.bin"})", setup );
+	CHECK( is_error_json( out ) );
+	CHECK( out.find( "binary" ) != std::string::npos );
+	CHECK( out.find( "xxd" ) != std::string::npos );
+}
+
+TEST_CASE( "read on a missing file suggests the closest existing path", "[tools][read]" ) {
+	auto setup = fixture{ };
+
+	const auto out = run_tool( handle_read, R"({"path":"src/main.cx"})", setup );
+	CHECK( is_error_json( out ) );
+	CHECK( out.find( "src/main.cxx" ) != std::string::npos );
+}
+
+TEST_CASE( "write creates a new file without a prior read", "[tools][write]" ) {
+	auto setup = fixture{ };
+
+	const auto out = run_tool( handle_write,
+		R"({"path":"src/new.cxx","content":"int x;\n"})", setup );
+	CHECK( out.find( "\"ok\":true" ) != std::string::npos );
+	CHECK( out.find( "\"mode\":\"create\"" ) != std::string::npos );
+	CHECK( setup.read_raw( "src/new.cxx" ) == "int x;\n" );
+}
+
+TEST_CASE( "write refuses an overwrite without a prior read", "[tools][write]" ) {
+	auto setup = fixture{ };
+
+	const auto out = run_tool( handle_write,
+		R"({"path":"notes.txt","content":"replaced\n"})", setup );
+	CHECK( is_error_json( out ) );
+	CHECK( out.find( "without reading it first" ) != std::string::npos );
+	CHECK( setup.read_raw( "notes.txt" ).find( "alpha" ) != std::string::npos );
+}
+
+TEST_CASE( "write succeeds after a read and refuses a stale file", "[tools][write]" ) {
+	auto setup = fixture{ };
+
+	CHECK( run_tool( handle_read, R"({"path":"notes.txt"})", setup ).find( "alpha" ) !=
+		std::string::npos );
+
+	const auto replaced = run_tool( handle_write,
+		R"({"path":"notes.txt","content":"replaced\n"})", setup );
+	CHECK( replaced.find( "\"ok\":true" ) != std::string::npos );
+	CHECK( replaced.find( "\"mode\":\"overwrite\"" ) != std::string::npos );
+
+	// An external change after the recorded read makes the next write stale.
+	setup.write_raw( "notes.txt", "externally changed\n" );
+
+	const auto stale = run_tool( handle_write,
+		R"({"path":"notes.txt","content":"second replace\n"})", setup );
+	CHECK( is_error_json( stale ) );
+	CHECK( stale.find( "changed since it was last read" ) != std::string::npos );
+}
+
+TEST_CASE( "write refuses protected and escaping paths", "[tools][write]" ) {
+	auto setup = fixture{ };
+
+	for ( const auto* target : { ".mcode/config.toml", ".mcode/artifacts/x", ".git/hooks/pre-commit" } ) {
+		const auto out = run_tool( handle_write,
+			std::string{ R"({"path":")" } + target + R"(","content":"x"})", setup );
+		CHECK( is_error_json( out ) );
+		CHECK( out.find( "refusing to write" ) != std::string::npos );
+	}
+
+	const auto outside = run_tool( handle_write,
+		R"({"path":"../outside.txt","content":"x"})", setup );
+	CHECK( is_error_json( outside ) );
+}
+
+TEST_CASE( "edit replaces a unique anchor and returns a diff", "[tools][edit]" ) {
+	auto setup = fixture{ };
+
+	CHECK( run_tool( handle_read, R"({"path":"src/main.cxx"})", setup ).find( "int main" ) !=
+		std::string::npos );
+
+	const auto out = run_tool( handle_edit,
+		R"({"path":"src/main.cxx","old_string":"return 0;","new_string":"return 42;"})",
+		setup );
+	CHECK( out.find( "\"ok\":true" ) != std::string::npos );
+	CHECK( out.find( "\"replacements\":1" ) != std::string::npos );
+	CHECK( out.find( "--- a/src/main.cxx" ) != std::string::npos );
+	CHECK( out.find( "+\\treturn 42;\\n" ) != std::string::npos );
+	CHECK( setup.read_raw( "src/main.cxx" ).find( "return 42;" ) != std::string::npos );
+}
+
+TEST_CASE( "edit distinguishes zero from multiple matches", "[tools][edit]" ) {
+	auto setup = fixture{ };
+	setup.write_raw( "dup.txt", "same\nsame\n" );
+	CHECK( run_tool( handle_read, R"({"path":"dup.txt"})", setup ).find( "same" ) !=
+		std::string::npos );
+
+	const auto zero = run_tool( handle_edit,
+		R"({"path":"dup.txt","old_string":"absent","new_string":"x"})", setup );
+	CHECK( is_error_json( zero ) );
+	CHECK( zero.find( "not found" ) != std::string::npos );
+
+	const auto multiple = run_tool( handle_edit,
+		R"({"path":"dup.txt","old_string":"same","new_string":"x"})", setup );
+	CHECK( is_error_json( multiple ) );
+	CHECK( multiple.find( "appears 2 times" ) != std::string::npos );
+
+	const auto all = run_tool( handle_edit,
+		R"({"path":"dup.txt","old_string":"same","new_string":"x","replace_all":true})", setup );
+	CHECK( all.find( "\"replacements\":2" ) != std::string::npos );
+}
+
+TEST_CASE( "edit preserves CRLF and refuses an empty anchor", "[tools][edit]" ) {
+	auto setup = fixture{ };
+	setup.write_raw( "crlf.txt", "first\r\nsecond\r\n" );
+	CHECK( run_tool( handle_read, R"({"path":"crlf.txt"})", setup ).find( "first" ) !=
+		std::string::npos );
+
+	const auto out = run_tool( handle_edit,
+		R"({"path":"crlf.txt","old_string":"second","new_string":"changed"})", setup );
+	CHECK( out.find( "\"ok\":true" ) != std::string::npos );
+
+	auto raw = std::string{ };
+	auto in = std::ifstream{ setup.path / "crlf.txt", std::ios::binary };
+	std::getline( in, raw );
+	REQUIRE( raw.size( ) > 5 );
+	CHECK( raw.substr( raw.size( ) - 1 ) == "\r" );
+
+	auto second = std::string{ };
+	std::getline( in, second );
+	CHECK( second == "changed\r" );
+
+	const auto empty = run_tool( handle_edit,
+		R"({"path":"crlf.txt","old_string":"","new_string":"x"})", setup );
+	CHECK( is_error_json( empty ) );
+	CHECK( empty.find( "use write" ) != std::string::npos );
+}
+
+TEST_CASE( "edit requires a prior read", "[tools][edit]" ) {
+	auto setup = fixture{ };
+
+	const auto out = run_tool( handle_edit,
+		R"({"path":"src/main.cxx","old_string":"return 0;","new_string":"return 1;"})",
+		setup );
+	CHECK( is_error_json( out ) );
+	CHECK( out.find( "without reading it first" ) != std::string::npos );
+}
+
+TEST_CASE( "glob returns relative paths and skips .git and .mcode", "[tools][glob]" ) {
+	auto setup = fixture{ };
+	setup.write_raw( ".git/config", "x" );
+	setup.write_raw( ".mcode/artifacts/run/out.txt", "x" );
+	setup.write_raw( "src/deep/nested.cxx", "x" );
+
+	const auto out = run_tool( handle_glob, R"({"pattern":"**/*"})", setup );
+	CHECK( out.find( "\"src/main.cxx\"" ) != std::string::npos );
+	CHECK( out.find( "\"src/deep/nested.cxx\"" ) != std::string::npos );
+	CHECK( out.find( ".git" ) == std::string::npos );
+	CHECK( out.find( ".mcode" ) == std::string::npos );
+}
+
+TEST_CASE( "glob honours the root .gitignore", "[tools][glob]" ) {
+	auto setup = fixture{ };
+	setup.write_raw( ".gitignore", "ignored-dir/\n*.tmp\n" );
+	setup.write_raw( "ignored-dir/thing.o", "x" );
+	setup.write_raw( "scratch.tmp", "x" );
+	setup.write_raw( "kept.cxx", "x" );
+
+	const auto out = run_tool( handle_glob, R"({"pattern":"**/*"})", setup );
+	CHECK( out.find( "ignored-dir" ) == std::string::npos );
+	CHECK( out.find( "scratch.tmp" ) == std::string::npos );
+	CHECK( out.find( "kept.cxx" ) != std::string::npos );
+}
+
+TEST_CASE( "grep caps matches during the scan and skips binary", "[tools][grep]" ) {
+	auto setup = fixture{ };
+
+	auto repeated = std::string{ };
+
+	for ( auto index = 0; index < 80; ++index ) {
+		repeated += "needle here\n";
+	}
+
+	setup.write_raw( "many.txt", repeated );
+	setup.write_raw( "blob.bin", std::string{ 'n', '\0', 'e', '\0' } );
+
+	const auto out = run_tool( handle_grep, R"({"pattern":"needle"})", setup );
+	CHECK( out.find( "\"count\":50" ) != std::string::npos );
+	CHECK( out.find( "cap of 50" ) != std::string::npos );
+	CHECK( out.find( "blob.bin" ) == std::string::npos );
+}
+
+TEST_CASE( "grep reports a bad regex actionably", "[tools][grep]" ) {
+	auto setup = fixture{ };
+
+	const auto out = run_tool( handle_grep, R"({"pattern":"([unclosed"})", setup );
+	CHECK( is_error_json( out ) );
+	CHECK( out.find( "invalid regex" ) != std::string::npos );
+}
+
+TEST_CASE( "bash denies exec by default and allows with an argv pattern", "[tools][bash]" ) {
+	auto setup = fixture{ };
+
+	const auto denied = run_tool( handle_bash,
+		R"({"command":"echo hi"})", setup );
+	CHECK( is_error_json( denied ) );
+	CHECK( denied.find( "denied by the approval policy" ) != std::string::npos );
+
+	setup.policy.allow_argv.push_back( "echo" );
+
+	const auto allowed = run_tool( handle_bash, R"({"command":"echo hi"})", setup );
+	CHECK( allowed.find( "\"ok\":true" ) != std::string::npos );
+	CHECK( allowed.find( "\"exit_code\":0" ) != std::string::npos );
+}
+
+TEST_CASE( "bash reports a non-zero exit as a success, never a tool error", "[tools][bash]" ) {
+	auto setup = fixture{ };
+	setup.policy.yolo = true;
+
+	const auto out = run_tool( handle_bash,
+#if defined( _WIN32 )
+		R"({"command":"findstr x missing-file.txt"})"
+#else
+		R"({"command":"false"})"
+#endif
+		, setup );
+	CHECK( out.find( "\"ok\":true" ) != std::string::npos );
+	CHECK( out.find( "\"exit_code\":1" ) != std::string::npos );
+	CHECK( out.find( "never auto-retried" ) != std::string::npos );
+}
+
+TEST_CASE( "bash refuses compound commands and exec runners", "[tools][bash]" ) {
+	auto setup = fixture{ };
+	setup.policy.yolo = true;
+
+	const auto compound = run_tool( handle_bash,
+		R"({"command":"echo a && echo b"})", setup );
+	CHECK( is_error_json( compound ) );
+
+	const auto runner = run_tool( handle_bash, R"({"command":"sh -c echo hi"})", setup );
+	CHECK( is_error_json( runner ) );
+	CHECK( runner.find( "never allowlisted" ) != std::string::npos );
+}
+
+TEST_CASE( "ask_user fails clearly when headless", "[tools][ask_user]" ) {
+	auto setup = fixture{ };
+
+	const auto out = run_tool( handle_ask_user,
+		R"({"question":"which design?"})", setup );
+	CHECK( is_error_json( out ) );
+	CHECK( out.find( "which design?" ) != std::string::npos );
+}
+
+TEST_CASE( "tool_search returns names then expands without mutating the registry",
+	"[tools][tool_search]" ) {
+	auto setup = fixture{ };
+	auto registry = tool_registry{ };
+	auto sink = stub_sink{ };
+
+	REQUIRE( static_cast< bool >( register_core_tools( registry, sink, setup.context ) ) );
+	const auto before = registry.size( );
+
+	const auto listed = run_tool(
+		[ & ]( const tool_args& args, tool_context& context ) {
+			return handle_tool_search( args, context, registry );
+		}, R"({"query":"read"})", setup );
+	CHECK( listed.find( "\"name\":\"read\"" ) != std::string::npos );
+	CHECK( listed.find( "\"schema\"" ) == std::string::npos );
+
+	const auto expanded = run_tool(
+		[ & ]( const tool_args& args, tool_context& context ) {
+			return handle_tool_search( args, context, registry );
+		}, R"({"query":"read","expand":true})", setup );
+	CHECK( expanded.find( "\"schema\"" ) != std::string::npos );
+	CHECK( registry.size( ) == before );
+}
+
+TEST_CASE( "an over-cap result spills to an artifact with an actionable notice",
+	"[tools][truncate]" ) {
+	auto setup = fixture{ };
+
+	auto big = std::string{ };
+
+	for ( auto index = 0; index < 1000; ++index ) {
+		big += "line of output that keeps going\n";
+	}
+
+	const auto out = truncate_result( big, setup.context.run_id, setup.space, "test" );
+	CHECK( out.size( ) <= INLINE_RESULT_CHARS + 512 );
+	CHECK( out.find( ".mcode/artifacts/test-run/test.txt" ) != std::string::npos );
+	CHECK( out.find( "Full output written to" ) != std::string::npos );
+
+	const auto spilled = setup.space.read_file( ".mcode/artifacts/test-run/test.txt" );
+	REQUIRE( spilled );
+	CHECK( *spilled == big );
+}
+
+TEST_CASE( "every tool failure carries error, hint and retryable", "[tools][errors]" ) {
+	auto setup = fixture{ };
+
+	const auto samples = std::vector< std::string >{
+		run_tool( handle_read, R"({"path":"missing.txt"})", setup ),
+		run_tool( handle_write, R"({"path":"notes.txt","content":"x"})", setup ),
+		run_tool( handle_edit, R"({"path":"notes.txt","old_string":"a","new_string":"b"})", setup ),
+		run_tool( handle_bash, R"({"command":"echo hi"})", setup ),
+		run_tool( handle_ask_user, R"({"question":"q"})", setup ),
+	};
+
+	for ( const auto& sample : samples ) {
+		CHECK( is_error_json( sample ) );
+	}
+}
