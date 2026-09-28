@@ -170,8 +170,8 @@ deny = ["b"]
 	REQUIRE( static_cast< bool >( project ) );
 
 	auto layers = std::vector< config::layer >{ };
-	layers.push_back( { .level = config::scope::user, .values = std::move( *user ) } );
-	layers.push_back( { .level = config::scope::project, .values = std::move( *project ) } );
+	layers.push_back( { .level = config::scope::user, .origin = { }, .values = std::move( *user ) } );
+	layers.push_back( { .level = config::scope::project, .origin = { }, .values = std::move( *project ) } );
 
 	auto merged = config::merged_config::merge( std::move( layers ) );
 	REQUIRE( static_cast< bool >( merged ) );
@@ -199,8 +199,8 @@ TEST_CASE( "merge is independent of layer order", "[config]" ) {
 	REQUIRE( static_cast< bool >( high ) );
 
 	auto forward = std::vector< config::layer >{ };
-	forward.push_back( { .level = config::scope::user, .values = std::move( *low ) } );
-	forward.push_back( { .level = config::scope::project, .values = std::move( *high ) } );
+	forward.push_back( { .level = config::scope::user, .origin = { }, .values = std::move( *low ) } );
+	forward.push_back( { .level = config::scope::project, .origin = { }, .values = std::move( *high ) } );
 
 	auto merged = config::merged_config::merge( std::move( forward ) );
 	REQUIRE( static_cast< bool >( merged ) );

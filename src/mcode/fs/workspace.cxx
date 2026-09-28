@@ -13,7 +13,6 @@ namespace mcode {
 	namespace {
 
 		constexpr std::size_t BINARY_PROBE_BYTES = 8192;
-		constexpr std::size_t MAX_CONTINUATION_BYTES = 4;
 
 		[[nodiscard]] auto segment_matches( const std::string_view pattern, const std::string_view name ) -> bool {
 			auto pattern_index = std::size_t{ 0 };

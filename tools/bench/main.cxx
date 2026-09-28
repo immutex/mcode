@@ -94,8 +94,10 @@ namespace {
 	}
 
 	auto milliseconds_since( const clock_type::time_point start ) -> double {
-		return std::chrono::duration_cast< std::chrono::nanoseconds >(
-			clock_type::now( ) - start ).count( ) / 1'000'000.0;
+		const auto elapsed = std::chrono::duration_cast< std::chrono::nanoseconds >(
+			clock_type::now( ) - start ).count( );
+
+		return static_cast< double >( elapsed ) / 1'000'000.0;
 	}
 
 	// The full frozen surface from docs/18, registered with stubs. Measuring a
@@ -269,7 +271,7 @@ auto main( int argument_count, char** arguments ) -> int {
 	// per-extension budget can distinguish the fixed VM from the extension's own
 	// allocations.
 	{
-		auto bare = mcode::lua_host::create( { .extension_name = "bare" } );
+		auto bare = mcode::lua_host::create( mcode::lua_host_options{ .extension_name = "bare", .module_loader = { } } );
 
 		if ( bare ) {
 			// Force sealing without running anything, which is what installs the
@@ -336,7 +338,7 @@ auto main( int argument_count, char** arguments ) -> int {
 			// The hatch parses in Lua, using the VM's own string and table work --
 			// the shape a real exotic provider would need. This is the cost the
 			// declarative path exists to avoid.
-			auto host = mcode::lua_host::create( { .extension_name = "hatch" } );
+			auto host = mcode::lua_host::create( mcode::lua_host_options{ .extension_name = "hatch", .module_loader = { } } );
 
 			if ( !host ) {
 				std::printf( "provider_escape_hatch_error=vm:%s\n", host.error( ).msg.c_str( ) );

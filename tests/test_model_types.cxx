@@ -10,6 +10,21 @@ using namespace mcode;
 
 namespace {
 
+	// model::block has eight fields, so a designated initializer must name them in
+	// declaration order and may not omit any under -Wmissing-designated-field-
+	// initializers. Construct and assign instead.
+	auto text_block( const std::string_view body ) -> model::block {
+		auto block = model::block{ };
+		block.kind = model::block_kind::text;
+		block.text = std::string{ body };
+
+		return block;
+	}
+
+}
+
+namespace {
+
 	auto make_request( ) -> model::chat_request {
 		auto request = model::chat_request{ };
 		request.model = "test-model";
@@ -20,24 +35,30 @@ namespace {
 
 		auto system = model::message{ };
 		system.speaker = model::role::system;
-		system.blocks.push_back( { .kind = model::block_kind::text, .text = "be terse" } );
+		system.blocks.push_back( text_block( "be terse" ) );
 
 		auto user = model::message{ };
 		user.speaker = model::role::user;
-		user.blocks.push_back( { .kind = model::block_kind::text, .text = "read the file" } );
+		user.blocks.push_back( text_block( "read the file" ) );
 
 		auto assistant = model::message{ };
 		assistant.speaker = model::role::assistant;
-		assistant.blocks.push_back( { .kind = model::block_kind::tool_call,
-			.tool_call_id = "call_1",
-			.tool_name = "read",
-			.args_json = R"({"path":"a.txt"})" } );
+		auto call = model::block{ };
+		call.kind = model::block_kind::tool_call;
+		call.tool_call_id = "call_1";
+		call.tool_name = "read";
+		call.args_json = R"({"path":"a.txt"})";
+
+		assistant.blocks.push_back( std::move( call ) );
 
 		auto tool = model::message{ };
 		tool.speaker = model::role::tool;
-		tool.blocks.push_back( { .kind = model::block_kind::tool_result,
-			.tool_call_id = "call_1",
-			.result_json = R"({"content":"hello"})" } );
+		auto result = model::block{ };
+		result.kind = model::block_kind::tool_result;
+		result.tool_call_id = "call_1";
+		result.result_json = R"({"content":"hello"})";
+
+		tool.blocks.push_back( std::move( result ) );
 
 		request.messages = { system, user, assistant, tool };
 
@@ -185,12 +206,23 @@ TEST_CASE( "an unknown model prices at zero rather than guessing", "[model]" ) {
 TEST_CASE( "message text concatenates only textual blocks", "[model]" ) {
 	auto message = model::message{ };
 	message.speaker = model::role::assistant;
-	message.blocks.push_back( { .kind = model::block_kind::thinking, .text = "hmm " } );
-	message.blocks.push_back( { .kind = model::block_kind::text, .text = "answer" } );
-	message.blocks.push_back( { .kind = model::block_kind::tool_call,
-		.tool_name = "read", .args_json = "{}" } );
-	message.blocks.push_back( { .kind = model::block_kind::tool_result,
-		.result_json = "{}" } );
+	auto thinking = model::block{ };
+	thinking.kind = model::block_kind::thinking;
+	thinking.text = "hmm ";
+
+	message.blocks.push_back( std::move( thinking ) );
+	message.blocks.push_back( text_block( "answer" ) );
+	auto call = model::block{ };
+	call.kind = model::block_kind::tool_call;
+	call.tool_name = "read";
+	call.args_json = "{}";
+
+	message.blocks.push_back( std::move( call ) );
+	auto result = model::block{ };
+	result.kind = model::block_kind::tool_result;
+	result.result_json = "{}";
+
+	message.blocks.push_back( std::move( result ) );
 
 	REQUIRE( message.text( ) == "hmm answer" );
 }

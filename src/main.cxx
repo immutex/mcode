@@ -336,7 +336,7 @@ auto main( int argument_count, char** arguments ) -> int {
 	section( "Luau (extension layer)" );
 
 	{
-		auto host = mcode::lua_host::create( { .extension_name = "smoke" } );
+		auto host = mcode::lua_host::create( mcode::lua_host_options{ .extension_name = "smoke", .module_loader = { } } );
 		check( static_cast< bool >( host ), "created a lua_State" );
 
 		if ( host ) {

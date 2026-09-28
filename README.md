@@ -254,7 +254,23 @@ code comments.
     only after an unrelated signature change, and resolving it needed the linker
     map. The surface now OWNS a copy — a manifest is a handful of small strings.
 
-31. **Sorting before comparison is not optional in reports.** Extension discovery
+31. **Run `python _clgate.py` before pushing anything that touches C++.** MSVC is
+    the only compiler installed here, so `-Wshadow`, `-Wsign-compare`,
+    `-Wunused-parameter`, `-Wconversion`, and `-Wunused-private-field` are all
+    invisible locally and cost a ten-minute CI round each. The gate compiles the
+    changed units with the local clang++ against the real Conan include paths,
+    using the same warning set as the CI Clang leg. It takes seconds.
+
+32. **An `if` and its `else if` share a scope.** Two `if (const auto* x = ...)`
+    declarations with the same name in one if/else-if chain is `-Wshadow`, and
+    renaming both to a new shared name does not fix it — the second declaration
+    still shadows the first. This was made twice in a row before the local gate
+    was written.
+
+33. **`lua_objlen` returns `int`, not `size_t`.** Every comparison against a
+    `size_t` counter is then a sign-compare. Convert once at the source.
+
+34. **Sorting before comparison is not optional in reports.** Extension discovery
     sorts by name, and JSON object keys are emitted in sorted order, so two runs
     are byte-identical. An unsorted report makes a duplicate-name or load-order
     failure unreproducible.
