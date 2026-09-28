@@ -10,10 +10,14 @@ add_library(mcode_core STATIC
     mcode/support/json.cxx
     mcode/support/text.cxx
     mcode/support/toml.cxx
+    mcode/support/toml_access.cxx
     mcode/support/config.cxx
+    mcode/support/time.cxx
 
     mcode/ext/hooks.cxx
     mcode/ext/lua_host.cxx
+    mcode/ext/lua_host_execute.cxx
+    mcode/ext/lua_host_glue.cxx
 
     mcode/model/types.cxx
     mcode/model/provider.cxx
@@ -28,6 +32,7 @@ add_library(mcode_core STATIC
     mcode/eval/suite.cxx
 
     mcode/ext/api.cxx
+    mcode/ext/api_invoke.cxx
     mcode/ext/loader.cxx
     mcode/ext/lua_json.cxx
     mcode/ext/manifest.cxx
@@ -95,7 +100,7 @@ endif()
 
 set(MCODE_BUNDLED_EXT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../extensions")
 
-add_executable(mcode main.cxx)
+add_executable(mcode main.cxx cli_commands.cxx smoke_cli_extensions.cxx)
 target_link_libraries(mcode PRIVATE mcode_core)
 
 # The binary cannot live at `src/mcode`: that path is the SOURCE DIRECTORY, and on

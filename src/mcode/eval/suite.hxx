@@ -15,7 +15,7 @@ namespace mcode::eval {
 	// task asserts a harness behaviour against the fixture repo, so a failure is
 	// always a real regression and never sampling noise.
 	//
-	// docs/11 is explicit that small-n suites swing wildly at model pass rates.
+	// Small-n suites swing wildly at model pass rates.
 	// These tasks sidestep that entirely by not involving a model -- which is also
 	// the only honest thing M0 can do, since there is no model client yet.
 	struct task {
@@ -26,7 +26,7 @@ namespace mcode::eval {
 		std::function< result< bool >( const std::filesystem::path& fixture_root ) > run;
 	};
 
-	// Per-run record (docs/11 §Minimal eval harness design), JSONL, one object
+	// Per-run record, JSONL, one object
 	// per task.
 	struct run_record {
 		std::string run_id;
@@ -74,7 +74,7 @@ namespace mcode::eval {
 	// pass@k: did ANY of k attempts succeed. Capability.
 	// pass^k: did ALL k attempts succeed. Reliability.
 	//
-	// docs/11 requires both, because reporting only pass@k flatters a harness that
+	// Both are reported, because reporting only pass@k flatters a harness that
 	// works half the time.
 	[[nodiscard]] auto pass_at_k( const std::vector< bool >& attempts ) -> double;
 	[[nodiscard]] auto pass_power_k( const std::vector< bool >& attempts ) -> double;

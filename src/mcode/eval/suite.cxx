@@ -15,6 +15,7 @@
 #include "mcode/model/provider.hxx"
 #include "mcode/platform/seams.hxx"
 #include "mcode/support/config.hxx"
+#include "mcode/support/json.hxx"
 #include "mcode/support/toml.hxx"
 
 namespace mcode::eval {
@@ -60,29 +61,26 @@ namespace mcode::eval {
 	auto run_record::to_json( ) const -> std::string {
 		// Hand-built rather than through the DOM: the shape is fixed and this keeps
 		// the record byte-stable, which is what makes two runs diffable.
+		// Every interpolated string goes through the escaper. Escaping only `detail`
+		// left the other fields able to emit a quote that makes the whole line
+		// unparseable -- and a run record exists to be read back.
 		auto out = std::string{ "{\"run_id\":\"" };
-		out += run_id;
-		out += "\",\"ts\":\"" + timestamp;
-		out += "\",\"suite\":\"" + suite;
-		out += "\",\"task_id\":\"" + task_id;
-		out += "\",\"scaffold_rev\":\"" + scaffold_revision;
-		out += "\",\"outcome\":{\"verdict\":\"" + verdict;
+		json::append_escaped( out, run_id );
+		out += "\",\"ts\":\"";
+		json::append_escaped( out, timestamp );
+		out += "\",\"suite\":\"";
+		json::append_escaped( out, suite );
+		out += "\",\"task_id\":\"";
+		json::append_escaped( out, task_id );
+		out += "\",\"scaffold_rev\":\"";
+		json::append_escaped( out, scaffold_revision );
+		out += "\",\"outcome\":{\"verdict\":\"";
+		json::append_escaped( out, verdict );
 		out += "\",\"exit_code\":" + std::to_string( exit_code );
 		out += "},\"metrics\":{\"tool_calls\":" + std::to_string( tool_calls );
 		out += ",\"wall_s\":" + std::to_string( wall_seconds );
 		out += "},\"detail\":\"";
-
-		for ( const auto character : detail ) {
-			switch ( character ) {
-				case '"': out += "\\\""; break;
-				case '\\': out += "\\\\"; break;
-				case '\n': out += "\\n"; break;
-				case '\r': out += "\\r"; break;
-				case '\t': out += "\\t"; break;
-				default: out.push_back( character );
-			}
-		}
-
+		json::append_escaped( out, detail );
 		out += "\"}";
 
 		return out;
@@ -101,7 +99,7 @@ namespace mcode::eval {
 
 	auto pass_power_k( const std::vector< bool >& attempts ) -> double {
 		// Did ALL attempts succeed. Reporting only pass@k flatters a harness that
-		// works half the time, which is why docs/11 requires both.
+		// works half the time, which is why both are reported.
 		if ( attempts.empty( ) ) {
 			return 0.0;
 		}
@@ -221,9 +219,8 @@ namespace mcode::eval {
 						std::to_string( deliveries ) );
 				}
 
-				if ( bus.max_depth( ) != 1 ) {
-					return fail_message( "dispatch recursed; depth was " +
-						std::to_string( bus.max_depth( ) ) );
+				if ( bus.dispatching( ) ) {
+					return fail_message( "dispatch did not return to the outer frame" );
 				}
 
 				return true;
@@ -336,7 +333,7 @@ namespace mcode::eval {
 					}
 				}
 
-				// And the docs/26 example must be accepted.
+				// And the reference example must be accepted.
 				const auto* good = R"({
 					"name":"g","endpoint":"https://api.example.com/v1/chat/completions",
 					"stream":{"text_delta":"/choices/0/delta/content"}
@@ -474,7 +471,7 @@ namespace mcode::eval {
 		result.suite = std::string{ suite_name };
 		result.run_id = "eval-" + now_iso8601( );
 
-		// A stable identity for "what code produced this run". docs/11 wants a git
+		// A stable identity for "what code produced this run": a git
 		// sha; the version string is what M0 has, and it is recorded rather than
 		// omitted so the field's absence is not mistaken for an oversight.
 		auto revision = std::string{ "mcode/" } + std::string{ VERSION };
@@ -486,7 +483,10 @@ namespace mcode::eval {
 			record.suite = result.suite;
 			record.task_id = entry.id;
 			record.scaffold_revision = revision;
-			record.tool_calls = 1;
+			// The tasks assert harness behaviour directly; none dispatches a model
+			// tool call, so the count is zero. Reporting 1 would be a fabricated
+			// metric, which is worse than a zero that is honestly zero.
+			record.tool_calls = 0;
 
 			const auto started = std::chrono::steady_clock::now( );
 			auto outcome = entry.run( fixture_root );
