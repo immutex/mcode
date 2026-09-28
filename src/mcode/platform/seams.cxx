@@ -32,7 +32,10 @@ namespace mcode::platform {
 
 	// What a killed child exits with. Distinct from 0 so a supervisor can tell a
 	// process we terminated from one that finished on its own.
-	inline constexpr auto TERMINATED_EXIT_CODE = UINT{ 1 };
+	//
+	// `unsigned` and not `UINT`: that typedef is Win32-only, and this constant is
+	// declared outside the platform guard.
+	inline constexpr auto TERMINATED_EXIT_CODE = unsigned{ 1 };
 
 	// Zero and above-max are both not process ids. Zero is the dangerous one: to
 	// `kill` it means the caller's whole process group.

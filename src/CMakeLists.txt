@@ -13,6 +13,7 @@ add_library(mcode_core STATIC
     mcode/support/toml_access.cxx
     mcode/support/config.cxx
     mcode/support/time.cxx
+    mcode/support/parse.cxx
 
     mcode/ext/hooks.cxx
     mcode/ext/lua_host.cxx

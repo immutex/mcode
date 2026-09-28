@@ -7,6 +7,7 @@
 #include <string>
 
 #include "mcode/support/json.hxx"
+#include "mcode/support/parse.hxx"
 
 namespace mcode::cli {
 
@@ -135,12 +136,7 @@ namespace mcode::cli {
 					return std::unexpected( value.error( ) );
 				}
 
-				const auto* first = value->data( );
-				const auto* last = value->data( ) + value->size( );
-				const auto parsed = std::from_chars( first, last, options.max_budget_usd,
-					std::chars_format::general );
-
-				if ( parsed.ec != std::errc{ } || parsed.ptr != last ) {
+				if ( !support::parse_double( *value, options.max_budget_usd ) ) {
 					return std::unexpected( fail( errc::config,
 						"--max-budget-usd needs a number, got '" + *value + "'" ) );
 				}

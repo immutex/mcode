@@ -1,5 +1,7 @@
 #include "mcode/support/toml.hxx"
 
+#include "mcode/support/parse.hxx"
+
 #include <cctype>
 #include <charconv>
 #include <optional>
@@ -262,17 +264,11 @@ namespace mcode::toml {
 			if ( is_float ) {
 				out.kind = value_kind::floating;
 
-				// from_chars, not stod, for the same reason the integer path below
-				// uses it: stod stops at the first character it cannot use and
-				// returns the prefix, so `0.25.9` silently becomes 0.25 and `1e`
-				// becomes 1.0. A malformed number must be refused, not quietly
-				// replaced by a different one.
-				const auto* first = cleaned.data( );
-				const auto* last = cleaned.data( ) + cleaned.size( );
-				const auto parsed = std::from_chars( first, last, out.floating,
-					std::chars_format::general );
-
-				if ( parsed.ec != std::errc{ } || parsed.ptr != last ) {
+				// The whole text must be consumed. `stod` stops at the first
+				// character it cannot use and returns the prefix without raising, so
+				// `0.25.9` silently became 0.25 and `1e` became 1.0 -- a malformed
+				// number quietly replaced by a different one.
+				if ( !support::parse_double( cleaned, out.floating ) ) {
 					return std::unexpected( input.failure( "malformed number: " + cleaned ) );
 				}
 
