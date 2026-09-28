@@ -20,6 +20,8 @@ add_library(mcode_core STATIC
 
     mcode/platform/seams.cxx
 
+    mcode/events/bus.cxx
+
     mcode/fs/workspace.cxx
 
     mcode/net/sse.cxx

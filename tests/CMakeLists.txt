@@ -12,6 +12,7 @@ add_executable(mcode_tests
     test_dogfood_providers.cxx
     test_config_and_platform.cxx
     test_event_log.cxx
+    test_events.cxx
 )
 
 target_link_libraries(mcode_tests
