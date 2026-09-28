@@ -10,7 +10,7 @@
 
 namespace mcode::cli {
 
-	// Exit codes, fixed by docs/22. A consumer script branches on these, so the
+	// Exit codes, part of the interface. A consumer script branches on these, so the
 	// numbers are an interface and a test asserts each one.
 	enum class exit_code : int {
 		success = 0,
@@ -51,7 +51,7 @@ namespace mcode::cli {
 	[[nodiscard]] auto parse_exec_options( const std::vector< std::string >& arguments )
 		-> result< exec_options >;
 
-	// The `exec --json` stream (docs/22). One JSON object per line on stdout;
+	// The `exec --json` stream. One JSON object per line on stdout;
 	// diagnostics go to stderr.
 	//
 	// The stream starts with run.start and ends with exactly ONE run.end carrying

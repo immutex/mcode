@@ -1,5 +1,7 @@
 #include "mcode/cli/exec.hxx"
 
+#include <charconv>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -51,6 +53,7 @@ namespace mcode::cli {
 		switch ( code ) {
 			case errc::ok: return exit_code::success;
 			case errc::cancelled: return exit_code::interrupted;
+			case errc::budget_exhausted: return exit_code::budget_exhausted;
 			case errc::config:
 			case errc::unsupported: return exit_code::usage_error;
 			case errc::protocol: return exit_code::provider_error;
@@ -114,11 +117,16 @@ namespace mcode::cli {
 					return std::unexpected( value.error( ) );
 				}
 
-				try {
-					options.max_steps = static_cast< std::uint32_t >( std::stoul( *value ) );
-				} catch ( ... ) {
+				// from_chars, and the whole value must be consumed. `stoul` accepted
+				// a numeric PREFIX and never threw, so `--max-steps 12abc` silently
+				// ran with 12, and a negative value wrapped to a huge step count.
+				const auto* first = value->data( );
+				const auto* last = value->data( ) + value->size( );
+				const auto parsed = std::from_chars( first, last, options.max_steps );
+
+				if ( parsed.ec != std::errc{ } || parsed.ptr != last ) {
 					return std::unexpected( fail( errc::config,
-						"--max-steps needs a number, got '" + *value + "'" ) );
+						"--max-steps needs a non-negative whole number, got '" + *value + "'" ) );
 				}
 			} else if ( argument == "--max-budget-usd" ) {
 				auto value = next_value( argument );
@@ -127,9 +135,12 @@ namespace mcode::cli {
 					return std::unexpected( value.error( ) );
 				}
 
-				try {
-					options.max_budget_usd = std::stod( *value );
-				} catch ( ... ) {
+				const auto* first = value->data( );
+				const auto* last = value->data( ) + value->size( );
+				const auto parsed = std::from_chars( first, last, options.max_budget_usd,
+					std::chars_format::general );
+
+				if ( parsed.ec != std::errc{ } || parsed.ptr != last ) {
 					return std::unexpected( fail( errc::config,
 						"--max-budget-usd needs a number, got '" + *value + "'" ) );
 				}

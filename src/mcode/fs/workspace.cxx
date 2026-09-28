@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <cstdio>
 #include <fstream>
+#include <set>
 #include <sstream>
 
 #include "mcode/support/text.hxx"
@@ -13,6 +15,22 @@ namespace mcode {
 	namespace {
 
 		constexpr std::size_t BINARY_PROBE_BYTES = 8192;
+
+		// A file is "binary" when this share of its probed bytes are non-printable
+		// controls. Named because the threshold is a judgement, not a derivation.
+		constexpr std::size_t SUSPICIOUS_PERCENT = 10;
+		constexpr std::size_t PERCENT_SCALE = 100;
+
+		// A `**` walk this deep is a pathological tree, and the bound is what keeps
+		// the recursion from being a stack overflow rather than a slow listing.
+		constexpr std::size_t MAX_GLOB_DEPTH = 64;
+
+		// FNV-1a, 64-bit.
+		constexpr std::uint64_t FNV_OFFSET_BASIS = 1469598103934665603ULL;
+		constexpr std::uint64_t FNV_PRIME = 1099511628211ULL;
+
+		// Sixteen hex digits plus the terminator.
+		constexpr std::size_t HASH_HEX_BUFFER = 17;
 
 		[[nodiscard]] auto segment_matches( const std::string_view pattern, const std::string_view name ) -> bool {
 			auto pattern_index = std::size_t{ 0 };
@@ -65,23 +83,67 @@ namespace mcode {
 			return parts;
 		}
 
-		auto glob_walk( const std::filesystem::path& base, const std::vector< std::string >& parts,
-			const std::size_t index, std::vector< std::filesystem::path >& out,
-			const std::size_t max_results ) -> void {
-			if ( out.size( ) >= max_results ) {
+		// The walk's accumulators, so the recursion takes a request rather than five
+		// positional parameters.
+		struct glob_request {
+			const std::vector< std::string >& parts;
+			std::vector< std::filesystem::path >& out;
+			std::size_t max_results = 0;
+
+			// Directories already descended into. A symlink loop (a -> b -> a) makes
+			// the `**` branch recurse forever, and the result cap does not stop it
+			// because the cap counts matches, not visits. Keyed by the weakly
+			// canonical path so two routes to one directory count as one.
+			std::set< std::filesystem::path >& visited;
+
+			// A `**` walk is a filesystem traversal, and an unbounded one on a deep
+			// tree is a denial of service even without a cycle.
+			std::size_t depth = 0;
+		};
+
+		// Enters a directory if it is a real directory and has not been visited.
+		// symlink_status does not follow the link, so a symlinked directory is never
+		// descended into -- which is both the loop guard and what keeps a listing
+		// inside the workspace.
+		auto enter_directory( const std::filesystem::path& path, glob_request& request )
+			-> bool {
+			auto error_code = std::error_code{ };
+			const auto status = std::filesystem::symlink_status( path, error_code );
+
+			if ( error_code || !std::filesystem::is_directory( status ) ) {
+				return false;
+			}
+
+			if ( request.depth >= MAX_GLOB_DEPTH ) {
+				return false;
+			}
+
+			auto canonical = std::filesystem::weakly_canonical( path, error_code );
+
+			if ( error_code ) {
+				return false;
+			}
+
+			return request.visited.insert( canonical ).second;
+		}
+
+		auto glob_walk( const std::filesystem::path& base, const std::size_t index,
+			glob_request& request ) -> void {
+			if ( request.out.size( ) >= request.max_results ) {
 				return;
 			}
 
-			if ( index >= parts.size( ) ) {
-				out.push_back( base );
+			if ( index >= request.parts.size( ) ) {
+				request.out.push_back( base );
+
 				return;
 			}
 
-			const auto& part = parts[ index ];
-			const auto last = ( index + 1 == parts.size( ) );
+			const auto& part = request.parts[ index ];
+			const auto last = ( index + 1 == request.parts.size( ) );
 
 			if ( part == "**" ) {
-				glob_walk( base, parts, index + 1, out, max_results );
+				glob_walk( base, index + 1, request );
 
 				auto error_code = std::error_code{ };
 
@@ -91,9 +153,17 @@ namespace mcode {
 						break;
 					}
 
-					if ( entry.is_directory( error_code ) && !error_code ) {
-						glob_walk( entry.path( ), parts, index, out, max_results );
+					if ( request.out.size( ) >= request.max_results ) {
+						return;
 					}
+
+					if ( !enter_directory( entry.path( ), request ) ) {
+						continue;
+					}
+
+					++request.depth;
+					glob_walk( entry.path( ), index, request );
+					--request.depth;
 				}
 
 				return;
@@ -114,13 +184,15 @@ namespace mcode {
 				}
 
 				if ( last ) {
-					out.push_back( entry.path( ) );
+					request.out.push_back( entry.path( ) );
 
-					if ( out.size( ) >= max_results ) {
+					if ( request.out.size( ) >= request.max_results ) {
 						return;
 					}
-				} else if ( entry.is_directory( error_code ) && !error_code ) {
-					glob_walk( entry.path( ), parts, index + 1, out, max_results );
+				} else if ( enter_directory( entry.path( ), request ) ) {
+					++request.depth;
+					glob_walk( entry.path( ), index + 1, request );
+					--request.depth;
 				}
 			}
 		}
@@ -143,18 +215,20 @@ namespace mcode {
 			}
 		}
 
-		return probe > 0 && ( suspicious * 100 / probe ) > 10;
+		return probe > 0 && ( suspicious * PERCENT_SCALE / probe ) > SUSPICIOUS_PERCENT;
 	}
 
 	auto hash_bytes( const std::string_view bytes ) noexcept -> std::string {
-		auto hash = std::uint64_t{ 1469598103934665603ULL };
+		// FNV-1a, 64-bit. Named because the two constants are the algorithm, and a
+		// transcription error in either is silent.
+		auto hash = FNV_OFFSET_BASIS;
 
 		for ( const auto byte : bytes ) {
 			hash ^= static_cast< unsigned char >( byte );
-			hash *= 1099511628211ULL;
+			hash *= FNV_PRIME;
 		}
 
-		auto buffer = std::array< char, 17 >{ };
+		auto buffer = std::array< char, HASH_HEX_BUFFER >{ };
 		std::snprintf( buffer.data( ), buffer.size( ), "%016llx", static_cast< unsigned long long >( hash ) );
 
 		return std::string{ buffer.data( ) };
@@ -248,7 +322,11 @@ namespace mcode {
 		}
 
 		auto matches = std::vector< std::filesystem::path >{ };
-		glob_walk( canonical_root_, parts, 0, matches, max_results );
+		auto visited = std::set< std::filesystem::path >{ };
+		auto request = glob_request{ .parts = parts, .out = matches, .max_results = max_results,
+			.visited = visited };
+
+		glob_walk( canonical_root_, 0, request );
 
 		std::sort( matches.begin( ), matches.end( ) );
 		matches.erase( std::unique( matches.begin( ), matches.end( ) ), matches.end( ) );
@@ -286,9 +364,20 @@ namespace mcode {
 			return std::unexpected( fail( errc::io, "cannot open " + resolved->string( ) ) );
 		}
 
-		auto stream = std::ostringstream{ };
-		stream << input.rdbuf( );
-		auto content = stream.str( );
+		// Read one byte past the cap, not the whole file. The stat above is only a
+		// fast reject: a file that grows between the stat and the read -- ordinary in
+		// a workspace an agent is editing -- would otherwise be slurped in full, and
+		// the cap is the only bound on this path.
+		auto content = std::string{ };
+		content.resize( MAX_TEXT_FILE_BYTES + 1 );
+
+		input.read( content.data( ), static_cast< std::streamsize >( content.size( ) ) );
+		content.resize( static_cast< std::size_t >( input.gcount( ) ) );
+
+		if ( content.size( ) > MAX_TEXT_FILE_BYTES ) {
+			return std::unexpected( fail( errc::io, "file exceeds the " +
+				std::to_string( MAX_TEXT_FILE_BYTES ) + "-byte read cap: " + resolved->string( ) ) );
+		}
 
 		if ( looks_binary( content ) ) {
 			return std::unexpected(

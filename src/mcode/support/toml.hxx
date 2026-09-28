@@ -15,7 +15,7 @@ namespace mcode::toml {
 	// manifests use: top-level keys, `[table]` sections, dotted keys, strings
 	// (basic and literal), integers, floats, booleans, and arrays of those.
 	//
-	// Deliberately not a full TOML 1.0 implementation. `docs/14` never listed a
+	// Deliberately not a full TOML 1.0 implementation. No TOML dependency was
 	// TOML dependency, and the alternative -- adding one -- costs a third-party
 	// library for a format we read and never write. What is unsupported is
 	// REFUSED rather than ignored: a date, an inline table, or a multi-line

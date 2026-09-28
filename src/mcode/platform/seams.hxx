@@ -10,7 +10,7 @@
 
 #include "mcode/core/error.hxx"
 
-// The seven OS seams (docs/24). Everything platform-specific lives behind one of
+// The seven OS seams. Everything platform-specific lives behind one of
 // these, and no `#ifdef` appears in portable code -- that rule is the whole point
 // of the file, because retrofitting a platform is how a core ends up
 // Windows-shaped.
@@ -49,7 +49,7 @@ namespace mcode::platform {
 	// --- 2. Sandbox ---------------------------------------------------------
 	// Three incompatible models: Windows token + Job Object is code, Seatbelt is
 	// a profile, Landlock is syscalls with runtime ABI probing. Only Linux ships
-	// enforcement in M0 (docs/16 M1).
+	// enforcement in M0.
 	enum class sandbox_support {
 		// Enforcement is available and will be applied.
 		enforced,
@@ -110,7 +110,7 @@ namespace mcode::platform {
 
 	// --- 7. FileWatch -------------------------------------------------------
 	// ReadDirectoryChangesW versus inotify versus FSEvents. Deliberately the odd
-	// one out: docs/24 puts the real implementation in a Lua extension over a
+	// one out: the real implementation is a Lua extension over a
 	// small core API, so M0 ships only the shape.
 	enum class file_event_kind {
 		created,

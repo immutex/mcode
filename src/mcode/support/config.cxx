@@ -35,15 +35,6 @@ namespace mcode::config {
 
 	}
 
-	auto to_string_array( const std::vector< scope >& scopes ) -> std::vector< std::string > {
-		auto out = std::vector< std::string >{ };
-
-		for ( const auto level : scopes ) {
-			out.emplace_back( to_string( level ) );
-		}
-
-		return out;
-	}
 
 	auto load_layer( const scope level, const std::filesystem::path& path ) -> result< layer > {
 		auto text = read_file( path );
@@ -59,14 +50,42 @@ namespace mcode::config {
 				path.string( ) + ": " + parsed.error( ).msg ) );
 		}
 
+		// An unknown section is a typo. `timout = 5` at the root, or `[agnet]`,
+		// would otherwise be stored and never read, so the user would believe the
+		// setting applied.
+		//
+		// Not applied to project scope: the rule below refuses anything outside two
+		// prefixes, so it already subsumes this one -- and its message is the one
+		// that tells a user what a cloned repo is allowed to do.
+		for ( const auto& [ key, entry ] : parsed->keys( ) ) {
+			if ( level == scope::project ) {
+				break;
+			}
+
+			const auto section = key.substr( 0, key.find( '.' ) );
+
+			auto known = false;
+
+			for ( const auto prefix : CONFIG_SECTIONS ) {
+				if ( section == prefix ) {
+					known = true;
+
+					break;
+				}
+			}
+
+			if ( !known ) {
+				return std::unexpected( fail( errc::config, path.string( ) + ": unknown key '" +
+					key + "'; no config section is named '" + std::string{ section } + "'" ) );
+			}
+		}
+
 		// Project scope may only add restrictions. Anything else is rejected here,
 		// at load, rather than being dropped silently later -- a project file that
 		// appears to widen a permission but does not is the confusing case, and a
 		// project file that DOES widen one is the dangerous case.
 		if ( level == scope::project ) {
 			for ( const auto& [ key, entry ] : parsed->keys( ) ) {
-				(void)entry;
-
 				auto permitted = false;
 
 				for ( const auto prefix : PROJECT_WRITABLE_PREFIXES ) {
@@ -81,6 +100,23 @@ namespace mcode::config {
 					return std::unexpected( fail( errc::config,
 						path.string( ) + ": project scope may not set '" + key +
 						"'; it may only add 'permissions.deny' or 'permissions.ask'" ) );
+				}
+
+				// The name alone is not enough. `permissions.deny = "everything"` is
+				// valid TOML and names a permitted key, and it collides with the
+				// user's `permissions.deny` list in merge -- every consumer reads the
+				// result through get_string_array, which turns the type mismatch into
+				// an empty list, so the user's deny rules disappear and the blocked
+				// tool becomes callable. Only a list may occupy a whole prefix;
+				// anything BELOW a prefix is an addition and is always allowed.
+				const auto exact_prefix = std::any_of( PROJECT_WRITABLE_PREFIXES.begin( ),
+					PROJECT_WRITABLE_PREFIXES.end( ),
+					[&]( const std::string_view prefix ) { return key == prefix; } );
+
+				if ( exact_prefix && entry.kind != toml::value_kind::array ) {
+					return std::unexpected( fail( errc::config,
+						path.string( ) + ": project scope may only add to '" + key +
+						"'; a list is required, not a single value" ) );
 				}
 			}
 		}
@@ -104,11 +140,19 @@ namespace mcode::config {
 			for ( auto& [ key, entry ] : source.values.keys( ) ) {
 				const auto existing = out.values_.find( key );
 
-				if ( existing != out.values_.end( ) && existing->second.kind == toml::value_kind::array &&
-					entry.kind == toml::value_kind::array ) {
+				if ( existing != out.values_.end( ) && existing->second.kind == toml::value_kind::array ) {
 					// Lists merge; later entries append. Overriding an array
 					// wholesale would make a project file's extra deny rule erase the
 					// user's, which is the opposite of "may only add".
+					if ( entry.kind != toml::value_kind::array ) {
+						// A non-list cannot merge with a list, and overwriting would
+						// silently drop restrictions. Fail closed rather than pick a
+						// winner.
+						return std::unexpected( fail( errc::config,
+							"layer " + std::to_string( static_cast< int >( source.level ) ) +
+							" sets '" + key + "' to a single value, but it is a list" ) );
+					}
+
 					for ( const auto& item : entry.items ) {
 						existing->second.items.push_back( item );
 					}

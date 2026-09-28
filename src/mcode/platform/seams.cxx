@@ -18,22 +18,38 @@
 
 namespace mcode::platform {
 
-	// PIDs are positive and fit a signed 32-bit pid_t. Anything else is not a
-	// process, and `kill` would reinterpret it as a signal target.
-	inline constexpr auto MAX_PROCESS_ID = std::int32_t{ 0x7FFFFFFF };
+	// The largest plausible process id on this platform.
+	//
+	// On POSIX it is pid_t's positive range, because `kill` reinterprets anything
+	// else as a signal target. On Windows a pid is a DWORD and the allocator uses
+	// the whole unsigned range, so after long uptime a live pid above 2^31 is
+	// ordinary -- bounding it at INT32_MAX would report a running process as dead.
+#if defined( _WIN32 )
+	inline constexpr auto MAX_PROCESS_ID = std::uint32_t{ 0xFFFFFFFF };
+#else
+	inline constexpr auto MAX_PROCESS_ID = std::uint32_t{ 0x7FFFFFFF };
+#endif
+
+	// What a killed child exits with. Distinct from 0 so a supervisor can tell a
+	// process we terminated from one that finished on its own.
+	inline constexpr auto TERMINATED_EXIT_CODE = UINT{ 1 };
+
+	// Zero and above-max are both not process ids. Zero is the dangerous one: to
+	// `kill` it means the caller's whole process group.
+	[[nodiscard]] auto is_plausible_process_id( const std::uint64_t process_id ) noexcept -> bool {
+		return process_id != 0 && process_id <= static_cast< std::uint64_t >( MAX_PROCESS_ID );
+	}
 
 	// M0 ships interfaces and honest stubs. Where a platform cannot do the thing
 	// yet, the call returns `unsupported` and `sandbox_support_level` says so --
 	// a stub that silently succeeded would let a caller believe it was isolated.
 
 	auto pty_session::supported( ) noexcept -> bool {
-	#if defined( _WIN32 )
-		// ConPTY is a Windows 10 1809+ API and is present in the kernel32 export
-		// table on every supported version.
-		return true;
-	#else
-		return true;
-	#endif
+		// False until spawn exists. The predicate exists so a caller can decide
+		// whether to use the PTY path at all, and returning true while every
+		// operation returns `unsupported` converts a design-time signal into a
+		// runtime surprise -- exactly the dishonesty this file's rule forbids.
+		return false;
 	}
 
 	auto pty_session::spawn( const std::filesystem::path&, const std::vector< std::string >& )
@@ -60,7 +76,7 @@ namespace mcode::platform {
 
 	auto sandbox_support_level( ) noexcept -> sandbox_support {
 	#if defined( __linux__ )
-		// Landlock + seccomp is the one implementation docs/16 M1 ships. It is not
+		// Landlock + seccomp is the one implementation M1 ships. It is not
 		// wired up yet, so the honest answer is still `unavailable` -- callers must
 		// fail closed rather than assume isolation.
 		return sandbox_support::unavailable;
@@ -88,6 +104,14 @@ namespace mcode::platform {
 	}
 
 	auto terminate_process( const std::uint64_t process_id, const bool force ) -> status {
+		// The same guard process_is_alive carries, for a stronger reason: kill(0)
+		// signals the CALLER'S process group, so an unvalidated zero would deliver
+		// SIGTERM to mcode itself and everything beside it, and report success.
+		if ( !is_plausible_process_id( process_id ) ) {
+			return std::unexpected( fail( errc::io,
+				"invalid process id " + std::to_string( process_id ) ) );
+		}
+
 	#if defined( _WIN32 )
 		const auto handle = OpenProcess( PROCESS_TERMINATE, FALSE,
 			static_cast< DWORD >( process_id ) );
@@ -96,8 +120,13 @@ namespace mcode::platform {
 			return std::unexpected( fail( errc::io, "OpenProcess failed" ) );
 		}
 
-		const auto flags = force ? static_cast< UINT >( 0 ) : static_cast< UINT >( 0 );
-		const auto killed = TerminateProcess( handle, flags );
+		// `force` has no Windows equivalent: TerminateProcess is already
+		// unconditional, so the flag is accepted and ignored rather than pretending
+		// to select between a graceful and a hard stop. The exit code is distinct
+		// from 0 so a supervisor can tell a killed child from one that finished.
+		(void)force;
+
+		const auto killed = TerminateProcess( handle, TERMINATED_EXIT_CODE );
 		CloseHandle( handle );
 
 		if ( killed == 0 ) {
@@ -129,9 +158,16 @@ namespace mcode::platform {
 			"process-tree termination needs the spawn-time Job Object handle, "
 			"which M0 does not yet thread through" ) );
 	#else
-		// A process group kill, which requires the child to have been spawned into
-		// its own group.
-		return terminate_process( process_id, force );
+		// Only the root, because a group kill needs the child to have been spawned
+		// into its own group and nothing spawns one yet. Saying `unsupported` is
+		// honest; killing the root and letting the caller believe the tree died is
+		// the failure the file's own rule names.
+		(void)process_id;
+		(void)force;
+
+		return std::unexpected( fail( errc::unsupported,
+			"process-tree termination needs the child spawned into its own group, "
+			"which M0 does not yet do" ) );
 	#endif
 	}
 
@@ -141,25 +177,35 @@ namespace mcode::platform {
 		// truncated 0xFFFFFFFF would report as alive, and a caller passing a
 		// pid-sized value to a kill call would broadcast. Validate before the
 		// syscall.
-		if ( process_id == 0 || process_id > static_cast< std::uint64_t >( MAX_PROCESS_ID ) ) {
+		if ( !is_plausible_process_id( process_id ) ) {
 			return false;
 		}
 
 	#if defined( _WIN32 )
-		const auto handle = OpenProcess( PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
+		// SYNCHRONIZE is required for WaitForSingleObject below; a query-only handle
+		// makes the wait fail, which would report every live process as dead.
+		const auto handle = OpenProcess( PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE,
 			static_cast< DWORD >( process_id ) );
 
 		if ( handle == nullptr ) {
 			return false;
 		}
 
-		auto code = DWORD{ 0 };
-		const auto queried = GetExitCodeProcess( handle, &code );
+		// A zero-timeout wait, not the exit code. GetExitCodeProcess returning
+		// STILL_ACTIVE is the classic false-alive: a process that terminated with
+		// exit code 259 reports as alive forever.
+		const auto waited = WaitForSingleObject( handle, 0 );
 		CloseHandle( handle );
 
-		return queried != 0 && code == STILL_ACTIVE;
+		return waited == WAIT_TIMEOUT;
 	#else
-		return ::kill( static_cast< pid_t >( process_id ), 0 ) == 0;
+		if ( ::kill( static_cast< pid_t >( process_id ), 0 ) == 0 ) {
+			return true;
+		}
+
+		// EPERM means the process EXISTS but is not ours to signal. Reporting it as
+		// dead would make a supervisor reap a child that is still running.
+		return errno == EPERM;
 	#endif
 	}
 
@@ -191,7 +237,7 @@ namespace mcode::platform {
 	#if defined( _WIN32 ) || defined( __APPLE__ )
 		// macOS is case-insensitive by default on APFS, though a volume can be
 		// formatted case-sensitive. The workspace boundary compares case-folded on
-		// both, which is the conservative direction (docs/12).
+		// both, which is the conservative direction.
 		return true;
 	#else
 		return false;
@@ -344,7 +390,7 @@ namespace mcode::platform {
 
 	auto file_watcher::supported( ) noexcept -> bool {
 		// The interface exists so the extension API has a shape to target; the real
-		// implementation is a Lua extension over a small core API (docs/24).
+		// implementation is a Lua extension over a small core API.
 		return false;
 	}
 

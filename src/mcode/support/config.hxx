@@ -13,7 +13,7 @@
 
 namespace mcode::config {
 
-	// Config scopes, lowest precedence first (docs/22).
+	// Config scopes, lowest precedence first.
 	//
 	// The rule that matters: **project scope can never widen.** It may add `ask`
 	// or `deny`, and nothing else. A cloned repository that could set `allow` or
@@ -43,6 +43,22 @@ namespace mcode::config {
 	inline constexpr auto PROJECT_WRITABLE_PREFIXES = std::array{
 		std::string_view{ "permissions.deny" },
 		std::string_view{ "permissions.ask" },
+	};
+
+	// The top-level sections a config file may define. A key outside these is a
+	// typo, and storing it silently means the user believes a setting took effect
+	// when it did not -- which is the failure the parser exists to prevent.
+	//
+	// Section granularity, not per-key: the nested keys are owned by the docs that
+	// define them, and a per-key list here would be a second copy that drifts.
+	inline constexpr auto CONFIG_SECTIONS = std::array{
+		std::string_view{ "model" },
+		std::string_view{ "agent" },
+		std::string_view{ "context" },
+		std::string_view{ "sandbox" },
+		std::string_view{ "ui" },
+		std::string_view{ "extensions" },
+		std::string_view{ "permissions" },
 	};
 
 	struct layer {
@@ -82,7 +98,7 @@ namespace mcode::config {
 		std::vector< scope > loaded_;
 	};
 
-	// Standard scope paths, per platform (docs/24 seam 5).
+	// Standard scope paths, per platform.
 	[[nodiscard]] auto default_layer_paths( ) -> std::vector< std::pair< scope, std::filesystem::path > >;
 
 	// Loads and merges the standard scopes. A missing file is skipped; an

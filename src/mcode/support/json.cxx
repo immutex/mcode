@@ -2,7 +2,10 @@
 
 #include <yyjson.h>
 
+#include <array>
+#include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <memory>
 #include <utility>
 
@@ -15,6 +18,35 @@ namespace mcode::json {
 		};
 
 		using owned_cstr = std::unique_ptr< char, free_deleter >;
+
+		// One conversion for both accessors. yyjson_is_num admits real numbers, and
+		// yyjson_get_sint returns 0 for anything that is not an integer, so a
+		// gateway that sends a token count as 1530.0 produced zero tokens with no
+		// diagnostic. yyjson_is_int admits uint as well, and get_sint reinterprets a
+		// uint above INT64_MAX as negative.
+		auto to_int64( yyjson_val* value, const std::string_view what ) -> result< std::int64_t > {
+			if ( value == nullptr ) {
+				return std::unexpected( fail( errc::json, "missing " + std::string{ what } ) );
+			}
+
+			if ( yyjson_is_sint( value ) ) {
+				return yyjson_get_sint( value );
+			}
+
+			if ( yyjson_is_uint( value ) ) {
+				const auto wide = yyjson_get_uint( value );
+
+				if ( wide > static_cast< std::uint64_t >( std::numeric_limits< std::int64_t >::max( ) ) ) {
+					return std::unexpected( fail( errc::json, std::string{ what } +
+						" is too large for a 64-bit signed integer" ) );
+				}
+
+				return static_cast< std::int64_t >( wide );
+			}
+
+			return std::unexpected( fail( errc::json,
+				std::string{ what } + " is not an integer" ) );
+		}
 
 		auto free_mut_doc( yyjson_mut_doc* doc ) noexcept -> void {
 			if ( doc != nullptr ) {
@@ -120,11 +152,7 @@ namespace mcode::json {
 			return std::unexpected( fail( errc::json, "missing key: " + std::string{ key } ) );
 		}
 
-		if ( !yyjson_is_int( found ) ) {
-			return std::unexpected( fail( errc::json, "key is not an integer: " + std::string{ key } ) );
-		}
-
-		return yyjson_get_sint( found );
+		return to_int64( found, "key " + std::string{ key } );
 	}
 
 	auto document::get_string( const std::string_view key ) const -> result< std::string > {
@@ -209,6 +237,85 @@ namespace mcode::json {
 		return std::string{ yyjson_get_str( found ), yyjson_get_len( found ) };
 	}
 
+	namespace {
+
+		auto object_keys_of( yyjson_val* object ) -> std::vector< std::string > {
+			auto out = std::vector< std::string >{ };
+
+			if ( object == nullptr || !yyjson_is_obj( object ) ) {
+				return out;
+			}
+
+			auto iterator = yyjson_obj_iter{ };
+
+			if ( !yyjson_obj_iter_init( object, &iterator ) ) {
+				return out;
+			}
+
+			// yyjson's object iterator yields the KEY; the value is looked up from it.
+			while ( auto* name = yyjson_obj_iter_next( &iterator ) ) {
+				if ( yyjson_is_str( name ) ) {
+					out.emplace_back( yyjson_get_str( name ), yyjson_get_len( name ) );
+				}
+			}
+
+			return out;
+		}
+
+	}
+
+	auto append_escaped( std::string& out, const std::string_view text ) -> void {
+		for ( const auto character : text ) {
+			switch ( character ) {
+				case '"': out += "\\\""; break;
+				case '\\': out += "\\\\"; break;
+				case '\b': out += "\\b"; break;
+				case '\f': out += "\\f"; break;
+				case '\n': out += "\\n"; break;
+				case '\r': out += "\\r"; break;
+				case '\t': out += "\\t"; break;
+
+				default:
+					if ( static_cast< unsigned char >( character ) < 0x20 ) {
+						auto buffer = std::array< char, 8 >{ };
+						std::snprintf( buffer.data( ), buffer.size( ), "\\u%04x",
+							static_cast< unsigned char >( character ) );
+						out += buffer.data( );
+					} else {
+						out += character;
+					}
+			}
+		}
+	}
+
+	auto document::keys_at( const std::string_view path ) const -> std::vector< std::string > {
+		if ( doc_ == nullptr ) {
+			return { };
+		}
+
+		return object_keys_of( yyjson_ptr_getn( yyjson_doc_get_root( doc_ ), path.data( ), path.size( ) ) );
+	}
+
+	auto document::pointer_raw( const std::string_view path ) const -> result< std::string > {
+		if ( doc_ == nullptr ) {
+			return std::unexpected( fail( errc::json, "pointer on a non-parse document" ) );
+		}
+
+		auto* found = yyjson_ptr_getn( yyjson_doc_get_root( doc_ ), path.data( ), path.size( ) );
+
+		if ( found == nullptr ) {
+			return std::unexpected( fail( errc::json, "pointer not found: " + std::string{ path } ) );
+		}
+
+		const auto rendered = owned_cstr{ yyjson_val_write( found, YYJSON_WRITE_NOFLAG, nullptr ) };
+
+		if ( !rendered ) {
+			return std::unexpected( fail( errc::json, "failed to render pointer value" ) );
+		}
+
+		return std::string{ rendered.get( ) };
+	}
+
 	auto document::pointer_int( const std::string_view path ) const -> result< std::int64_t > {
 		if ( doc_ == nullptr ) {
 			return std::unexpected( fail( errc::json, "pointer on a non-parse document" ) );
@@ -220,12 +327,7 @@ namespace mcode::json {
 			return std::unexpected( fail( errc::json, "pointer not found: " + std::string{ path } ) );
 		}
 
-		if ( !yyjson_is_num( found ) ) {
-			return std::unexpected( fail( errc::json,
-				"pointer is not a number: " + std::string{ path } ) );
-		}
-
-		return yyjson_get_sint( found );
+		return to_int64( found, "pointer " + std::string{ path } );
 	}
 
 	auto document::pointer_bool( const std::string_view path ) const -> result< bool > {

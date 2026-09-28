@@ -22,7 +22,7 @@ namespace mcode {
 
 	}
 
-	auto parse_log_level( const std::string_view name ) noexcept -> log_level {
+	auto parse_log_level( const std::string_view name ) -> std::optional< log_level > {
 		if ( name == "trace" ) return log_level::trace;
 		if ( name == "debug" ) return log_level::debug;
 		if ( name == "info" ) return log_level::info;
@@ -31,7 +31,10 @@ namespace mcode {
 		if ( name == "critical" ) return log_level::critical;
 		if ( name == "off" ) return log_level::off;
 
-		return log_level::info;
+		// Absent, not "info". This is the entry point for a config value or a flag,
+		// and defaulting a typo like "inof" to info tells the user their setting
+		// took effect when it did not.
+		return std::nullopt;
 	}
 
 	auto to_string( const log_level level ) noexcept -> std::string_view {
@@ -66,22 +69,31 @@ namespace mcode {
 
 	}
 
-	auto init_logging( const log_level level, const std::filesystem::path& log_directory ) -> void {
+	auto init_logging( const log_level level, const std::filesystem::path& log_directory ) -> status {
 		const std::scoped_lock lock{ g_log_mutex };
 
 		if ( g_initialized ) {
 			g_logger->set_level( to_spdlog( level ) );
-			return;
+
+			return { };
 		}
 
 		auto sinks = std::vector< spdlog::sink_ptr >{ };
 		sinks.push_back( std::make_shared< spdlog::sinks::stdout_color_sink_mt >( ) );
 
+		// Captured rather than returned immediately: the stdout sink is still
+		// installed below, so a caller that ignores this can still see the message
+		// on stderr instead of running with no file log and no indication.
+		auto directory_error = std::string{ };
+
 		if ( !log_directory.empty( ) ) {
 			auto error_code = std::error_code{ };
 			std::filesystem::create_directories( log_directory, error_code );
 
-			if ( !error_code ) {
+			if ( error_code ) {
+				directory_error = "cannot create " + log_directory.string( ) + ": " +
+					error_code.message( ) + "; logging to stdout only";
+			} else {
 				const auto path = log_directory / "mcode.log";
 				sinks.push_back( std::make_shared< spdlog::sinks::rotating_file_sink_mt >(
 					path.string( ), MAX_FILE_BYTES, MAX_ROTATED_FILES ) );
@@ -94,7 +106,11 @@ namespace mcode {
 			spdlog::thread_pool( ), spdlog::async_overflow_policy::overrun_oldest );
 
 		created->set_level( to_spdlog( level ) );
-		created->set_pattern( "%Y-%m-%dT%H:%M:%S.%eZ [%^%l%$] %v" );
+
+		// `%z` and not a literal `Z`. spdlog renders local time by default, so a
+		// hardcoded `Z` labelled every line as UTC and made a log correlated against
+		// any other source off by the local offset -- silently wrong, not merely ugly.
+		created->set_pattern( "%Y-%m-%dT%H:%M:%S.%e%z [%^%l%$] %v" );
 		created->flush_on( spdlog::level::warn );
 
 		spdlog::register_logger( created );
@@ -102,6 +118,12 @@ namespace mcode {
 
 		g_logger = std::move( created );
 		g_initialized = true;
+
+		if ( !directory_error.empty( ) ) {
+			return std::unexpected( fail( errc::io, directory_error ) );
+		}
+
+		return { };
 	}
 
 	auto shutdown_logging( ) -> void {

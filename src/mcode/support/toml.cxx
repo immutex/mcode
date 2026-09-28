@@ -8,6 +8,9 @@ namespace mcode::toml {
 
 	namespace {
 
+		// The UTF-8 byte order mark.
+		inline constexpr auto BOM = std::string_view{ "\xEF\xBB\xBF" };
+
 		auto is_space( const char character ) -> bool {
 			return character == ' ' || character == '\t' || character == '\r';
 		}
@@ -259,9 +262,17 @@ namespace mcode::toml {
 			if ( is_float ) {
 				out.kind = value_kind::floating;
 
-				try {
-					out.floating = std::stod( cleaned );
-				} catch ( ... ) {
+				// from_chars, not stod, for the same reason the integer path below
+				// uses it: stod stops at the first character it cannot use and
+				// returns the prefix, so `0.25.9` silently becomes 0.25 and `1e`
+				// becomes 1.0. A malformed number must be refused, not quietly
+				// replaced by a different one.
+				const auto* first = cleaned.data( );
+				const auto* last = cleaned.data( ) + cleaned.size( );
+				const auto parsed = std::from_chars( first, last, out.floating,
+					std::chars_format::general );
+
+				if ( parsed.ec != std::errc{ } || parsed.ptr != last ) {
 					return std::unexpected( input.failure( "malformed number: " + cleaned ) );
 				}
 
@@ -340,158 +351,16 @@ namespace mcode::toml {
 
 	}
 
-	auto value::as_string( ) const -> result< std::string > {
-		if ( kind != value_kind::string ) {
-			return std::unexpected( fail( errc::config, "value is not a string" ) );
-		}
-
-		return text;
-	}
-
-	auto value::as_int( ) const -> result< std::int64_t > {
-		if ( kind != value_kind::integer ) {
-			return std::unexpected( fail( errc::config, "value is not an integer" ) );
-		}
-
-		return integer;
-	}
-
-	auto value::as_bool( ) const -> result< bool > {
-		if ( kind != value_kind::boolean ) {
-			return std::unexpected( fail( errc::config, "value is not a boolean" ) );
-		}
-
-		return boolean;
-	}
-
-	auto value::as_string_array( ) const -> result< std::vector< std::string > > {
-		if ( kind != value_kind::array ) {
-			return std::unexpected( fail( errc::config, "value is not an array" ) );
-		}
-
-		auto out = std::vector< std::string >{ };
-
-		for ( const auto& item : items ) {
-			auto element = item.as_string( );
-
-			if ( !element ) {
-				return std::unexpected( element.error( ) );
-			}
-
-			out.push_back( std::move( *element ) );
-		}
-
-		return out;
-	}
-
-	auto table::find( const std::string_view key ) const -> const value* {
-		const auto found = values_.find( std::string{ key } );
-
-		return found != values_.end( ) ? &found->second : nullptr;
-	}
-
-	auto table::contains( const std::string_view key ) const noexcept -> bool {
-		return values_.find( std::string{ key } ) != values_.end( );
-	}
-
-	auto table::get_string( const std::string_view key ) const -> result< std::string > {
-		const auto* found = find( key );
-
-		if ( found == nullptr ) {
-			return std::unexpected( fail( errc::config, "missing key: " + std::string{ key } ) );
-		}
-
-		return found->as_string( );
-	}
-
-	auto table::get_int( const std::string_view key ) const -> result< std::int64_t > {
-		const auto* found = find( key );
-
-		if ( found == nullptr ) {
-			return std::unexpected( fail( errc::config, "missing key: " + std::string{ key } ) );
-		}
-
-		return found->as_int( );
-	}
-
-	auto table::get_bool( const std::string_view key ) const -> result< bool > {
-		const auto* found = find( key );
-
-		if ( found == nullptr ) {
-			return std::unexpected( fail( errc::config, "missing key: " + std::string{ key } ) );
-		}
-
-		return found->as_bool( );
-	}
-
-	auto table::get_string_array( const std::string_view key ) const
-		-> result< std::vector< std::string > > {
-		const auto* found = find( key );
-
-		if ( found == nullptr ) {
-			return std::unexpected( fail( errc::config, "missing key: " + std::string{ key } ) );
-		}
-
-		return found->as_string_array( );
-	}
-
-	auto table::optional_string( const std::string_view key ) const -> std::optional< std::string > {
-		const auto* found = find( key );
-
-		if ( found == nullptr ) {
-			return std::nullopt;
-		}
-
-		if ( auto text = found->as_string( ) ) {
-			return *text;
-		}
-
-		return std::nullopt;
-	}
-
-	auto table::optional_int( const std::string_view key ) const -> std::optional< std::int64_t > {
-		const auto* found = find( key );
-
-		if ( found == nullptr ) {
-			return std::nullopt;
-		}
-
-		if ( auto number = found->as_int( ) ) {
-			return *number;
-		}
-
-		return std::nullopt;
-	}
-
-	auto table::reject_unknown( const std::vector< std::string_view >& allowed ) const -> status {
-		for ( const auto& [ key, entry ] : values_ ) {
-			(void)entry;
-
-			// A table section such as `stream.usage.in` is allowed if its parent is
-			// allowed: the caller lists the tables it understands, not every leaf.
-			auto known = false;
-
-			for ( const auto& candidate : allowed ) {
-				if ( key == candidate ||
-					key.starts_with( std::string{ candidate } + "." ) ) {
-					known = true;
-
-					break;
-				}
-			}
-
-			if ( !known ) {
-				return std::unexpected( fail( errc::config, "unknown key: " + key ) );
-			}
-		}
-
-		return { };
-	}
-
 	auto parse( const std::string_view text ) -> result< table > {
 		auto out = table{ };
 		auto input = reader{ };
-		input.text = text;
+
+		// A UTF-8 BOM is skipped rather than treated as content. Notepad -- still the
+		// default editor on this project's primary platform -- writes one, and
+		// without this the first byte is not a space, a '#', or a '[', so a
+		// hand-edited config failed with "expected a key" and named the wrong cause.
+		input.text = text.starts_with( BOM ) ? text.substr( BOM.size( ) ) : text;
+
 		auto prefix = std::string{ };
 
 		while ( !input.at_end( ) ) {
