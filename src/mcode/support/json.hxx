@@ -136,6 +136,11 @@ namespace mcode::json {
 		[[nodiscard]] auto dump( bool pretty = false ) const -> result< std::string >;
 		[[nodiscard]] auto size( ) const noexcept -> std::size_t;
 
+		// The whole parsed content as a node tree, for a document that came from
+		// `parse`. Null for a mutable or empty document. This is the read side of
+		// `set_json`: a subtree read back and re-embedded must be byte-equal.
+		[[nodiscard]] auto root_node( ) const -> result< node >;
+
 	private:
 		explicit document( yyjson_doc* doc ) : doc_( doc ) { }
 		explicit document( mut_doc_pointer doc );
@@ -149,5 +154,16 @@ namespace mcode::json {
 		node root_ = node{ };
 		bool mutable_ = false;
 	};
+
+	// Parses `text` and returns the value as a node tree. This is how a
+	// pre-rendered schema or argument blob is embedded without the caller
+	// re-encoding it field by field -- and it is the only path that preserves
+	// the source's own key order.
+	[[nodiscard]] auto node_from_json( std::string_view text ) -> result< node >;
+
+	// The parsed value at `path` as a node tree, for a document that came from
+	// `parse`. The source's own key order is preserved; the mutable writer
+	// re-sorts on dump.
+	[[nodiscard]] auto node_at( const document& source, std::string_view path ) -> result< node >;
 
 }

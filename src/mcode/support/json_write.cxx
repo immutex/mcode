@@ -337,6 +337,46 @@ namespace mcode::json {
 		return { };
 	}
 
+	auto node_at( const document& source, const std::string_view path ) -> result< node > {
+		auto raw = source.pointer_raw( path );
+
+		if ( !raw ) {
+			return std::unexpected( raw.error( ) );
+		}
+
+		auto parsed = document::parse( *raw );
+
+		if ( !parsed ) {
+			return std::unexpected( parsed.error( ) );
+		}
+
+		return parsed->root_node( );
+	}
+
+	auto node_from_json( const std::string_view text ) -> result< node > {
+		auto parsed = document::parse( text );
+
+		if ( !parsed ) {
+			return std::unexpected( parsed.error( ) );
+		}
+
+		return parsed->root_node( );
+	}
+
+	auto document::root_node( ) const -> result< node > {
+		if ( doc_ == nullptr ) {
+			return std::unexpected( fail( errc::json, "root_node on a non-parse document" ) );
+		}
+
+		auto* root = yyjson_doc_get_root( doc_ );
+
+		if ( root == nullptr ) {
+			return std::unexpected( fail( errc::json, "parsed document has no root" ) );
+		}
+
+		return from_val( root );
+	}
+
 	auto document::size( ) const noexcept -> std::size_t {
 		if ( mutable_ ) {
 			return root_.members.size( );
