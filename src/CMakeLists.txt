@@ -25,6 +25,10 @@ add_library(mcode_core STATIC
     mcode/model/types.cxx
     mcode/model/provider.cxx
     mcode/model/delta_applier.cxx
+    mcode/model/render.cxx
+    mcode/model/credentials.cxx
+    mcode/model/capabilities.cxx
+    mcode/model/http_client.cxx
 
     mcode/platform/seams.cxx
 
@@ -94,6 +98,8 @@ target_link_libraries(mcode_core
     PRIVATE
         Boost::process
         Boost::boost
+        OpenSSL::SSL
+        OpenSSL::Crypto
 )
 
 mcode_configure_target(mcode_core)

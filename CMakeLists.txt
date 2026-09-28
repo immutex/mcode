@@ -44,6 +44,7 @@ find_package(mimalloc CONFIG REQUIRED)
 find_package(simdutf CONFIG REQUIRED)
 find_package(unordered_dense CONFIG REQUIRED)
 find_package(luau CONFIG REQUIRED)
+find_package(OpenSSL REQUIRED)
 
 add_subdirectory(src)
 

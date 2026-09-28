@@ -58,6 +58,7 @@ class McodeConan(ConanFile):
         "simdutf/*:shared": False,
         "yyjson/*:shared": False,
         "luau/*:shared": False,
+        "openssl/*:shared": False,
     }
 
     def requirements(self):
@@ -72,6 +73,7 @@ class McodeConan(ConanFile):
         self.requires("simdutf/9.0.0")
         self.requires("unordered_dense/5.0.1")
         self.requires("luau/0.0.0-mcode.c0e346ed")
+        self.requires("openssl/3.5.7")
 
     def build_requirements(self):
         self.test_requires("catch2/3.16.0")
