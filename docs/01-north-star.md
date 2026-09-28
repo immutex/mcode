@@ -29,7 +29,7 @@ Everything else — tool names, loop shape, permission axes, TUI idioms — is d
 
 These are engineering constraints, not aspirations. A change that breaks one is a regression.
 
-**On the dependency budget.** The original ≤6 was a proxy for "stay small" before the stack was chosen. The concrete stack (`14`) lands at ~10 direct dependencies and an **estimated** 2.9–5.0 MB without TLS, 5–9 MB with it (cross-source planning estimates, not measurements — validate with a link map) — comfortably inside the size budget. So **size is now the real constraint** and the dependency count is a review heuristic: a new dependency must justify itself against measured size and compile-time cost, not against an arbitrary integer. Test-only and vendored single-header code never counted and still do not.
+**On the dependency budget.** The original ≤6 was a proxy for "stay small" before the stack was chosen. The concrete stack (`14`) lands at ~11 direct dependencies (OpenSSL added for TLS) and the **measured** static binary with TLS is 7.56 MB — comfortably inside the size budget. So **size is the real constraint** and the dependency count is a review heuristic: a new dependency must justify itself against measured size and compile-time cost, not against an arbitrary integer. Test-only and vendored single-header code never counted and still do not.
 
 ## Principles
 

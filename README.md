@@ -73,6 +73,7 @@ recipe. See `docs/14-cpp23-stack.md` for why each was chosen.
 | mimalloc | 3.5.1 | Allocator |
 | simdutf | 9.0.0 | UTF-8/UTF-16 |
 | ankerl::unordered_dense | 5.0.1 | Tool registry |
+| OpenSSL | 3.5.7 | TLS for the model transport (static) |
 | Catch2 | 3.16.0 | Tests |
 
 ### Non-obvious constraints
@@ -129,10 +130,15 @@ code comments.
    `LUAU_STATIC_CRT` follows the consumer's CRT: mismatching it across the VM and
    the host is heap corruption, not a link error.
 
-9. **No OpenSSL, so no TLS.** `docs/14`'s open question *"TLS backend: Beast +
-   OpenSSL versus libcurl"* changes the binary budget by 2–4 MB, so it is left
-   open. `http_client` returns `errc::unsupported` for `https://` rather than
-   silently downgrading — a silent downgrade would be a security bug.
+9. **TLS is Beast + OpenSSL, static, verification ON.** `docs/14`'s open
+   question *"TLS backend: Beast + OpenSSL versus libcurl"* is resolved in
+   favour of OpenSSL: Beast is already the HTTP stack, and libcurl would add a
+   second one. `openssl/*:shared=False` in `conanfile.py` keeps the
+   no-third-party-runtime-dependencies budget honest — a dynamic `libcrypto`
+   fails at *runtime* on a clean machine, not at link time. Certificate
+   verification is always on (`verify_peer` + hostname check); a
+   verify-disabled build is a security bug, not a convenience. Measured size:
+   7.56 MB static, inside the ≤25 MB budget.
 
 10. **Conan must build the VM with the same toolset as the consumer.** Two MSVC
     installations on this machine resolve differently: `vswhere -latest` returns

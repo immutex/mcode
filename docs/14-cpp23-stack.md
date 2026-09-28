@@ -1,6 +1,6 @@
 # C++23 Stack
 
-> TL;DR: C++23 features are safe to adopt selectively (skip modules, skip `flat_map`); the runtime stack is Luau + yyjson + **boost::asio** + Beast + Boost.Process v2 + fmt + spdlog + mimalloc + simdutf + unordered_dense under Conan 2; realistic static binary ~3–5 MB without TLS, ~5–9 MB with it.
+> TL;DR: C++23 features are safe to adopt selectively (skip modules, skip `flat_map`); the runtime stack is Luau + yyjson + **boost::asio** + Beast + Boost.Process v2 + fmt + spdlog + mimalloc + simdutf + unordered_dense + OpenSSL under Conan 2; the measured static binary with TLS is 7.56 MB against the ~5–9 MB estimate.
 
 ## Language features
 
@@ -106,7 +106,7 @@ ConPTY requires **synchronous** I/O on dedicated threads — overlapped I/O dead
 | **Subtotal** | **~2.9–5.0 MB** |
 | + static OpenSSL 3 (if TLS is static) | +2–4 MB → **~5–9 MB** |
 
-TLS is the single biggest variable and decides whether the ≤25 MB budget (`01`) is comfortable or tight. Per-component figures are cross-source planning estimates, not measurements — validate with a link map.
+**Measured with OpenSSL 3.5.7 static (Windows /MSVC /MT, Release):** the `mcode` binary is **7.56 MB** — inside the ≤25 MB budget (`01`) and inside the 5–9 MB target band. TLS was the single biggest size variable; the measurement confirms the estimate rather than revising it. Per-component figures are cross-source planning estimates, not measurements — validate with a link map.
 
 ## Traps
 
@@ -126,7 +126,7 @@ TLS is the single biggest variable and decides whether the ≤25 MB budget (`01`
 
 ## Open questions
 
-- TLS backend: Beast + OpenSSL (2–4 MB) versus libcurl (one dependency, proxies and HTTP/2 free). This decides the binary budget.
+- ~~TLS backend: Beast + OpenSSL (2–4 MB) versus libcurl (one dependency, proxies and HTTP/2 free). This decides the binary budget.~~ **Resolved: Beast + OpenSSL 3.x, static.** Beast is already the HTTP stack, so libcurl would add a second one. Linked with certificate verification ON (`set_default_verify_paths` + `verify_peer` + hostname check); a verify-disabled build would be a security bug. Measured size delta: see the binary-size table — the measured static binary with OpenSSL is within the ≤25 MB budget (`01`).
 - Does the VM-only (precompiled bytecode) variant save enough to justify the signing requirement and losing source review? `A5` measures it.
 - ~~Do we need Boost at all if we take standalone Asio + reproc?~~ **Resolved: keep Boost.** Beast (HTTP/SSE) and Boost.Process v2 both require `boost::asio`, so Boost is a dependency regardless of the subprocess choice, and adding standalone Asio on top would duplicate it. Note for implementers: **Boost.Process v2 is not header-only** — it ships compiled sources, so Boost must be built with `header_only=False`.
 - Does `std::print` alone suffice once spdlog's `use_std_fmt` matures, letting us drop fmt?
