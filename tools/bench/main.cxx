@@ -327,6 +327,14 @@ auto main( int argument_count, char** arguments ) -> int {
 				milliseconds_since( started ) * 1000.0 / dispatch_iterations );
 			std::printf( "provider_declarative_events=%llu\n",
 				static_cast< unsigned long long >( total ) );
+
+			// The raw count depends on the iteration count, which is a command-line
+			// argument, so it cannot be a fixed baseline. The invariant that matters
+			// is one event per iteration -- a path that drops events is the failure
+			// this catches, and it would otherwise look like a suspiciously fast
+			// escape hatch.
+			std::printf( "provider_declarative_events_per_iteration=%.6f\n",
+				static_cast< double >( total ) / static_cast< double >( dispatch_iterations ) );
 		}
 
 		auto hatch = mcode::model::descriptor_from_json( hatch_json );
@@ -409,6 +417,9 @@ auto main( int argument_count, char** arguments ) -> int {
 						milliseconds_since( started ) * 1000.0 / dispatch_iterations );
 					std::printf( "provider_escape_hatch_events=%llu\n",
 						static_cast< unsigned long long >( total ) );
+					std::printf( "provider_escape_hatch_events_per_iteration=%.6f\n",
+						static_cast< double >( total ) /
+							static_cast< double >( dispatch_iterations ) );
 				}
 			}
 		}

@@ -50,8 +50,14 @@ dispatch_handlers_10_us_per_call = { kind = "ceiling", limit = 10 }
 provider_declarative_us_per_event = { kind = "ceiling", limit = 2 }
 provider_escape_hatch_us_per_event = { kind = "ceiling", limit = 5 }
 
-# Both paths must produce the same events. A hatch that silently drops events is
-# the failure this catches -- it would otherwise show up as a suspiciously fast
-# escape hatch.
-provider_declarative_events = { kind = "baseline", expected = 50000, tolerance = 0.001 }
-provider_escape_hatch_events = { kind = "baseline", expected = 50000, tolerance = 0.001 }
+# Both paths must produce exactly ONE event per iteration. A hatch that silently
+# drops events is the failure this catches -- it would otherwise show up as a
+# suspiciously fast escape hatch.
+#
+# The gate is on the RATIO, not the raw count: the iteration count is a
+# command-line argument, so a fixed expected count encodes the invocation rather
+# than the behaviour. It was recorded at 50000 and CI runs 20000, which failed
+# the gate on two platforms for no reason. The ratio is invocation-independent,
+# so it is exact.
+provider_declarative_events_per_iteration = { kind = "baseline", expected = 1.0, tolerance = 0 }
+provider_escape_hatch_events_per_iteration = { kind = "baseline", expected = 1.0, tolerance = 0 }

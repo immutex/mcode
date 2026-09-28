@@ -302,7 +302,21 @@ code comments.
     Testing the macro without including the header reports "std::expected is
     required" on a toolchain that has it.
 
-39. **Sorting before comparison is not optional in reports.** Extension discovery
+39. **A gate metric must not depend on how the tool was invoked.** The bench's
+    event counts are `iterations` by construction, and the iteration count is a
+    command-line argument — so gating them against a fixed `expected = 50000`
+    encoded the invocation, not the behaviour, and failed on two platforms the
+    moment CI passed 20000. The gate is on the RATIO (events per iteration,
+    expected exactly 1.0), which is invocation-independent and still catches an
+    applier that drops events.
+
+40. **A feature-test macro is defined by its own header.** `__cpp_lib_expected`
+    comes from `<expected>`, `__cpp_lib_generator` from `<generator>`. Testing
+    them without the include reports "not available" on a toolchain that has
+    them — which is exactly what `detect_library_support` did on GCC 14 and
+    Apple Clang 16. Optional headers are pulled in behind `__has_include`.
+
+41. **Sorting before comparison is not optional in reports.** Extension discovery
     sorts by name, and JSON object keys are emitted in sorted order, so two runs
     are byte-identical. An unsorted report makes a duplicate-name or load-order
     failure unreproducible.
