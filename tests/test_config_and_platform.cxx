@@ -1,8 +1,15 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <string>
+
+#if defined( _WIN32 )
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 #include "mcode/platform/seams.hxx"
 #include "mcode/support/config.hxx"
@@ -227,8 +234,23 @@ TEST_CASE( "the seven platform seams exist and report honestly", "[platform]" ) 
 	REQUIRE_FALSE( static_cast< bool >( applied ) );
 	REQUIRE( applied.error( ).code == errc::unsupported );
 
-	// 3. Termination
+	// 3. Termination.
+	//
+	// The invalid-pid cases are the interesting ones: on POSIX, `kill(0, 0)` and
+	// `kill(-1, 0)` both SUCCEED, so an unvalidated pid reports as alive -- and a
+	// caller that passed the same value to a kill would signal a process group or
+	// every process it may signal.
+	REQUIRE( platform::process_is_alive( 0 ) == false );
 	REQUIRE( platform::process_is_alive( 0xFFFFFFFFu ) == false );
+	REQUIRE( platform::process_is_alive( 0x80000000u ) == false );
+
+	// This process is alive, which is the positive case the negative ones need to
+	// be meaningful against.
+#if defined( _WIN32 )
+	REQUIRE( platform::process_is_alive( ::GetCurrentProcessId( ) ) );
+#else
+	REQUIRE( platform::process_is_alive( static_cast< std::uint64_t >( ::getpid( ) ) ) );
+#endif
 
 	// 4. fs helpers
 	auto canonical = platform::canonicalize( std::filesystem::current_path( ) );

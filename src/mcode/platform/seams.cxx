@@ -1,5 +1,6 @@
 #include "mcode/platform/seams.hxx"
 
+#include <cstdint>
 #include <cstdlib>
 #include <string>
 #include <utility>
@@ -16,6 +17,10 @@
 #endif
 
 namespace mcode::platform {
+
+	// PIDs are positive and fit a signed 32-bit pid_t. Anything else is not a
+	// process, and `kill` would reinterpret it as a signal target.
+	inline constexpr auto MAX_PROCESS_ID = std::int32_t{ 0x7FFFFFFF };
 
 	// M0 ships interfaces and honest stubs. Where a platform cannot do the thing
 	// yet, the call returns `unsupported` and `sandbox_support_level` says so --
@@ -131,6 +136,15 @@ namespace mcode::platform {
 	}
 
 	auto process_is_alive( const std::uint64_t process_id ) -> bool {
+		// Zero and -1 are not pids to `kill`: 0 means the caller's process group and
+		// -1 means every process the caller may signal, and both SUCCEED. So a
+		// truncated 0xFFFFFFFF would report as alive, and a caller passing a
+		// pid-sized value to a kill call would broadcast. Validate before the
+		// syscall.
+		if ( process_id == 0 || process_id > static_cast< std::uint64_t >( MAX_PROCESS_ID ) ) {
+			return false;
+		}
+
 	#if defined( _WIN32 )
 		const auto handle = OpenProcess( PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
 			static_cast< DWORD >( process_id ) );

@@ -291,7 +291,18 @@ code comments.
     Is a directory`. Windows hid this behind `.exe` for the project's whole life.
     Runtime output is `${CMAKE_BINARY_DIR}/bin` on every platform.
 
-37. **Sorting before comparison is not optional in reports.** Extension discovery
+37. **`kill( 0, 0 )` and `kill( -1, 0 )` both SUCCEED.** Neither is a pid query:
+    0 means the caller's process group and -1 means every process the caller may
+    signal, so an unvalidated pid reports as alive — and the same value passed to
+    a real kill would broadcast. `process_is_alive` validates the pid before the
+    syscall. Windows hides this entirely: `OpenProcess` simply fails for a bogus
+    id.
+
+38. **`__cpp_lib_expected` is defined by `<expected>`, not by the language.**
+    Testing the macro without including the header reports "std::expected is
+    required" on a toolchain that has it.
+
+39. **Sorting before comparison is not optional in reports.** Extension discovery
     sorts by name, and JSON object keys are emitted in sorted order, so two runs
     are byte-identical. An unsorted report makes a duplicate-name or load-order
     failure unreproducible.
