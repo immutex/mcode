@@ -228,6 +228,63 @@ Two dependencies worth stating because they are easy to get wrong:
 
 `A1` and `D1`–`D2` run in parallel. Nothing in Track E starts before `A2`, because the VM choice determines the build.
 
+## The next batch, split three ways
+
+This batch ends with the VM, the ABI, and the measurement spine settled — and an
+`mcode exec` that prints `no model client in M0` and exits 4. The batch after it
+is the agent core, and it runs as **three parallel workstreams on one base**
+because the three slices have no code dependency on each other:
+
+| Plan | Branch | Delivers | Depends on |
+|---|---|---|---|
+| `29` | `feat/model-client` | TLS, byte-stable request rendering, the streaming client, retry, credentials | nothing in this batch's output beyond the frozen `model_client` |
+| `30` | `feat/turn-loop` | The `04` state machine, context assembly, compaction, thrash detection | the abstract `model_client`, which a scripted fake satisfies |
+| `31` | `feat/core-tools` | The eight core tools, schemas, truncation, the approval policy | `workspace`/`registry`/`session_reads` only |
+
+Two interfaces are frozen on `master` **before** the branches start —
+`model::model_client` and `tools::session_reads`. That is what makes the three
+branches conflict-free: an interface each branch invents is three interfaces, and
+the merge is a rewrite. Both headers compile with only their implementations
+missing.
+
+The only shared files are `src/CMakeLists.txt` (three-way, mechanical) and
+`src/cli_commands.cxx` (`29` adds a single-request path, `30` replaces `run_exec`'s
+body; take `30`'s structure and keep `29`'s provider selection).
+
+### Who owns the object graph after the three merge
+
+**This is the gap the split creates, and it has to be named before the branches
+start.** Each branch proves its slice in isolation — and a slice test uses a fake
+for whatever is not in the slice. So all three can be green while `run_exec`
+still exits 4, because **nobody constructed the real objects together**:
+
+```
+provider_registry ──► resolve descriptor ──► resolve_api_key
+        │
+        ▼
+http_model_client ◄── http_client ──► workspace ──► session_reads
+        │                                              │
+        ▼                                              ▼
+    the loop (30) ◄──────── register_core_tools (31) ──┘
+```
+
+**`30` owns this function** — it is the branch that replaces `run_exec`'s body and
+therefore has to build what the loop consumes:
+
+```cpp
+// cli_commands.cxx
+auto run_exec( const exec_options& options ) -> exit_code;
+```
+
+Order after the merge: **`29` → `31` → `30` → integration.** The integration is
+its own commit, and its acceptance evidence is the only test that matters for the
+merge: **`mcode exec "…"` against the loopback stub returns real file content from
+the real `read` tool.** Not a state sequence, not a schema — an actual read.
+
+If that test is green, the three slices compose. If it is not, the failure is in
+the wiring, and the wiring was never any single branch's acceptance criterion.
+Budget it as its own task rather than assuming the merge is free.
+
 ## Exit criterion for the batch
 
 The batch is done when: the VM decision is recorded with per-platform numbers; the API is frozen at v1 with a capability model and an author-facing definition file; a provider, a tool, and a hook are each implemented **in the extension language, not C++**; and `B1`–`B5` report every budget in `01` as a measured number with CI gates enforcing them. Per-milestone done rules from `16` §"Definition of done" apply on top.

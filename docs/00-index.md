@@ -64,10 +64,18 @@ Rules for this directory:
 28. `27-a1-vm-spike.md` — the VM spike: measurements and the Luau decision.
 29. `28-b-measurements.md` — the measurement spine: load, memory, dispatch.
 
+**Parallel workstream plans** — three branches running at once off one base. Each
+is a self-contained brief for one agent; none depends on another's code.
+
+30. `29-workstream-model-client.md` — TLS, request rendering, the streaming client, retry.
+31. `30-workstream-turn-loop.md` — the state machine, context assembly, compaction.
+32. `31-workstream-core-tools.md` — the eight core tools, schemas, truncation, approval policy.
+
 **If you only read three:** `01`, `03`, `21`.
 
 > **Before starting any work, read `26-first-batch.md`.** It supersedes `16`'s
-> ordering for the first batch.
+> ordering for the first batch. For one of the three parallel workstreams, read
+> its plan in `29`–`31` instead: those are the briefs for this batch.
 
 ## Decisions at a glance
 
