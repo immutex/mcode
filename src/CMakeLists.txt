@@ -48,6 +48,7 @@ add_library(mcode_core STATIC
 
     mcode/proc/process.cxx
 
+    mcode/agent/event_log.cxx
     mcode/agent/loop.cxx
 )
 

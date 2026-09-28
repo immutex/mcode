@@ -395,4 +395,47 @@ namespace mcode::json {
 		return std::string{ raw.get( ) };
 	}
 
+	auto canonicalize( const std::string_view text ) -> result< std::string > {
+		yyjson_read_err read_error{ };
+		yyjson_doc* raw = yyjson_read_opts( const_cast< char* >( text.data( ) ), text.size( ), YYJSON_READ_NOFLAG,
+			nullptr, &read_error );
+
+		if ( raw == nullptr ) {
+			auto message = std::string{ "yyjson: " };
+			message += ( read_error.msg != nullptr ) ? read_error.msg : "parse error";
+
+			return std::unexpected( fail( errc::json, std::move( message ) ) );
+		}
+
+		auto owned = std::unique_ptr< yyjson_doc, void ( * )( yyjson_doc* ) >(
+			raw, yyjson_doc_free );
+
+		auto converted = from_val( yyjson_doc_get_root( owned.get( ) ) );
+
+		if ( !converted ) {
+			return std::unexpected( converted.error( ) );
+		}
+
+		auto sorted = document::make_object( );
+
+		if ( auto attached = sorted.set_node( "value", std::move( *converted ) ); !attached ) {
+			return std::unexpected( attached.error( ) );
+		}
+
+		auto dumped = sorted.dump( );
+
+		if ( !dumped ) {
+			return std::unexpected( dumped.error( ) );
+		}
+
+		// Strip the {"value":...} wrapper the set_node key requires.
+		const auto prefix = std::string_view{ R"({"value":)" };
+
+		if ( dumped->size( ) < prefix.size( ) + 1 || dumped->substr( 0, prefix.size( ) ) != prefix ) {
+			return std::unexpected( fail( errc::json, "canonicalize produced an unexpected shape" ) );
+		}
+
+		return dumped->substr( prefix.size( ), dumped->size( ) - prefix.size( ) - 1 );
+	}
+
 }

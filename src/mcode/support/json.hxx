@@ -150,4 +150,10 @@ namespace mcode::json {
 		bool mutable_ = false;
 	};
 
+	// Re-serializes `text` with object keys in sorted order.
+	//
+	// Thrash detection hashes tool arguments; two calls that differ only in key
+	// order are the same call, and hashing the raw text would miss that.
+	[[nodiscard]] auto canonicalize( std::string_view text ) -> result< std::string >;
+
 }
