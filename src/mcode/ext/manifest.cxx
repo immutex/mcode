@@ -67,6 +67,10 @@ namespace mcode::ext {
 		// cap is what keeps the accumulation below from overflowing.
 		inline constexpr auto MAX_VERSION_DIGITS = 9;
 
+		// The cap exists so a manifest cannot carry an unbounded prompt payload into
+		// every session that loads it.
+		inline constexpr auto MAX_DESCRIPTION_LENGTH = std::size_t{ 1024 };
+
 		auto is_valid_version( const std::string_view version ) -> bool {
 			// MAJOR.MINOR.PATCH, optionally with a prerelease or build suffix. A
 			// full semver implementation is unnecessary; the shape is what matters,
@@ -251,13 +255,21 @@ namespace mcode::ext {
 				", this build provides " + std::to_string( API_VERSION ) ) );
 		}
 
-		if ( auto description = parsed->optional_string( "description" ) ) {
-			if ( description->size( ) > 1024 ) {
+		auto description = parsed->optional_string( "description" );
+
+		if ( !description ) {
+			return std::unexpected( fail( errc::config,
+				path.string( ) + ": " + description.error( ).msg ) );
+		}
+
+		if ( *description ) {
+			if ( ( *description )->size( ) > MAX_DESCRIPTION_LENGTH ) {
 				return std::unexpected( fail( errc::config,
-					path.string( ) + ": description exceeds 1024 characters" ) );
+					path.string( ) + ": description exceeds " +
+					std::to_string( MAX_DESCRIPTION_LENGTH ) + " characters" ) );
 			}
 
-			manifest_value.description = *description;
+			manifest_value.description = **description;
 		}
 
 		// Absent or empty means deny.

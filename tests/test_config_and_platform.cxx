@@ -74,9 +74,32 @@ out = "/usage/completion_tokens"
 	REQUIRE( parsed->get_string( "stream.usage.in" ) == std::string{ "/usage/prompt_tokens" } );
 	REQUIRE( parsed->contains( "stream.usage.out" ) );
 
-	// Absence is distinguishable from an error.
+	// Absence, a present value, and a WRONG TYPE are three different answers.
 	REQUIRE_FALSE( parsed->contains( "nope" ) );
-	REQUIRE_FALSE( parsed->optional_string( "nope" ).has_value( ) );
+
+	auto absent = parsed->optional_string( "nope" );
+	REQUIRE( static_cast< bool >( absent ) );
+
+	if ( absent ) {
+		REQUIRE_FALSE( absent->has_value( ) );
+	}
+
+	auto present = parsed->optional_string( "name" );
+	REQUIRE( static_cast< bool >( present ) );
+
+	if ( present ) {
+		REQUIRE( present->has_value( ) );
+	}
+
+	// A wrong type is an ERROR, not an absence. Collapsing them made
+	// `description = 42` indistinguishable from no description, so the setting was
+	// silently ignored.
+	auto mistyped = parsed->optional_int( "version" );
+	REQUIRE_FALSE( static_cast< bool >( mistyped ) );
+
+	if ( !mistyped ) {
+		REQUIRE( mistyped.error( ).msg.find( "not an integer" ) != std::string::npos );
+	}
 }
 
 TEST_CASE( "toml refuses what it cannot represent rather than ignoring it", "[toml]" ) {

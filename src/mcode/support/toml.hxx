@@ -61,9 +61,16 @@ namespace mcode::toml {
 		[[nodiscard]] auto get_string_array( std::string_view key ) const
 			-> result< std::vector< std::string > >;
 
-		// Optional variants: absence is not an error.
-		[[nodiscard]] auto optional_string( std::string_view key ) const -> std::optional< std::string >;
-		[[nodiscard]] auto optional_int( std::string_view key ) const -> std::optional< std::int64_t >;
+		// Optional variants: absence is not an error, but a WRONG TYPE is.
+		//
+		// Returning a bare optional made `description = 42` indistinguishable from
+		// no description at all, so a mistyped setting was silently ignored -- the
+		// failure mode the parser exists to prevent. The outer expected carries the
+		// type error; the inner optional carries absence.
+		[[nodiscard]] auto optional_string( std::string_view key ) const
+			-> result< std::optional< std::string > >;
+		[[nodiscard]] auto optional_int( std::string_view key ) const
+			-> result< std::optional< std::int64_t > >;
 
 		[[nodiscard]] auto keys( ) const noexcept -> const std::map< std::string, value, std::less<> >& {
 			return values_;

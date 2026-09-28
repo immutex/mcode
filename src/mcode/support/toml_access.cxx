@@ -100,32 +100,38 @@ namespace mcode::toml {
 		return found->as_string_array( );
 	}
 
-	auto table::optional_string( const std::string_view key ) const -> std::optional< std::string > {
+	auto table::optional_string( const std::string_view key ) const
+		-> result< std::optional< std::string > > {
 		const auto* found = find( key );
 
 		if ( found == nullptr ) {
-			return std::nullopt;
+			return std::optional< std::string >{ };
 		}
 
 		if ( auto text = found->as_string( ) ) {
-			return *text;
+			return std::optional< std::string >{ *text };
 		}
 
-		return std::nullopt;
+		// Present but the wrong type. Reporting it as absent would drop a setting
+		// the user wrote.
+		return std::unexpected( fail( errc::config,
+			"'" + std::string{ key } + "' is not a string" ) );
 	}
 
-	auto table::optional_int( const std::string_view key ) const -> std::optional< std::int64_t > {
+	auto table::optional_int( const std::string_view key ) const
+		-> result< std::optional< std::int64_t > > {
 		const auto* found = find( key );
 
 		if ( found == nullptr ) {
-			return std::nullopt;
+			return std::optional< std::int64_t >{ };
 		}
 
 		if ( auto number = found->as_int( ) ) {
-			return *number;
+			return std::optional< std::int64_t >{ *number };
 		}
 
-		return std::nullopt;
+		return std::unexpected( fail( errc::config,
+			"'" + std::string{ key } + "' is not an integer" ) );
 	}
 
 	auto table::reject_unknown( const std::vector< std::string_view >& allowed ) const -> status {
