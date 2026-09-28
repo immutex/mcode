@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # `master` is the default branch; `main` is listed so a rename does not
+    # silently stop CI from running, which is exactly what happened once already.
+    branches: [master, main]
   pull_request:
   workflow_dispatch:
     inputs:
