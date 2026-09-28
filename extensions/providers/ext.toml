@@ -1,0 +1,5 @@
+name = "providers"
+version = "0.1.0"
+api_version = 1
+description = "Reference model providers, shipped as an extension rather than compiled in"
+permissions = ["net"]

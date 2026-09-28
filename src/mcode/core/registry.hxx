@@ -53,6 +53,11 @@ namespace mcode {
 
 		[[nodiscard]] auto owned_by( const std::string_view owner ) const -> std::vector< const tool_def* >;
 
+		// Removes one tool by name. False when the name is absent, which is a
+		// no-op rather than an error: unregistering something already gone is a
+		// legitimate race, not a bug.
+		auto remove( std::string_view name ) -> bool;
+
 		auto remove_owner( const std::string_view owner ) -> std::size_t;
 
 		[[nodiscard]] auto size( ) const noexcept -> std::size_t { return tools_.size( ); }

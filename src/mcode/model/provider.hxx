@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -122,5 +124,39 @@ namespace mcode::model {
 	// load error.
 	[[nodiscard]] auto descriptor_from_json( std::string_view json_text )
 		-> result< provider_descriptor >;
+
+	// Holds the descriptors declared at load time, by name.
+	//
+	// Descriptors are data, not callbacks (docs/18): the provider seam applies
+	// them natively, so a registry of plain structs is all an extension can
+	// contribute. There is no per-provider code path in the VM.
+	class provider_registry {
+	public:
+		// A duplicate name is refused rather than shadowed: two providers claiming
+		// one name would make `--model` ambiguous.
+		auto add( provider_descriptor descriptor ) -> status;
+
+		[[nodiscard]] auto find( std::string_view name ) const -> const provider_descriptor*;
+
+		[[nodiscard]] auto all( ) const -> std::vector< const provider_descriptor* >;
+
+		// Providers declared by one extension. The owner is recorded on add so an
+		// unload can drop exactly its entries.
+		[[nodiscard]] auto owned_by( std::string_view owner ) const
+			-> std::vector< const provider_descriptor* >;
+
+		auto remove_owner( std::string_view owner ) -> std::size_t;
+
+		[[nodiscard]] auto size( ) const noexcept -> std::size_t { return entries_.size( ); }
+		[[nodiscard]] auto empty( ) const noexcept -> bool { return entries_.empty( ); }
+
+	private:
+		struct entry {
+			provider_descriptor descriptor;
+			std::string owner;
+		};
+
+		std::map< std::string, entry, std::less<> > entries_;
+	};
 
 }

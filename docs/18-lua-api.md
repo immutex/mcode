@@ -77,6 +77,25 @@ Our resolver is ~80 lines, resolves only inside the extension root, executes no 
 | `mcode.ext.name` | the calling extension's own name, as a string | Needed for self-attribution without a `debug` API that we removed |
 | `mcode.model.register(def)` | declare a provider: endpoint, auth, and the JSON-pointer mapping from its stream to the canonical event model (`15` §Provider seam). **Requires `net`.** The hot path stays in C++; this is data, not a callback | `26` decision 2 |
 
+### What E8 implemented
+
+`docs/26` E8 built the loader and the tool path, and the implementation settled four
+things the table above left implicit. They are recorded here because they are now
+load-bearing, not because the surface changed — it did not, and v1 is still closed at
+23 rows.
+
+| Settled | Why |
+|---|---|
+| `mcode.api_version` is a **number** | Luau raises on a number/string comparison rather than coercing, so a string would break every `mcode.api_version < 2` an author writes. The definition file declares the type; only a runtime probe catches the coercion. |
+| `mcode.ext.version` is **not** exposed | It is not in the frozen table, and nothing needs it. An unlisted field is the drift the table exists to prevent, so it was removed rather than justified. |
+| Namespaces are **real tables** | `mcode.tool.register` is created by walking the dotted path before sealing, not by registering a flat `tool_register` and hoping. A segment that exists and is not a table is refused, because silently replacing a host function with a namespace would break a call the author already wrote. |
+| The loader keeps the **VM alive** | A registry entry without a live VM is a tool the model can see and cannot call — worse than an absent tool. The loader owns the `lua_host` and the `api_surface`, and the surface holds each `run` closure by `lua_ref`. |
+
+Two failure channels are distinct and both are tested: `nil, err` is environmental and
+returns to the caller; a raised error is a contract violation and surfaces as a message.
+Neither is allowed to become an empty success, because the model cannot tell an empty
+string apart from a tool that failed.
+
 **That is 23 rows: 26 callable names and 3 fields, and v1 is closed.** `require` is deliberately *not* in this table — Luau treats it as a language-level global, so the host injects it as one. It is a capability all the same, and it is listed under "Extension layout" above. Anything beyond this — string helpers, path manipulation, table utilities — belongs in a pure-Luau companion library, **not** the C-exposed surface. Neovim's `vim.*` utility creep is the cautionary case.
 
 Deliberate omissions, each for a stated reason:

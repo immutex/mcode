@@ -1,0 +1,5 @@
+name = "hello-tool"
+version = "0.1.0"
+api_version = 1
+description = "A first-party tool written as an extension (docs/26 E8)"
+permissions = ["fs_read"]

@@ -9,6 +9,7 @@
 #include "mcode/cli/exec.hxx"
 #include "mcode/events/bus.hxx"
 #include "mcode/eval/suite.hxx"
+#include "mcode/ext/loader.hxx"
 #include "mcode/core/registry.hxx"
 #include "mcode/core/version.hxx"
 #include "mcode/ext/lua_host.hxx"
@@ -664,6 +665,131 @@ auto main( int argument_count, char** arguments ) -> int {
 
 		check( stream.run_end_emitted( ), "run.end was emitted" );
 		check( stream.lines_emitted( ) == 3, "run.start, one event, and exactly one run.end" );
+	}
+
+	section( "extension loader (docs/26 E8)" );
+
+	{
+		// The real path: discover, validate, install the frozen API, run init.luau,
+		// and call the registered tool back. No stubs.
+		auto registry = mcode::tool_registry{ };
+		auto providers = mcode::model::provider_registry{ };
+
+		const auto extensions = std::filesystem::path{ MCODE_SMOKE_EXTENSIONS };
+
+		auto options = mcode::ext::loader_options{ };
+		options.register_api = mcode::ext::default_register_api( registry, providers );
+
+		auto loaded = mcode::ext::load_extensions( { extensions }, registry, providers, options );
+
+		for ( const auto& failure : loaded.report.failed ) {
+			std::printf( "  loader: %s failed: %s\n", failure.name.c_str( ),
+				failure.reason.c_str( ) );
+		}
+
+		// The fixture root deliberately holds one good extension and one whose
+		// manifest has a typo. Both outcomes are the point: the good one loads, the
+		// bad one fails, and the failure does not take the session with it.
+		check( loaded.report.loaded.size( ) == 1, "the valid fixture extension loaded" );
+		check( loaded.report.failed.size( ) == 1, "the invalid fixture extension failed" );
+		check( loaded.report.loaded.front( ).name == "hello-tool",
+			"the loaded extension is the valid one" );
+
+		// A tool an extension registered is indistinguishable from a core tool to
+		// the registry, except for its source and owner.
+		const auto* hello = registry.find( "hello" );
+		check( hello != nullptr, "the extension's tool is in the registry" );
+
+		if ( hello != nullptr ) {
+			check( hello->owner == "hello-tool", "the tool is attributed to its extension" );
+			check( !hello->is_core( ), "the tool is not core" );
+		}
+
+		// And it runs: C++ registry -> VM closure -> extension code -> back.
+		auto greeting = loaded.invoke( "hello", R"({"name":"smoke"})" );
+		check( greeting && greeting->find( "hello from hello-tool to smoke" ) != std::string::npos,
+			"the tool ran and returned the extension's answer",
+			greeting ? *greeting : greeting.error( ).msg );
+
+		// An environmental failure comes back as a message, not an empty success.
+		auto refused = loaded.invoke( "hello", "{}" );
+		check( !refused && refused.error( ).msg == "name is required",
+			"an environmental failure returns the extension's message",
+			refused ? std::string{ "unexpectedly succeeded" } : refused.error( ).msg );
+
+		section( "extension loader (disable all)" );
+
+		// docs/23's mechanical check: with every extension disabled the agent must
+		// still have its core tools and must not error. This is what proves the
+		// core/extension line has not drifted.
+		auto bare_registry = mcode::tool_registry{ };
+
+		for ( const auto* name : { "read", "write", "edit", "glob", "grep", "bash" } ) {
+			auto core = mcode::tool_def{ };
+			core.name = name;
+			core.source = mcode::tool_source::core;
+
+			if ( !bare_registry.add( std::move( core ) ) ) {
+				check( false, "could not build the core registry" );
+
+				break;
+			}
+		}
+
+		auto bare_providers = mcode::model::provider_registry{ };
+
+		auto disabled_options = mcode::ext::loader_options{ };
+		disabled_options.disabled = true;
+		disabled_options.register_api = mcode::ext::default_register_api( bare_registry,
+			bare_providers );
+
+		auto bare = mcode::ext::load_extensions( { extensions }, bare_registry, bare_providers,
+			disabled_options );
+
+		check( bare.report.loaded.empty( ), "nothing loaded when disabled" );
+		check( bare.report.failed.empty( ), "disabling is not a failure" );
+		check( bare.report.disabled == 2, "both extensions were counted as disabled" );
+		check( bare_registry.size( ) == 6, "the core tools survived" );
+		check( bare_registry.find( "read" ) != nullptr, "a core tool is still present" );
+		check( bare_registry.find( "hello" ) == nullptr, "the extension tool is absent" );
+		check( bare_providers.empty( ), "no provider was declared" );
+
+		// Invoking what would have been there is a clean error, not a crash.
+		auto absent = bare.invoke( "hello", "{}" );
+		check( !absent, "invoking a disabled tool is an error" );
+
+		section( "extension loader (shipped extensions)" );
+
+		// The extensions the product ships. `providers` declares three model
+		// providers through `mcode.model.register`, which is the D3 dogfood claim
+		// exercised through the real loader rather than a hand-written mirror.
+		auto shipped_registry = mcode::tool_registry{ };
+		auto shipped_providers = mcode::model::provider_registry{ };
+
+		auto shipped_options = mcode::ext::loader_options{ };
+		shipped_options.register_api = mcode::ext::default_register_api( shipped_registry,
+			shipped_providers );
+
+		auto shipped = mcode::ext::load_extensions(
+			{ std::filesystem::path{ MCODE_SMOKE_SHIPPED_EXTENSIONS } }, shipped_registry,
+			shipped_providers, shipped_options );
+
+		for ( const auto& failure : shipped.report.failed ) {
+			std::printf( "  loader: %s failed: %s\n", failure.name.c_str( ),
+				failure.reason.c_str( ) );
+		}
+
+		check( shipped.report.loaded.size( ) == 1, "the shipped extensions directory is not empty" );
+		check( shipped.report.failed.empty( ), "every shipped extension loaded" );
+		check( shipped_providers.size( ) == 3, "the providers extension declared three providers" );
+		check( shipped_providers.find( "openai-chat-completions" ) != nullptr,
+			"the OpenAI descriptor is registered" );
+
+		if ( const auto* descriptor = shipped_providers.find( "anthropic-messages" );
+			descriptor != nullptr ) {
+			check( descriptor->endpoint.starts_with( "https://" ),
+				"the descriptor carries a real endpoint" );
+		}
 	}
 
 	section( "summary" );

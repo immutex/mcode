@@ -234,4 +234,70 @@ namespace mcode::model {
 		return descriptor;
 	}
 
+
+	auto provider_registry::add( provider_descriptor descriptor ) -> status {
+		if ( descriptor.name.empty( ) ) {
+			return std::unexpected( fail( errc::config, "a provider needs a name" ) );
+		}
+
+		if ( entries_.contains( descriptor.name ) ) {
+			return std::unexpected( fail( errc::config,
+				"provider '" + descriptor.name + "' is already declared" ) );
+		}
+
+		if ( auto checked = validate( descriptor ); !checked ) {
+			return checked;
+		}
+
+		auto record = entry{ };
+		record.descriptor = std::move( descriptor );
+
+		entries_.emplace( record.descriptor.name, std::move( record ) );
+
+		return { };
+	}
+
+	auto provider_registry::find( const std::string_view name ) const
+		-> const provider_descriptor* {
+		const auto found = entries_.find( std::string{ name } );
+
+		return found != entries_.end( ) ? &found->second.descriptor : nullptr;
+	}
+
+	auto provider_registry::all( ) const -> std::vector< const provider_descriptor* > {
+		auto out = std::vector< const provider_descriptor* >{ };
+
+		for ( const auto& [ name, record ] : entries_ ) {
+			(void)name;
+
+			out.push_back( &record.descriptor );
+		}
+
+		return out;
+	}
+
+	auto provider_registry::owned_by( const std::string_view owner ) const
+		-> std::vector< const provider_descriptor* > {
+		auto out = std::vector< const provider_descriptor* >{ };
+
+		for ( const auto& [ name, record ] : entries_ ) {
+			(void)name;
+
+			if ( record.owner == owner ) {
+				out.push_back( &record.descriptor );
+			}
+		}
+
+		return out;
+	}
+
+	auto provider_registry::remove_owner( const std::string_view owner ) -> std::size_t {
+		if ( owner.empty( ) ) {
+			return 0;
+		}
+
+		return std::erase_if( entries_,
+			[owner]( const auto& item ) { return item.second.owner == owner; } );
+	}
+
 }

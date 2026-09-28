@@ -1,0 +1,4 @@
+name = "broken-manifest"
+version = "0.1.0"
+api_version = 1
+permission = ["fs_read"]

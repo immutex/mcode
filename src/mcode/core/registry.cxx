@@ -89,6 +89,14 @@ namespace mcode {
 		return out;
 	}
 
+	auto tool_registry::remove( const std::string_view name ) -> bool {
+		if ( name.empty( ) ) {
+			return false;
+		}
+
+		return tools_.erase( std::string{ name } ) > 0;
+	}
+
 	auto tool_registry::remove_owner( const std::string_view owner ) -> std::size_t {
 		if ( owner.empty( ) ) {
 			return 0;

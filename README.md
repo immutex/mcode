@@ -168,6 +168,34 @@ code comments.
     interface link libraries arrange — do not reorder `mcode_mimalloc` in
     `target_link_libraries`.
 
+16. **A raw string literal containing `)"` terminates early.** The delimiters are
+    `R"( … )"`, so a Luau or JSON payload that ends with a quote-paren closes the
+    literal and the compiler reports a syntax error hundreds of lines later, or
+    reports the raw string as unterminated at end of file. Use a custom
+    delimiter: `R"JSON( … )JSON"`, `R"LUASRC( … )LUASRC"`. This has cost time
+    three separate times; it is now the first thing to check when a payload
+    literal misbehaves.
+
+17. **`luaL_*` lives in `lualib.h` for Luau, not `lauxlib.h`.** Upstream Lua puts
+    `luaL_checkstring` and friends in `lauxlib.h`; Luau's Conan package ships
+    `lua.h`, `luacode.h`, `luaconf.h`, and `lualib.h` and no `lauxlib.h` at all.
+
+18. **The `edit` tool can no-op silently.** A fuzzy whitespace mismatch is
+    reported as success while the file is unchanged. Verify with a read or a
+    grep after any edit that matters; a test that keeps passing after an edit is
+    a symptom, not a reassurance.
+
+19. **A `lua_host` must not be moved after the API surface is installed.** The
+    surface stores a raw `lua_host*`, so moving the host into a `unique_ptr`
+    afterwards leaves the pointer dangling and every tool call fails with "the
+    host has no thread" — long after the code that caused it. The loader
+    constructs the VM into its `unique_ptr` directly and never moves it again.
+
+20. **Sorting before comparison is not optional in reports.** Extension discovery
+    sorts by name, and JSON object keys are emitted in sorted order, so two runs
+    are byte-identical. An unsorted report makes a duplicate-name or load-order
+    failure unreproducible.
+
 ## Building
 
 ```bash

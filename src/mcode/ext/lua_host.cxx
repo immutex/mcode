@@ -17,6 +17,12 @@ namespace mcode {
 		char g_allocator_key = 0;
 		char g_watchdog_key = 0;
 
+		[[nodiscard]] auto last_segment( const std::string_view path ) -> std::string_view {
+			const auto position = path.rfind( '.' );
+
+			return position == std::string_view::npos ? path : path.substr( position + 1 );
+		}
+
 		constexpr auto INTERRUPT_GRANULARITY = std::uint64_t{ 10'000 };
 
 		auto pop_error( lua_State* state ) -> std::string {
@@ -291,33 +297,117 @@ namespace mcode {
 		return host;
 	}
 
-	auto lua_host::register_host_function( const std::string_view name, host_function function ) -> status {
+	auto lua_host::register_host_function( const std::string_view path, host_function function ) -> status {
 		if ( state_ == nullptr ) {
 			return std::unexpected( fail( errc::lua_error, "host has no lua_State" ) );
 		}
 
 		if ( sealed_ ) {
 			return std::unexpected( fail( errc::config,
-				"cannot register '" + std::string{ name } + "' after the API surface is sealed" ) );
+				"cannot register '" + std::string{ path } + "' after the API surface is sealed" ) );
 		}
 
-		if ( name.empty( ) ) {
+		if ( path.empty( ) ) {
 			return std::unexpected( fail( errc::config, "host function name must not be empty" ) );
 		}
 
-		const auto key = std::string{ name };
+		const auto key = std::string{ path };
 		const auto [ entry, inserted ] = host_functions_->try_emplace( key, std::move( function ) );
 
 		if ( !inserted ) {
 			return std::unexpected( fail( errc::config, "duplicate host function '" + key + "'" ) );
 		}
 
-		lua_getglobal( state_, "mcode" );
+		if ( auto placed = push_namespace( path ); !placed ) {
+			return placed;
+		}
 
 		lua_pushlightuserdata( state_, &entry->second );
 		lua_pushcclosurek( state_, host_function_dispatch, key.c_str( ), 1, nullptr );
-		lua_setfield( state_, -2, key.c_str( ) );
+		lua_setfield( state_, -2, std::string{ last_segment( path ) }.c_str( ) );
 		lua_pop( state_, 1 );
+
+		return { };
+	}
+
+	auto lua_host::register_raw_function( const std::string_view path,
+		const lua_CFunction function, void* upvalue ) -> status {
+		if ( state_ == nullptr ) {
+			return std::unexpected( fail( errc::lua_error, "host has no lua_State" ) );
+		}
+
+		if ( sealed_ ) {
+			return std::unexpected( fail( errc::config,
+				"cannot register '" + std::string{ path } + "' after the API surface is sealed" ) );
+		}
+
+		if ( path.empty( ) || function == nullptr ) {
+			return std::unexpected( fail( errc::config,
+				"a raw function needs a path and a function pointer" ) );
+		}
+
+		if ( auto placed = push_namespace( path ); !placed ) {
+			return placed;
+		}
+
+		lua_pushlightuserdata( state_, upvalue );
+		lua_pushcclosurek( state_, function, std::string{ path }.c_str( ), 1, nullptr );
+		lua_setfield( state_, -2, std::string{ last_segment( path ) }.c_str( ) );
+		lua_pop( state_, 1 );
+
+		return { };
+	}
+
+	// Walks `a.b.c`, creating tables for the intermediate segments, and leaves the
+	// parent table on the stack. A segment that exists and is not a table is a
+	// collision, refused rather than overwritten -- silently replacing a host
+	// function with a namespace would break a call the author already wrote.
+	auto lua_host::push_namespace( const std::string_view path ) -> status {
+		lua_getglobal( state_, "mcode" );
+
+		auto remaining = path;
+		auto position = remaining.find( '.' );
+
+		while ( position != std::string_view::npos ) {
+			const auto segment = remaining.substr( 0, position );
+
+			if ( segment.empty( ) ) {
+				lua_pop( state_, 1 );
+
+				return std::unexpected( fail( errc::config,
+					"empty namespace segment in '" + std::string{ path } + "'" ) );
+			}
+
+			lua_getfield( state_, -1, std::string{ segment }.c_str( ) );
+
+			if ( lua_isnil( state_, -1 ) ) {
+				lua_pop( state_, 1 );
+				lua_newtable( state_ );
+				lua_pushvalue( state_, -1 );
+				lua_setfield( state_, -3, std::string{ segment }.c_str( ) );
+
+				// The copy on top of the stack becomes the new parent.
+			} else if ( !lua_istable( state_, -1 ) ) {
+				lua_pop( state_, 2 );
+
+				return std::unexpected( fail( errc::config,
+					"namespace '" + std::string{ segment } + "' in '" + std::string{ path } +
+					"' already exists and is not a table" ) );
+			}
+
+			// Drop the previous parent, leaving the current one on top.
+			lua_remove( state_, -2 );
+
+			remaining.remove_prefix( position + 1 );
+			position = remaining.find( '.' );
+		}
+
+		if ( remaining.empty( ) ) {
+			lua_pop( state_, 1 );
+
+			return std::unexpected( fail( errc::config,
+				"host function path '" + std::string{ path } + "' must have a final segment" ) );
+		}
 
 		return { };
 	}
@@ -332,10 +422,34 @@ namespace mcode {
 				"cannot set global '" + std::string{ name } + "' after the API surface is sealed" ) );
 		}
 
-		const auto key = std::string{ name };
+		if ( auto placed = push_namespace( name ); !placed ) {
+			return placed;
+		}
 
 		lua_pushlstring( state_, text.data( ), text.size( ) );
-		lua_setglobal( state_, key.c_str( ) );
+		lua_setfield( state_, -2, std::string{ last_segment( name ) }.c_str( ) );
+		lua_pop( state_, 1 );
+
+		return { };
+	}
+
+	auto lua_host::set_global_number( const std::string_view path, const double value ) -> status {
+		if ( state_ == nullptr ) {
+			return std::unexpected( fail( errc::lua_error, "host has no lua_State" ) );
+		}
+
+		if ( sealed_ ) {
+			return std::unexpected( fail( errc::config,
+				"cannot set global '" + std::string{ path } + "' after the API surface is sealed" ) );
+		}
+
+		if ( auto placed = push_namespace( path ); !placed ) {
+			return placed;
+		}
+
+		lua_pushnumber( state_, value );
+		lua_setfield( state_, -2, std::string{ last_segment( path ) }.c_str( ) );
+		lua_pop( state_, 1 );
 
 		return { };
 	}

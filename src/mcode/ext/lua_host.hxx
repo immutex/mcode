@@ -14,6 +14,8 @@
 
 struct lua_State;
 
+typedef int ( *lua_CFunction )( lua_State* );
+
 namespace mcode {
 
 	namespace detail {
@@ -72,8 +74,26 @@ namespace mcode {
 		// The mcode table becomes readonly at the first call to any execution
 		// entry point: Luau enforces readonly on every C API write path, so there
 		// is no host-side bypass. Register the whole API surface up front.
-		auto register_host_function( std::string_view name, host_function function ) -> status;
-		auto set_global_string( std::string_view name, std::string_view text ) -> status;
+		// Two-level namespacing is frozen (docs/18): `mcode.tool.register`, not a
+		// flat `mcode.tool_register`. The path is created before sealing, because
+		// sealing makes the surface readonly and Luau enforces readonly on every
+		// C API write path.
+		auto register_host_function( std::string_view path, host_function function ) -> status;
+		auto set_global_string( std::string_view path, std::string_view text ) -> status;
+
+		// `mcode.api_version` is an integer in the frozen surface (docs/18), and a
+		// string would break every `mcode.api_version < 2` comparison an author
+		// writes. Luau compares a number to a string by raising, not by coercing.
+		auto set_global_number( std::string_view path, double value ) -> status;
+
+		// Registers a raw C closure with one lightuserdata upvalue.
+		//
+		// `register_host_function` marshals arguments through JSON, which cannot
+		// carry a function. `mcode.tool.register(def)` receives a table containing a
+		// `run` closure, so that entry point needs the C stack directly. The
+		// upvalue is the owner object, retrieved with `lua_upvalueindex( 1 )`.
+		auto register_raw_function( std::string_view path, lua_CFunction function,
+			void* upvalue ) -> status;
 
 		auto run( std::string_view chunk, std::string_view chunk_name = "=(extension)" ) -> status;
 		auto run_file( const std::filesystem::path& path ) -> status;
@@ -107,6 +127,11 @@ namespace mcode {
 
 		auto seal( ) -> status;
 		auto arm_watchdog( ) -> void;
+
+		// Walks a dotted path, creating intermediate tables, and leaves the parent
+		// table on the stack. Shared by both registration entry points so a
+		// function and a value cannot disagree about the namespace shape.
+		auto push_namespace( std::string_view path ) -> status;
 
 		lua_State* state_ = nullptr;
 		lua_State* thread_ = nullptr;

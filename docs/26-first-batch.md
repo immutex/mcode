@@ -178,6 +178,8 @@ Per `16` M0, with two amendments: the provider client is Track D's seam rather t
 | **E7** | Eval run-record schema + pass@k machinery. | Wired to E6 |
 | **E8** | **Tool-registration dogfood**: one first-party tool in Lua, plus the `23` disable-all test. | Disabling every extension leaves a working, less capable agent |
 
+E8 also closed the loader: `ext.toml` validation, the two-level namespace walk, `mcode.tool.register` / `mcode.model.register`, and the ownership rule that a registry entry always has a live VM behind it. See `18` §What E8 implemented and `19` §Loading lifecycle.
+
 ### Track F — Doc amendments
 
 A2/A3 force edits to `01` (principle 8, the sandbox non-goal, two stale criteria, the load budget), `12` §Layer 3, `17`, `18`, `19`, `23`, `00-index`, `16`, `AGENTS.md`. These are tasks, not side effects: leaving a stale claim is the defect class `AGENTS.md` ranks first.

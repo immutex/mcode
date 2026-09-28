@@ -26,6 +26,11 @@ add_library(mcode_core STATIC
 
     mcode/eval/suite.cxx
 
+    mcode/ext/api.cxx
+    mcode/ext/loader.cxx
+    mcode/ext/lua_json.cxx
+    mcode/ext/manifest.cxx
+
     mcode/fs/workspace.cxx
 
     mcode/net/sse.cxx
@@ -87,11 +92,19 @@ if(NOT WIN32 AND NOT APPLE)
     target_link_options(mcode_core PUBLIC "-Wl,--export-dynamic")
 endif()
 
+set(MCODE_BUNDLED_EXT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../extensions")
+
 add_executable(mcode main.cxx)
 target_link_libraries(mcode PRIVATE mcode_core)
-mcode_configure_target(mcode)
 
-set(MCODE_BUNDLED_EXT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extensions")
+# The smoke test loads the real fixture extensions, so it needs their path. The
+# fixture lives beside the tests rather than in the source tree's extensions/,
+# because a broken fixture must not be loadable by a normal run.
+target_compile_definitions(mcode PRIVATE
+    MCODE_SMOKE_EXTENSIONS="${CMAKE_CURRENT_SOURCE_DIR}/../tests/fixtures/extensions"
+    MCODE_SMOKE_SHIPPED_EXTENSIONS="${MCODE_BUNDLED_EXT_DIR}")
+
+mcode_configure_target(mcode)
 
 if(EXISTS "${MCODE_BUNDLED_EXT_DIR}")
     add_custom_target(mcode_copy_extensions ALL

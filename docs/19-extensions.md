@@ -85,6 +85,24 @@ discover → validate manifest → trust check → hash verify → load → init
 
 Extensions are loaded **after** the loop and event bus exist but **before** the first model request, so hooks are in place for turn one.
 
+**What E8 implemented.** The loader in `src/mcode/ext/loader.cxx` does the first two
+phases for real, and two details from the lifecycle table are now settled rather than
+intended:
+
+| Settled | Why |
+|---|---|
+| **Disabled ≠ absent** | `--no-extensions` and the config disable list are counted in the report. An extension skipped by policy and an extension that is not installed are different answers to the user's question, and conflating them hides a broken install. |
+| **A failing extension never fails the session** | One bad manifest is one `failed` entry beside the extensions that loaded. The smoke test asserts exactly this: a valid extension and an invalid one sit in the same directory, the valid one loads, and the invalid one is reported. |
+
+The acceptance test for `docs/26` E8 is the disable-all path: with every extension
+disabled, the core registry is intact, nothing errors, and invoking what an extension
+would have provided is a clean failure rather than a crash or a hang. That is the
+mechanical check that the core/extension line has not drifted (`23` §Testing), and it
+runs in both `ctest` and the startup smoke test.
+
+Discovery order is by name, sorted, so two runs report the same sequence — a
+duplicate-name report that differed run to run would be untrustworthy.
+
 ## Extension host interface
 
 One interface, two implementations. v1 ships the in-process host; the process tier is the same contract over a pipe, so adding it is an implementation, not a redesign (`12` §Layer 3).
