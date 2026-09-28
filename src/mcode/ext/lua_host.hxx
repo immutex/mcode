@@ -38,6 +38,11 @@ namespace mcode {
 
 	using host_function = std::function< result< std::string >( std::string_view args_json ) >;
 
+	// Resolves a `require` path against the extension root and returns its source.
+	// An empty optional is a load error.
+	using module_loader_function =
+		std::function< std::optional< std::string >( std::string_view module_path ) >;
+
 	struct lua_host_options {
 		std::string extension_name;
 
@@ -53,7 +58,7 @@ namespace mcode {
 		// Resolves a require path against the extension root. Returning an empty
 		// optional is a load error; the host never falls back to the filesystem
 		// at large.
-		std::function< std::optional< std::string >( std::string_view module_path ) > module_loader;
+		module_loader_function module_loader;
 	};
 
 	// One VM per extension. Two extensions share no mutable state: not globals,
@@ -74,14 +79,14 @@ namespace mcode {
 		// The mcode table becomes readonly at the first call to any execution
 		// entry point: Luau enforces readonly on every C API write path, so there
 		// is no host-side bypass. Register the whole API surface up front.
-		// Two-level namespacing is frozen (docs/18): `mcode.tool.register`, not a
+		// Two-level namespacing is frozen: `mcode.tool.register`, not a
 		// flat `mcode.tool_register`. The path is created before sealing, because
 		// sealing makes the surface readonly and Luau enforces readonly on every
 		// C API write path.
 		auto register_host_function( std::string_view path, host_function function ) -> status;
 		auto set_global_string( std::string_view path, std::string_view text ) -> status;
 
-		// `mcode.api_version` is an integer in the frozen surface (docs/18), and a
+		// `mcode.api_version` is an integer in the frozen surface, and a
 		// string would break every `mcode.api_version < 2` comparison an author
 		// writes. Luau compares a number to a string by raising, not by coercing.
 		auto set_global_number( std::string_view path, double value ) -> status;
@@ -110,6 +115,30 @@ namespace mcode {
 		// with the host.
 		auto reset( ) -> status;
 
+		// Arms the time budget for its lifetime and disarms it on exit.
+		//
+		// Both halves matter, and the asymmetry is why this is a scope rather than
+		// two calls. Not arming lets an extension spin forever on a dispatch path
+		// that never went through `run`/`eval_to_string`/`call_global` -- hooks and
+		// tool calls are exactly those paths. Not DISarming leaves a deadline in the
+		// past, so the first safepoint of the next dispatch raises a time-budget
+		// error belonging to a call that already finished.
+		class budget_scope {
+		public:
+			// A null host is accepted: dispatch may hold a subscription whose host
+			// has gone away, and the guard must be usable on that path.
+			explicit budget_scope( lua_host* host ) noexcept;
+			~budget_scope( );
+
+			budget_scope( const budget_scope& ) = delete;
+			auto operator=( const budget_scope& ) -> budget_scope& = delete;
+			budget_scope( budget_scope&& ) = delete;
+			auto operator=( budget_scope&& ) -> budget_scope& = delete;
+
+		private:
+			lua_host* host_ = nullptr;
+		};
+
 		[[nodiscard]] auto sealed( ) const noexcept -> bool { return sealed_; }
 		[[nodiscard]] auto valid( ) const noexcept -> bool { return thread_ != nullptr; }
 		[[nodiscard]] auto raw( ) noexcept -> lua_State* { return thread_; }
@@ -127,6 +156,7 @@ namespace mcode {
 
 		auto seal( ) -> status;
 		auto arm_watchdog( ) -> void;
+		auto disarm_watchdog( ) -> void;
 
 		// Walks a dotted path, creating intermediate tables, and leaves the parent
 		// table on the stack. Shared by both registration entry points so a
@@ -135,7 +165,6 @@ namespace mcode {
 
 		lua_State* state_ = nullptr;
 		lua_State* thread_ = nullptr;
-		int thread_index_ = 0;
 		bool sealed_ = false;
 		std::chrono::milliseconds time_limit_{ 0 };
 		std::string extension_name_;
@@ -143,7 +172,9 @@ namespace mcode {
 		std::unique_ptr< detail::allocator_state > allocator_;
 		std::unique_ptr< detail::watchdog_state > watchdog_;
 		std::unique_ptr< std::map< std::string, host_function, std::less<> > > host_functions_;
-		std::unique_ptr< std::map< std::string, std::string, std::less<> > > modules_;
+		// Held behind a unique_ptr for the same reason the watchdog is: the address
+		// goes into the Lua registry, and moving the host must not move it.
+		std::unique_ptr< module_loader_function > module_loader_;
 	};
 
 }

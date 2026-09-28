@@ -27,10 +27,6 @@ namespace mcode::ext {
 		std::vector< std::string > tools;
 
 		std::uint64_t bytes_used = 0;
-
-		// Non-fatal problems: an extension can load and still report something the
-		// user should see.
-		std::vector< std::string > warnings;
 	};
 
 	struct load_failure {
@@ -68,6 +64,12 @@ namespace mcode::ext {
 		load_report report;
 		std::vector< loaded_extension > extensions;
 
+		// Tool name -> the surface that owns it, built once at load. Dispatch is
+		// per model tool call, so resolving the owner by scanning every extension
+		// and every tool in each one is a cost that grows with the square of the
+		// extension count.
+		std::map< std::string, api_surface*, std::less<> > tool_owners;
+
 		[[nodiscard]] auto find( std::string_view name ) const -> const loaded_extension*;
 
 		// Calls a tool by name on whichever extension registered it.
@@ -75,6 +77,20 @@ namespace mcode::ext {
 			-> result< std::string >;
 	};
 
+
+	// Everything an installer is handed for one extension. A struct rather than
+	// five positional parameters, and it is the whole environment: there is no
+	// sixth thing a caller has to remember to thread through.
+	//
+	// The surface object is owned by the caller: it holds the tool closures by
+	// registry reference, so it must outlive the VM it was installed into.
+	struct registration {
+		lua_host& host;
+		api_surface& surface;
+		model::provider_registry& providers;
+		hook_registry& hooks;
+		const manifest& details;
+	};
 
 	struct loader_options {
 		// `--no-extensions`. Disabling everything must leave a working, less
@@ -90,20 +106,14 @@ namespace mcode::ext {
 		// Where the core API surface comes from. Injected so a test can load an
 		// extension without the real host functions, and so the loader never
 		// depends on the agent.
-		//
-		// The surface object is owned by the caller: it holds the tool closures by
-		// registry reference, so it must outlive the VM it was installed into.
-		std::function< status( lua_host& host, api_surface& surface,
-			model::provider_registry& providers, hook_registry& hooks,
-			const manifest& manifest ) > register_api;
+		std::function< status( const registration& ) > register_api;
 	};
 
 	// Discovers, validates, and loads extensions from the given roots.
 	//
-	// A failing extension is skipped and reported; it never fails the session
-	// (docs/19 §Failure, quarantine, and doctor). Registration is expected to be
-	// cheap: an extension that does work at load time is a bug the report makes
-	// visible as a slow load.
+	// A failing extension is skipped and reported; it never fails the session.
+	// Registration is expected to be cheap: an extension that does real work at
+	// load time is a bug, and the report makes it visible as a slow load.
 	// The tool registry is NOT a parameter: it arrives through
 	// `options.register_api`, which is the single place that decides where a
 	// registered tool lands. Passing it here as well threaded the same reference
@@ -116,16 +126,14 @@ namespace mcode::ext {
 		model::provider_registry& providers, hook_registry& hooks,
 		const loader_options& options = { } ) -> load_result;
 
-	// The real API installer: everything in docs/18 that v1 implements. Passed as
+	// The real API installer: everything the frozen surface defines. Passed as
 	// `loader_options::register_api`, and injectable so a test can substitute a
 	// narrower surface without the loader growing a second code path.
 	// Captures only the tool registry, which the surface writes into directly.
 	// Providers and hooks arrive per call, because the caller owns them and a
 	// second reference would be a second source of truth.
 	[[nodiscard]] auto default_register_api( tool_registry& registry )
-		-> std::function< status( lua_host& host, api_surface& surface,
-			model::provider_registry& providers, hook_registry& hooks,
-			const manifest& manifest ) >;
+		-> std::function< status( const registration& ) >;
 
 	// The extension roots, in precedence order: project, then user. Project
 	// shadows user, so a repository can pin a version without touching the

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <map>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -25,16 +26,13 @@ namespace mcode::ext {
 		std::string name;
 		std::string description;
 		std::string owner;
-		tool_class klass = tool_class::read;
 
 		// The `run` closure, by registry reference.
 		int function_reference = 0;
 
 		// Schema as JSON, pre-rendered. Rendered once at registration because
-		// docs/23 warns that computing it per turn invalidates the prompt cache.
+		// computing it per turn would invalidate the prompt cache.
 		std::string schema_json;
-
-		lua_host* host = nullptr;
 	};
 
 	// The `mcode` API a first-party or third-party extension sees. Owns the
@@ -57,8 +55,17 @@ namespace mcode::ext {
 		// `registry` receives the tool definitions, `providers` the declared model
 		// providers, and `manifest` supplies identity and the permission set the
 		// gated entries check.
-		auto install( lua_host& host, tool_registry& registry, model::provider_registry& providers,
-			hook_registry& hooks, const manifest& manifest ) -> status;
+		// The five collaborators travel together: they are the whole environment an
+		// extension is installed into, and a caller always has all five.
+		struct install_request {
+			lua_host& host;
+			tool_registry& registry;
+			model::provider_registry& providers;
+			hook_registry& hooks;
+			const manifest& details;
+		};
+
+		auto install( const install_request& request ) -> status;
 
 		[[nodiscard]] auto providers( ) const noexcept -> const model::provider_registry& {
 			return providers_ != nullptr ? *providers_ : empty_providers_;
@@ -67,7 +74,7 @@ namespace mcode::ext {
 		// Calls a registered tool by name with a JSON argument object, returning
 		// the extension's result as JSON.
 		//
-		// The extension's `run` returns `value, err` (docs/18): a string result, or
+		// The extension's `run` returns `value, err`: a string result, or
 		// nil and a message. A raised error is a contract violation and becomes an
 		// error here rather than a silent empty result.
 		[[nodiscard]] auto invoke( std::string_view tool_name, std::string_view arguments_json )
@@ -77,11 +84,16 @@ namespace mcode::ext {
 			return tools_;
 		}
 
+		// Unregisters every tool this surface registered and releases its closure.
+		//
+		// Called when an extension failed to finish loading: the VM that owns the
+		// closures is about to be destroyed, so each reference must be dropped while
+		// the VM is still alive -- and each registry entry must go with it, or the
+		// model sees a tool that can never run.
+		auto release_all( lua_host& host ) -> void;
+
 		// Tools the extension registered but that the host could not accept --
 		// a name collision, a bad schema. Reported rather than dropped.
-		[[nodiscard]] auto refusals( ) const noexcept -> const std::vector< std::string >& {
-			return refusals_;
-		}
 
 		// The raw entry points. Public because the C closures that Luau calls are
 		// free functions and cannot be friends of every instantiation; they are not
@@ -114,11 +126,11 @@ namespace mcode::ext {
 		static const model::provider_registry empty_providers_;
 
 		std::vector< registered_tool > tools_;
-		std::vector< std::string > refusals_;
 
-		// Name -> index into tools_. Kept beside the vector so a lookup on the
-		// dispatch path does not walk it.
-		std::vector< std::pair< std::string, std::size_t > > by_name_;
+		// Name -> index into tools_. A map, not a vector: this is the tool-dispatch
+		// path, which runs once per model tool call, and a linear scan there is a
+		// cost the registry beside it does not pay.
+		std::map< std::string, std::size_t, std::less<> > by_name_;
 	};
 
 }

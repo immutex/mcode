@@ -20,6 +20,13 @@ namespace mcode::ext {
 	// `nil` -- which means an object member that is null is ABSENT from the table
 	// rather than present-and-nil. Lua cannot distinguish the two, and pretending
 	// otherwise would produce a table that looks empty.
+	//
+	// The same rule applies INSIDE an array, and its consequence is worth stating
+	// because it is not obvious: `[1, null, 3]` becomes a table with a hole at
+	// index 2. `ipairs` stops at the hole and `#` is undefined for it, so an
+	// extension that expects a fixed-length sequence must check the indices it
+	// needs rather than trusting the length. A sentinel would avoid this at the
+	// cost of a value the model cannot express, which is why nil is the choice.
 	[[nodiscard]] auto push_json( lua_State* state, std::string_view text ) -> status;
 
 	// Encodes the value at `index` as JSON, leaving the stack unchanged.

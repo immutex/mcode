@@ -3,6 +3,7 @@
 #include <yyjson.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <set>
@@ -12,6 +13,8 @@
 #include "lua.h"
 #include "lualib.h"
 
+#include "mcode/support/json.hxx"
+
 namespace mcode::ext {
 
 	namespace {
@@ -19,6 +22,11 @@ namespace mcode::ext {
 		// Depth cap: a payload nested past this is malformed or hostile, and the
 		// recursion is what would blow the C stack.
 		constexpr auto MAX_JSON_DEPTH = 64;
+
+		// The one place a Lua number becomes JSON text. A numeric key and a numeric
+		// value must agree, so both call sites use these.
+		inline constexpr auto NUMBER_FORMAT = "%.17g";
+		inline constexpr auto NUMBER_BUFFER_SIZE = std::size_t{ 32 };
 
 		auto push_json_value( lua_State* state, yyjson_val* value, int depth ) -> status;
 
@@ -125,28 +133,6 @@ namespace mcode::ext {
 		auto encode_value( lua_State* state, int index, std::string& out,
 			encode_context& context ) -> status;
 
-		auto append_escaped( std::string& out, const std::string_view text ) -> void {
-			for ( const auto character : text ) {
-				switch ( character ) {
-					case '"': out += "\\\""; break;
-					case '\\': out += "\\\\"; break;
-					case '\n': out += "\\n"; break;
-					case '\r': out += "\\r"; break;
-					case '\t': out += "\\t"; break;
-
-					default:
-						if ( static_cast< unsigned char >( character ) < 0x20 ) {
-							char buffer[ 8 ];
-							std::snprintf( buffer, sizeof( buffer ), "\\u%04x",
-								static_cast< unsigned char >( character ) );
-							out += buffer;
-						} else {
-							out += character;
-						}
-				}
-			}
-		}
-
 		auto encode_table( lua_State* state, const int index, std::string& out,
 			encode_context& context ) -> status {
 			const auto* identity = lua_topointer( state, index );
@@ -182,7 +168,15 @@ namespace mcode::ext {
 
 					if ( number < 1.0 || number > static_cast< double >( length ) ||
 						number != std::floor( number ) ) {
+						// Not part of the array run, so it becomes an object key.
+						// Dropping it here would emit a payload that does not match
+						// the table the extension built.
 						array_like = false;
+
+						auto buffer = std::array< char, NUMBER_BUFFER_SIZE >{ };
+						std::snprintf( buffer.data( ), buffer.size( ), NUMBER_FORMAT, number );
+
+						keys.emplace_back( buffer.data( ) );
 					}
 				} else if ( lua_type( state, -2 ) == LUA_TSTRING ) {
 					const auto* text = lua_tolstring( state, -2, nullptr );
@@ -231,7 +225,7 @@ namespace mcode::ext {
 
 			// Objects are emitted in sorted key order so two runs produce byte-
 			// identical JSON. The model's prompt cache keys on the payload, so an
-			// unstable field order would invalidate it for no reason (docs/23).
+			// unstable field order would invalidate it for no reason.
 			std::sort( keys.begin( ), keys.end( ) );
 
 			out += '{';
@@ -246,7 +240,7 @@ namespace mcode::ext {
 				first = false;
 
 				out += '"';
-				append_escaped( out, key );
+				json::append_escaped( out, key );
 				out += "\":";
 
 				lua_getfield( state, table, key.c_str( ) );
@@ -292,9 +286,9 @@ namespace mcode::ext {
 							"a non-finite number cannot be encoded as JSON" ) );
 					}
 
-					char buffer[ 32 ];
-					std::snprintf( buffer, sizeof( buffer ), "%.17g", number );
-					out += buffer;
+					auto buffer = std::array< char, NUMBER_BUFFER_SIZE >{ };
+					std::snprintf( buffer.data( ), buffer.size( ), NUMBER_FORMAT, number );
+					out += buffer.data( );
 
 					return { };
 				}
@@ -304,7 +298,7 @@ namespace mcode::ext {
 					const auto* text = lua_tolstring( state, index, &length );
 
 					out += '"';
-					append_escaped( out, std::string_view{ text, length } );
+					json::append_escaped( out, std::string_view{ text, length } );
 					out += '"';
 
 					return { };

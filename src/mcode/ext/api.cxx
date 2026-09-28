@@ -8,6 +8,7 @@
 #include "lualib.h"
 
 #include <cmath>
+#include <cstdint>
 #include <cstddef>
 
 #include "mcode/ext/lua_json.hxx"
@@ -101,7 +102,6 @@ namespace mcode::ext {
 		tool.name = read_field_string( state, definition, "name" );
 		tool.description = read_field_string( state, definition, "description" );
 		tool.owner = self->manifest_.name;
-		tool.host = self->host_;
 
 		if ( tool.name.empty( ) ) {
 			lua_pushliteral( state, "mcode.tool.register: 'name' is required" );
@@ -186,7 +186,7 @@ namespace mcode::ext {
 			lua_error( state );
 		}
 
-		self->by_name_.emplace_back( tool.name, self->tools_.size( ) );
+		self->by_name_.insert_or_assign( tool.name, self->tools_.size( ) );
 		self->tools_.push_back( std::move( tool ) );
 
 		lua_pushnumber( state, static_cast< double >( self->tools_.size( ) ) );
@@ -197,14 +197,18 @@ namespace mcode::ext {
 	auto api_surface::handle_unregister( lua_State* state ) -> int {
 		auto* self = surface_from( state );
 
-		const auto identifier = static_cast< std::size_t >( luaL_checknumber( state, 1 ) );
+		// Truncating the double would silently address the wrong tool for a
+		// fractional id, and the cast is undefined outside the representable range.
+		const auto number = luaL_checknumber( state, 1 );
+		const auto identifier = static_cast< std::int64_t >( number );
 
-		if ( identifier == 0 || identifier > self->tools_.size( ) ) {
+		if ( static_cast< double >( identifier ) != number || identifier <= 0 ||
+			static_cast< std::size_t >( identifier ) > self->tools_.size( ) ) {
 			lua_pushliteral( state, "mcode.tool.unregister: unknown id" );
 			lua_error( state );
 		}
 
-		const auto index = identifier - 1;
+		const auto index = static_cast< std::size_t >( identifier ) - 1;
 		const auto& tool = self->tools_[ index ];
 
 		// Removing the registry entry by owner would drop every tool the
@@ -219,7 +223,7 @@ namespace mcode::ext {
 		self->by_name_.clear( );
 
 		for ( auto position = std::size_t{ 0 }; position < self->tools_.size( ); ++position ) {
-			self->by_name_.emplace_back( self->tools_[ position ].name, position );
+			self->by_name_.insert_or_assign( self->tools_[ position ].name, position );
 		}
 
 		return 0;
@@ -380,7 +384,15 @@ namespace mcode::ext {
 	auto api_surface::handle_off( lua_State* state ) -> int {
 		auto* self = surface_from( state );
 
-		const auto identifier = static_cast< std::uint64_t >( luaL_checknumber( state, 1 ) );
+		const auto number = luaL_checknumber( state, 1 );
+
+		// A fractional or non-positive id addresses nothing. Truncating it would
+		// unsubscribe whatever id the cast happened to land on.
+		if ( number < 1.0 || number != std::floor( number ) ) {
+			return 0;
+		}
+
+		const auto identifier = static_cast< std::uint64_t >( number );
 
 		// Unknown ids are a no-op rather than an error: unsubscribing twice is a
 		// legitimate pattern, and a raise here would make teardown code fragile.
@@ -438,7 +450,7 @@ namespace mcode::ext {
 			payload = *rendered;
 		}
 
-		if ( auto emitted = self->hooks_->emit( *self->host_, name, payload ); !emitted ) {
+		if ( auto emitted = self->hooks_->emit( name, payload ); !emitted ) {
 			lua_pushlstring( state, emitted.error( ).msg.data( ), emitted.error( ).msg.size( ) );
 			lua_error( state );
 		}
@@ -490,18 +502,18 @@ namespace mcode::ext {
 
 	}
 
-	auto api_surface::install( lua_host& host, tool_registry& registry,
-		model::provider_registry& providers, hook_registry& hooks,
-		const manifest& manifest_value ) -> status {
-		host_ = &host;
-		registry_ = &registry;
-		providers_ = &providers;
-		hooks_ = &hooks;
-		manifest_ = manifest_value;
+	auto api_surface::install( const install_request& request ) -> status {
+		auto& host = request.host;
+
+		host_ = &request.host;
+		registry_ = &request.registry;
+		providers_ = &request.providers;
+		hooks_ = &request.hooks;
+		manifest_ = request.details;
 
 		// Identity first: `mcode.ext.name` is read by tools and by the log prefix,
 		// and the definition file declares it as a field rather than a call.
-		if ( auto name = host.set_global_string( EXTENSION_NAME_PATH, manifest_value.name );
+		if ( auto name = host.set_global_string( EXTENSION_NAME_PATH, request.details.name );
 			!name ) {
 			return name;
 		}
@@ -535,103 +547,6 @@ namespace mcode::ext {
 		}
 
 		return { };
-	}
-
-	auto api_surface::invoke( const std::string_view tool_name,
-		const std::string_view arguments_json ) -> result< std::string > {
-		if ( host_ == nullptr ) {
-			return std::unexpected( fail( errc::config, "the API surface is not installed" ) );
-		}
-
-		const auto* tool = static_cast< const registered_tool* >( nullptr );
-
-		for ( const auto& [ name, index ] : by_name_ ) {
-			if ( name == tool_name ) {
-				tool = &tools_[ index ];
-
-				break;
-			}
-		}
-
-		if ( tool == nullptr ) {
-			return std::unexpected( fail( errc::config,
-				"no tool named '" + std::string{ tool_name } + "'" ) );
-		}
-
-		auto* state = host_->raw( );
-
-		if ( state == nullptr ) {
-			return std::unexpected( fail( errc::lua_error, "the host has no thread" ) );
-		}
-
-		// The thread's stack is the only place a call can start. A previous failed
-		// call may have left values behind, so the depth is recorded and restored.
-		const auto depth = lua_gettop( state );
-
-		lua_getref( state, tool->function_reference );
-
-		if ( lua_type( state, -1 ) != LUA_TFUNCTION ) {
-			lua_settop( state, depth );
-
-			return std::unexpected( fail( errc::lua_error,
-				"the tool's function is no longer live" ) );
-		}
-
-		// Arguments: one table decoded from the JSON object.
-		if ( auto pushed = push_json( state, arguments_json ); !pushed ) {
-			lua_settop( state, depth );
-
-			return std::unexpected( fail( errc::config,
-				"arguments are not a JSON object: " + pushed.error( ).msg ) );
-		}
-
-		// Context: a plain-data table, never a live reference (docs/18).
-		lua_createtable( state, 0, 3 );
-		lua_pushlstring( state, tool->owner.data( ), tool->owner.size( ) );
-		lua_setfield( state, -2, "extension" );
-		lua_pushnumber( state, 0 );
-		lua_setfield( state, -2, "seq" );
-
-		if ( lua_pcall( state, 2, 2, 0 ) != 0 ) {
-			auto length = std::size_t{ 0 };
-			const auto* message = lua_tolstring( state, -1, &length );
-			auto text = ( message != nullptr ) ? std::string{ message, length }
-				: std::string{ "unknown Luau error" };
-
-			lua_settop( state, depth );
-
-			return std::unexpected( fail( errc::lua_error, text ) );
-		}
-
-		// `run` returns `value, err`. An error string alongside a value is still a
-		// failure: docs/18 makes the second return the environmental-failure
-		// channel, and a tool that returns both is reporting a failure.
-		if ( lua_type( state, -1 ) != LUA_TNIL ) {
-			auto length = std::size_t{ 0 };
-			const auto* message = lua_tolstring( state, -1, &length );
-			auto text = ( message != nullptr ) ? std::string{ message, length }
-				: std::string{ "the tool failed" };
-
-			lua_settop( state, depth );
-
-			return std::unexpected( fail( errc::lua_error, text ) );
-		}
-
-		if ( lua_type( state, -2 ) == LUA_TNIL ) {
-			lua_settop( state, depth );
-
-			return std::unexpected( fail( errc::lua_error,
-				"the tool returned no result and no error" ) );
-		}
-
-		auto length = std::size_t{ 0 };
-		const auto* text = lua_tolstring( state, -2, &length );
-
-		auto out = ( text != nullptr ) ? std::string{ text, length } : std::string{ };
-
-		lua_settop( state, depth );
-
-		return out;
 	}
 
 }

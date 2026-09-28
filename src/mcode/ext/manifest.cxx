@@ -63,15 +63,23 @@ namespace mcode::ext {
 			return !previous_was_dash;
 		}
 
+		// A component this long is already larger than any real version, and the
+		// cap is what keeps the accumulation below from overflowing.
+		inline constexpr auto MAX_VERSION_DIGITS = 9;
+
 		auto is_valid_version( const std::string_view version ) -> bool {
 			// MAJOR.MINOR.PATCH, optionally with a prerelease or build suffix. A
 			// full semver implementation is unnecessary; the shape is what matters,
 			// and it is what a typo breaks.
-			auto parts = std::vector< int >{ };
-			auto current = 0;
+			auto parts = std::vector< std::int64_t >{ };
+			auto current = std::int64_t{ 0 };
 			auto digits = 0;
+			auto suffix = std::string_view{ };
+			auto index = std::size_t{ 0 };
 
-			for ( const auto character : version ) {
+			for ( ; index < version.size( ); ++index ) {
+				const auto character = version[ index ];
+
 				if ( character == '.' ) {
 					if ( digits == 0 ) {
 						return false;
@@ -85,10 +93,22 @@ namespace mcode::ext {
 				}
 
 				if ( character == '-' || character == '+' ) {
+					// The suffix is validated below. Breaking without recording it
+					// let `1.2.3-` and `1.2.3-!!!` through: the numeric part is
+					// well-formed, so nothing else looked at the rest.
+					suffix = version.substr( index + 1 );
+
 					break;
 				}
 
 				if ( character < '0' || character > '9' ) {
+					return false;
+				}
+
+				// Bounded before the multiply, not after: `current * 10` is signed
+				// overflow -- undefined behaviour -- for a component long enough to
+				// matter, and a version string is untrusted input.
+				if ( digits >= MAX_VERSION_DIGITS ) {
 					return false;
 				}
 
@@ -102,7 +122,39 @@ namespace mcode::ext {
 
 			parts.push_back( current );
 
-			return parts.size( ) == 3;
+			if ( parts.size( ) != 3 ) {
+				return false;
+			}
+
+			// A prerelease or build suffix must be present and well-formed: at least
+			// one identifier, each of alphanumerics and hyphens, dot-separated.
+			if ( suffix.empty( ) ) {
+				return index < version.size( ) ? false : true;
+			}
+
+			auto identifier_length = std::size_t{ 0 };
+
+			for ( const auto character : suffix ) {
+				const auto alphanumeric = std::isalnum( static_cast< unsigned char >( character ) ) != 0;
+
+				if ( character == '.' ) {
+					if ( identifier_length == 0 ) {
+						return false;
+					}
+
+					identifier_length = 0;
+
+					continue;
+				}
+
+				if ( !alphanumeric && character != '-' ) {
+					return false;
+				}
+
+				++identifier_length;
+			}
+
+			return identifier_length > 0;
 		}
 
 	}
@@ -140,7 +192,6 @@ namespace mcode::ext {
 		}
 
 		auto manifest_value = manifest{ };
-		manifest_value.directory = directory;
 
 		auto name = parsed->get_string( "name" );
 
@@ -192,7 +243,7 @@ namespace mcode::ext {
 				path.string( ) + ": api_version must be >= 1" ) );
 		}
 
-		// An integer floor, never a range (docs/25). The loader compares two
+		// An integer floor, never a range. The loader compares two
 		// integers, so there is no constraint parser to get wrong.
 		if ( manifest_value.api_version > API_VERSION ) {
 			return std::unexpected( fail( errc::config,

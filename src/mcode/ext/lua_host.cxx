@@ -1,4 +1,5 @@
 #include "mcode/ext/lua_host.hxx"
+#include "mcode/ext/lua_host_internal.hxx"
 
 #include <cstdlib>
 #include <fstream>
@@ -14,43 +15,16 @@ namespace mcode {
 
 	namespace {
 
-		char g_watchdog_key = 0;
-
+		// The trailing component of a dotted path: `mcode.tool.register` -> `register`.
 		[[nodiscard]] auto last_segment( const std::string_view path ) -> std::string_view {
 			const auto position = path.rfind( '.' );
 
 			return position == std::string_view::npos ? path : path.substr( position + 1 );
 		}
 
-		constexpr auto INTERRUPT_GRANULARITY = std::uint64_t{ 10'000 };
-
-		auto pop_error( lua_State* state ) -> std::string {
-			auto length = std::size_t{ 0 };
-			const auto* message = lua_tolstring( state, -1, &length );
-			auto out = ( message != nullptr ) ? std::string{ message, length } : std::string{ "unknown Luau error" };
-
-			lua_pop( state, 1 );
-
-			return out;
-		}
-
-		auto registry_pointer( lua_State* state, void* key ) -> void* {
-			lua_pushlightuserdata( state, key );
-			lua_rawget( state, LUA_REGISTRYINDEX );
-
-			auto* value = lua_touserdata( state, -1 );
-			lua_pop( state, 1 );
-
-			return value;
-		}
-
-		auto watchdog_from( lua_State* state ) -> detail::watchdog_state* {
-			return static_cast< detail::watchdog_state* >( registry_pointer( state, &g_watchdog_key ) );
-		}
-
 		auto luau_allocator( void* userdata, void* pointer, std::size_t old_size, std::size_t new_size )
 			-> void* {
-			auto* counters = static_cast< detail::allocator_state* >( userdata );
+			auto* counters = static_cast< ::mcode::detail::allocator_state* >( userdata );
 
 			if ( new_size == 0 ) {
 				counters->bytes -= old_size;
@@ -83,99 +57,67 @@ namespace mcode {
 			return resized;
 		}
 
-		auto interrupt( lua_State* state, int gc ) -> void {
-			// Non-negative values are GC steps, which share this callback.
-			if ( gc >= 0 ) {
-				return;
-			}
+	}
 
-			static thread_local std::uint64_t safepoints = 0;
+	// The three registry lookups and the chunk loader are declared in
+	// lua_host_internal.hxx because the execution entry points live in
+	// lua_host_execute.cxx and need them too.
+	auto ext::detail::pop_error( lua_State* state ) -> std::string {
+		auto length = std::size_t{ 0 };
+		const auto* message = lua_tolstring( state, -1, &length );
+		auto out = ( message != nullptr ) ? std::string{ message, length }
+			: std::string{ "unknown Luau error" };
 
-			if ( ++safepoints % INTERRUPT_GRANULARITY != 0 ) {
-				return;
-			}
+		lua_pop( state, 1 );
 
-			// The callback is global state but the deadline is not: this looks the
-			// watchdog up through the running thread, so extension A's budget can
-			// never fire inside extension B.
-			auto* watchdog = watchdog_from( state );
+		return out;
+	}
 
-			if ( watchdog == nullptr || !watchdog->armed ) {
-				return;
-			}
+	auto ext::detail::registry_pointer( lua_State* state, void* key ) -> void* {
+		lua_pushlightuserdata( state, key );
+		lua_rawget( state, LUA_REGISTRYINDEX );
 
-			if ( std::chrono::steady_clock::now( ) < watchdog->deadline ) {
-				return;
-			}
+		auto* value = lua_touserdata( state, -1 );
+		lua_pop( state, 1 );
 
-			watchdog->expired = true;
-			++watchdog->breaches;
+		return value;
+	}
 
-			luaL_error( state, "extension exceeded its time budget" );
+	auto ext::detail::watchdog_from( lua_State* state ) -> ::mcode::detail::watchdog_state* {
+		return static_cast< ::mcode::detail::watchdog_state* >( ext::detail::registry_pointer( state, &ext::detail::g_watchdog_key ) );
+	}
+
+	auto ext::detail::loader_from( lua_State* state ) -> ::mcode::module_loader_function* {
+		return static_cast< ::mcode::module_loader_function* >(
+			ext::detail::registry_pointer( state, &ext::detail::g_module_loader_key ) );
+	}
+
+	auto ext::detail::load_chunk( lua_State* thread, const std::string_view source,
+		const std::string_view chunk_name, std::string& message ) -> bool {
+		// luau_load consumes bytecode; source has to go through the compiler first.
+		// Handing it text makes it read the first byte as a bytecode version and
+		// fail with a mismatch.
+		auto bytecode_size = std::size_t{ 0 };
+		auto* bytecode = luau_compile( source.data( ), source.size( ), nullptr, &bytecode_size );
+
+		if ( bytecode == nullptr ) {
+			message = "compiler ran out of memory";
+
+			return false;
 		}
 
-		auto host_function_dispatch( lua_State* state ) -> int {
-			auto* function = static_cast< host_function* >( lua_touserdata( state, lua_upvalueindex( 1 ) ) );
+		const auto name = std::string{ chunk_name };
+		const auto loaded = luau_load( thread, name.c_str( ), bytecode, bytecode_size, 0 );
 
-			if ( function == nullptr || !*function ) {
-				lua_pushliteral( state, "host function is not bound" );
+		std::free( bytecode );
 
-				lua_error( state );
-			}
+		if ( loaded != 0 ) {
+			message = ext::detail::pop_error( thread );
 
-			auto args = std::string{ };
-
-			if ( lua_gettop( state ) >= 1 && lua_isstring( state, 1 ) != 0 ) {
-				auto length = std::size_t{ 0 };
-				const auto* text = lua_tolstring( state, 1, &length );
-
-				if ( text != nullptr ) {
-					args.assign( text, length );
-				}
-			}
-
-			auto outcome = ( *function )( args );
-
-			if ( !outcome ) {
-				const auto message = std::string{ "host function failed: " } +
-					std::string{ to_string( outcome.error( ).code ) } + ": " + outcome.error( ).msg;
-
-				lua_pushlstring( state, message.data( ), message.size( ) );
-
-				lua_error( state );
-			}
-
-			lua_pushlstring( state, outcome->data( ), outcome->size( ) );
-
-			return 1;
+			return false;
 		}
 
-		// Replaces a module's return value with the cached copy, so a module body
-		// runs once per VM regardless of how many times it is required.
-		auto module_require( lua_State* state ) -> int {
-			const auto* path = luaL_checkstring( state, 1 );
-
-			lua_getfield( state, LUA_REGISTRYINDEX, "mcode.modules" );
-
-			if ( lua_istable( state, -1 ) ) {
-				lua_getfield( state, -1, path );
-
-				if ( lua_isnil( state, -1 ) == 0 ) {
-					lua_remove( state, -2 );
-
-					return 1;
-				}
-
-				lua_pop( state, 1 );
-			}
-
-			lua_pop( state, 1 );
-
-			lua_pushfstring( state, "module not found: %s", path );
-
-			lua_error( state );
-		}
-
+		return true;
 	}
 
 	lua_host::~lua_host( ) {
@@ -189,17 +131,15 @@ namespace mcode {
 	lua_host::lua_host( lua_host&& other ) noexcept
 		: state_( other.state_ )
 		, thread_( other.thread_ )
-		, thread_index_( other.thread_index_ )
 		, sealed_( other.sealed_ )
 		, time_limit_( other.time_limit_ )
 		, extension_name_( std::move( other.extension_name_ ) )
 		, allocator_( std::move( other.allocator_ ) )
 		, watchdog_( std::move( other.watchdog_ ) )
 		, host_functions_( std::move( other.host_functions_ ) )
-		, modules_( std::move( other.modules_ ) ) {
+		, module_loader_( std::move( other.module_loader_ ) ) {
 		other.state_ = nullptr;
 		other.thread_ = nullptr;
-		other.thread_index_ = 0;
 	}
 
 	auto lua_host::operator=( lua_host&& other ) noexcept -> lua_host& {
@@ -210,18 +150,16 @@ namespace mcode {
 
 			state_ = other.state_;
 			thread_ = other.thread_;
-			thread_index_ = other.thread_index_;
 			sealed_ = other.sealed_;
 			time_limit_ = other.time_limit_;
 			extension_name_ = std::move( other.extension_name_ );
 			allocator_ = std::move( other.allocator_ );
 			watchdog_ = std::move( other.watchdog_ );
 			host_functions_ = std::move( other.host_functions_ );
-			modules_ = std::move( other.modules_ );
+			module_loader_ = std::move( other.module_loader_ );
 
 			other.state_ = nullptr;
 			other.thread_ = nullptr;
-			other.thread_index_ = 0;
 		}
 
 		return *this;
@@ -251,10 +189,10 @@ namespace mcode {
 		auto host = lua_host{ };
 		host.extension_name_ = std::move( options.extension_name );
 		host.time_limit_ = options.time_limit;
-		host.allocator_ = std::make_unique< detail::allocator_state >( );
-		host.watchdog_ = std::make_unique< detail::watchdog_state >( );
+		host.allocator_ = std::make_unique< ::mcode::detail::allocator_state >( );
+		host.watchdog_ = std::make_unique< ::mcode::detail::watchdog_state >( );
 		host.host_functions_ = std::make_unique< std::map< std::string, host_function, std::less<> > >( );
-		host.modules_ = std::make_unique< std::map< std::string, std::string, std::less<> > >( );
+		host.module_loader_ = std::make_unique< module_loader_function >( std::move( options.module_loader ) );
 
 		host.allocator_->limit = options.memory_limit_bytes;
 
@@ -269,13 +207,17 @@ namespace mcode {
 		// Only the watchdog goes in the registry. The allocator is reached through
 		// the host's own member, and its slot was written but never read -- the one
 		// function that looked it up was dead.
-		lua_pushlightuserdata( state, &g_watchdog_key );
+		lua_pushlightuserdata( state, &ext::detail::g_watchdog_key );
 		lua_pushlightuserdata( state, host.watchdog_.get( ) );
+		lua_rawset( state, LUA_REGISTRYINDEX );
+
+		lua_pushlightuserdata( state, &ext::detail::g_module_loader_key );
+		lua_pushlightuserdata( state, host.module_loader_.get( ) );
 		lua_rawset( state, LUA_REGISTRYINDEX );
 
 		// Set before any extension code runs: the interrupt is the only mechanism
 		// that can stop a runaway script.
-		lua_callbacks( state )->interrupt = interrupt;
+		lua_callbacks( state )->interrupt = ext::detail::interrupt;
 
 		luaL_openlibs( state );
 
@@ -285,7 +227,7 @@ namespace mcode {
 		lua_newtable( state );
 		lua_setfield( state, LUA_REGISTRYINDEX, "mcode.modules" );
 
-		lua_pushcfunction( state, module_require, "require" );
+		lua_pushcfunction( state, ext::detail::module_require, "require" );
 		lua_setglobal( state, "require" );
 
 		return host;
@@ -317,7 +259,7 @@ namespace mcode {
 		}
 
 		lua_pushlightuserdata( state_, &entry->second );
-		lua_pushcclosurek( state_, host_function_dispatch, key.c_str( ), 1, nullptr );
+		lua_pushcclosurek( state_, ext::detail::host_function_dispatch, key.c_str( ), 1, nullptr );
 		lua_setfield( state_, -2, std::string{ last_segment( path ) }.c_str( ) );
 		lua_pop( state_, 1 );
 
@@ -470,9 +412,11 @@ namespace mcode {
 		}
 
 		// Holds the thread alive: lua_newthread leaves it on the parent stack and
-		// an unreferenced thread is collectable.
+		// an unreferenced thread is collectable. The ref index itself is never
+		// needed -- the reference in the table is what pins the thread -- so it is
+		// not stored.
 		lua_pushvalue( state_, -1 );
-		thread_index_ = lua_ref( state_, -1 );
+		( void )lua_ref( state_, -1 );
 
 		// Gives the thread its own globals table that reads through to the frozen
 		// host globals. Extension globals land there, so the host surface stays
@@ -504,6 +448,29 @@ namespace mcode {
 		watchdog_->armed = true;
 	}
 
+	lua_host::budget_scope::budget_scope( lua_host* host ) noexcept
+		: host_( host ) {
+		if ( host_ != nullptr ) {
+			host_->arm_watchdog( );
+		}
+	}
+
+	lua_host::budget_scope::~budget_scope( ) {
+		if ( host_ != nullptr ) {
+			host_->disarm_watchdog( );
+		}
+	}
+
+	auto lua_host::disarm_watchdog( ) -> void {
+		if ( watchdog_ == nullptr ) {
+			return;
+		}
+
+		// Disarmed, not merely re-armed: a deadline left in the past would fire at
+		// the next safepoint of an unrelated call.
+		watchdog_->armed = false;
+	}
+
 	auto lua_host::reset( ) -> status {
 		if ( thread_ == nullptr ) {
 			return std::unexpected( fail( errc::lua_error, "host has no thread" ) );
@@ -520,189 +487,6 @@ namespace mcode {
 		lua_resetthread( thread_ );
 
 		return { };
-	}
-
-	auto lua_host::run( const std::string_view chunk, const std::string_view chunk_name ) -> status {
-		if ( auto ready = seal( ); !ready ) {
-			return ready;
-		}
-
-		const auto name = std::string{ chunk_name };
-
-		auto bytecode_size = std::size_t{ 0 };
-		auto* bytecode = luau_compile( chunk.data( ), chunk.size( ), nullptr, &bytecode_size );
-
-		if ( bytecode == nullptr ) {
-			return std::unexpected( fail( errc::lua_error, "compiler ran out of memory" ) );
-		}
-
-		const auto loaded = luau_load( thread_, name.c_str( ), bytecode, bytecode_size, 0 );
-
-		std::free( bytecode );
-
-		if ( loaded != 0 ) {
-			const auto message = pop_error( thread_ );
-
-			return std::unexpected( fail( errc::lua_error, "compile error: " + message ) );
-		}
-
-		arm_watchdog( );
-
-		if ( lua_pcall( thread_, 0, LUA_MULTRET, 0 ) != 0 ) {
-			const auto message = pop_error( thread_ );
-
-			return std::unexpected( fail( errc::lua_error, "runtime error: " + message ) );
-		}
-
-		return { };
-	}
-
-	auto lua_host::run_file( const std::filesystem::path& path ) -> status {
-		auto stream = std::ifstream{ path, std::ios::binary };
-
-		if ( !stream ) {
-			return std::unexpected( fail( errc::io, "cannot open " + path.string( ) ) );
-		}
-
-		auto buffer = std::ostringstream{ };
-		buffer << stream.rdbuf( );
-
-		const auto source = buffer.str( );
-
-		return run( source, path.string( ) );
-	}
-
-	auto lua_host::eval_to_string( const std::string_view expression ) -> result< std::string > {
-		if ( auto ready = seal( ); !ready ) {
-			return std::unexpected( ready.error( ) );
-		}
-
-		auto chunk = std::string{ "return " };
-		chunk.append( expression );
-
-		auto bytecode_size = std::size_t{ 0 };
-		auto* bytecode = luau_compile( chunk.data( ), chunk.size( ), nullptr, &bytecode_size );
-
-		if ( bytecode == nullptr ) {
-			return std::unexpected( fail( errc::lua_error, "compiler ran out of memory" ) );
-		}
-
-		const auto loaded = luau_load( thread_, "=(eval)", bytecode, bytecode_size, 0 );
-
-		std::free( bytecode );
-
-		if ( loaded != 0 ) {
-			return std::unexpected( fail( errc::lua_error, "compile error: " + pop_error( thread_ ) ) );
-		}
-
-		arm_watchdog( );
-
-		if ( lua_pcall( thread_, 0, 1, 0 ) != 0 ) {
-			return std::unexpected( fail( errc::lua_error, "runtime error: " + pop_error( thread_ ) ) );
-		}
-
-		auto length = std::size_t{ 0 };
-		auto* text = lua_tolstring( thread_, -1, &length );
-
-		if ( text != nullptr ) {
-			auto out = std::string{ text, length };
-
-			lua_pop( thread_, 1 );
-
-			return out;
-		}
-
-		// lua_tolstring converts only strings and numbers. Booleans and nil --
-		// what most probes return -- must go through the VM's own tostring.
-		lua_getglobal( thread_, "tostring" );
-		lua_pushvalue( thread_, -2 );
-
-		if ( lua_pcall( thread_, 1, 1, 0 ) != 0 ) {
-			const auto message = pop_error( thread_ );
-
-			lua_pop( thread_, 1 );
-
-			return std::unexpected( fail( errc::lua_error, "tostring failed: " + message ) );
-		}
-
-		text = lua_tolstring( thread_, -1, &length );
-
-		auto out = ( text != nullptr ) ? std::string{ text, length } : std::string{ };
-
-		lua_pop( thread_, 2 );
-
-		return out;
-	}
-
-	auto lua_host::call_global( const std::string_view name, const std::string_view argument )
-		-> result< std::string > {
-		if ( auto ready = seal( ); !ready ) {
-			return std::unexpected( ready.error( ) );
-		}
-
-		const auto key = std::string{ name };
-
-		lua_getglobal( thread_, key.c_str( ) );
-
-		if ( lua_isfunction( thread_, -1 ) == 0 ) {
-			lua_pop( thread_, 1 );
-
-			return std::unexpected( fail( errc::lua_error, "no function named '" + key + "'" ) );
-		}
-
-		lua_pushlstring( thread_, argument.data( ), argument.size( ) );
-
-		arm_watchdog( );
-
-		if ( lua_pcall( thread_, 1, 1, 0 ) != 0 ) {
-			return std::unexpected( fail( errc::lua_error, "runtime error: " + pop_error( thread_ ) ) );
-		}
-
-		auto length = std::size_t{ 0 };
-		auto* text = lua_tolstring( thread_, -1, &length );
-
-		if ( text != nullptr ) {
-			auto out = std::string{ text, length };
-
-			lua_pop( thread_, 1 );
-
-			return out;
-		}
-
-		lua_getglobal( thread_, "tostring" );
-		lua_pushvalue( thread_, -2 );
-
-		if ( lua_pcall( thread_, 1, 1, 0 ) != 0 ) {
-			const auto message = pop_error( thread_ );
-
-			lua_pop( thread_, 1 );
-
-			return std::unexpected( fail( errc::lua_error, "tostring failed: " + message ) );
-		}
-
-		text = lua_tolstring( thread_, -1, &length );
-
-		auto out = ( text != nullptr ) ? std::string{ text, length } : std::string{ };
-
-		lua_pop( thread_, 2 );
-
-		return out;
-	}
-
-	auto lua_host::version_string( ) const -> std::string {
-		if ( state_ == nullptr ) {
-			return "unavailable";
-		}
-
-		lua_getglobal( state_, "_VERSION" );
-
-		auto length = std::size_t{ 0 };
-		const auto* text = lua_tolstring( state_, -1, &length );
-		auto out = ( text != nullptr ) ? std::string{ text, length } : std::string{ "Luau" };
-
-		lua_pop( state_, 1 );
-
-		return out;
 	}
 
 }
