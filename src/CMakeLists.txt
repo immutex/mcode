@@ -9,12 +9,16 @@ add_library(mcode_core STATIC
     mcode/support/logging.cxx
     mcode/support/json.cxx
     mcode/support/text.cxx
+    mcode/support/toml.cxx
+    mcode/support/config.cxx
 
     mcode/ext/lua_host.cxx
 
     mcode/model/types.cxx
     mcode/model/provider.cxx
     mcode/model/delta_applier.cxx
+
+    mcode/platform/seams.cxx
 
     mcode/fs/workspace.cxx
 
