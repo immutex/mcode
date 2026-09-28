@@ -211,3 +211,34 @@ TEST_CASE( "pretty printing only changes whitespace", "[json]" ) {
 	REQUIRE( value );
 	CHECK( *value == "1" );
 }
+
+TEST_CASE( "typed pointer accessors read the right types", "[json]" ) {
+	auto doc = mcode::json::document::parse(
+		R"({"flag":true,"count":42,"name":"x","items":["a","b"]})" );
+	REQUIRE( static_cast< bool >( doc ) );
+
+	// bool
+	auto flag = doc->pointer_bool( "/flag" );
+	REQUIRE( static_cast< bool >( flag ) );
+	REQUIRE( *flag == true );
+
+	// A bool read as an int must fail rather than coerce.
+	REQUIRE_FALSE( static_cast< bool >( doc->pointer_int( "/flag" ) ) );
+	REQUIRE_FALSE( static_cast< bool >( doc->pointer_bool( "/count" ) ) );
+	REQUIRE_FALSE( static_cast< bool >( doc->pointer_bool( "/missing" ) ) );
+
+	// int
+	auto count = doc->pointer_int( "/count" );
+	REQUIRE( static_cast< bool >( count ) );
+	REQUIRE( *count == 42 );
+
+	// string array
+	auto items = doc->pointer_string_array( "/items" );
+	REQUIRE( static_cast< bool >( items ) );
+	REQUIRE( items->size( ) == 2 );
+	REQUIRE( ( *items )[ 0 ] == "a" );
+
+	// A non-array is an error, not an empty list.
+	REQUIRE_FALSE( static_cast< bool >( doc->pointer_string_array( "/name" ) ) );
+	REQUIRE_FALSE( static_cast< bool >( doc->pointer_string_array( "/missing" ) ) );
+}

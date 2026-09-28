@@ -46,7 +46,9 @@ namespace mcode::model {
 				"provider '" + descriptor.name + "' endpoint must be an absolute http(s) URL" ) );
 		}
 
-		if ( descriptor.stream.text_delta.empty( ) && descriptor.stream.tool_call_args.empty( ) ) {
+		// An escape hatch needs no mapping; everything else needs at least one.
+		if ( !descriptor.escape_hatch && descriptor.stream.text_delta.empty( ) &&
+			descriptor.stream.tool_call_args.empty( ) ) {
 			return std::unexpected( fail( errc::config,
 				"provider '" + descriptor.name + "' maps neither text nor tool-call deltas" ) );
 		}
@@ -108,6 +110,10 @@ namespace mcode::model {
 
 		if ( auto headers = parsed->pointer( "/extra_headers" ) ) {
 			descriptor.extra_headers_json = *headers;
+		}
+
+		if ( auto hatch = parsed->pointer_bool( "/on_event" ) ) {
+			descriptor.escape_hatch = *hatch;
 		}
 
 		if ( auto header = parsed->pointer_string( "/auth/header" ) ) {

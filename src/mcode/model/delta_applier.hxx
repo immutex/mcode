@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -22,6 +23,17 @@ namespace mcode::model {
 	public:
 		explicit delta_applier( const provider_descriptor& descriptor );
 		explicit delta_applier( provider_descriptor&& descriptor );
+
+		// The escape hatch. Installed by the caller -- the applier has no VM
+		// dependency, and keeping it that way is what lets the declarative path be
+		// tested without a VM at all.
+		//
+		// The callback receives the SSE event name and the raw data payload, and
+		// returns the canonical events it produced.
+		using escape_hatch = std::function< result< std::vector< chat_event > >(
+			std::string_view event_name, std::string_view data ) >;
+
+		auto set_escape_hatch( escape_hatch callback ) -> void;
 
 		// Feeds one SSE event. Returns the canonical events it produced, which may
 		// be empty (most events carry one field, and a keep-alive carries none).
@@ -55,6 +67,7 @@ namespace mcode::model {
 		// never mutated during a stream -- so ownership is the boring correct choice
 		// and removes a lifetime footgun from the API.
 		provider_descriptor descriptor_;
+		escape_hatch escape_;
 		std::vector< pending_call > pending_;
 		usage usage_;
 		std::string stop_reason_;

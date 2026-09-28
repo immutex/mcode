@@ -22,6 +22,8 @@
 #endif
 
 #include "mcode/ext/lua_host.hxx"
+#include "mcode/model/delta_applier.hxx"
+#include "mcode/model/provider.hxx"
 
 namespace {
 
@@ -279,6 +281,132 @@ auto main( int argument_count, char** arguments ) -> int {
 					static_cast< unsigned long long >( bare->bytes_allocated( ) ) );
 				std::printf( "bare_vm_peak_bytes=%llu\n",
 					static_cast< unsigned long long >( bare->peak_bytes_allocated( ) ) );
+			}
+		}
+	}
+
+	// --- D4: escape hatch vs the declarative path ---------------------------
+	// The escape hatch moves per-event work into the VM, so its cost is the thing
+	// that decides whether a provider may use it. Measured as per-event overhead
+	// for the same stream, both ways.
+	{
+		const auto declarative_json = std::string{ R"({
+			"name": "bench-declarative",
+			"endpoint": "https://example.invalid/v1/chat/completions",
+			"stream": { "text_delta": "/choices/0/delta/content" }
+		})" };
+
+		const auto hatch_json = std::string{ R"({
+			"name": "bench-hatch",
+			"endpoint": "https://example.invalid/v1/chat/completions",
+			"on_event": true
+		})" };
+
+		const auto payload = std::string{ R"({"choices":[{"delta":{"content":"x"}}]})" };
+
+		auto descriptor = mcode::model::descriptor_from_json( declarative_json );
+
+		if ( descriptor ) {
+			auto applier = mcode::model::delta_applier{ *descriptor };
+
+			const auto started = clock_type::now( );
+			auto total = std::size_t{ 0 };
+
+			for ( auto index = 0; index < dispatch_iterations; ++index ) {
+				auto produced = applier.feed( "message", payload );
+
+				if ( produced ) {
+					total += produced->size( );
+				}
+			}
+
+			std::printf( "provider_declarative_us_per_event=%.4f\n",
+				milliseconds_since( started ) * 1000.0 / dispatch_iterations );
+			std::printf( "provider_declarative_events=%llu\n",
+				static_cast< unsigned long long >( total ) );
+		}
+
+		auto hatch = mcode::model::descriptor_from_json( hatch_json );
+
+		if ( !hatch ) {
+			std::printf( "provider_escape_hatch_error=descriptor:%s\n", hatch.error( ).msg.c_str( ) );
+		}
+
+		if ( hatch ) {
+			// The hatch parses in Lua, using the VM's own string and table work --
+			// the shape a real exotic provider would need. This is the cost the
+			// declarative path exists to avoid.
+			auto host = mcode::lua_host::create( { .extension_name = "hatch" } );
+
+			if ( !host ) {
+				std::printf( "provider_escape_hatch_error=vm:%s\n", host.error( ).msg.c_str( ) );
+			}
+
+			if ( host ) {
+				// The delimiter is LUA, not the default: the Lua source contains `)"`
+				// inside a string pattern, which would terminate a plain R"( )" early.
+				//
+				// The handler returns the extracted text as a string. A real host would
+				// marshal a table, but the crossing measured here -- one payload in, one
+				// canonical value out, plus the Lua work -- is the same cost, and the
+				// string return keeps the event count honest.
+				auto ran = host->run( R"LUA(
+					function on_event(payload)
+						local content = string.match(payload, '"content":"([^"]*)"')
+						if content then
+							return "text_delta:" .. content
+						end
+						return ""
+					end
+				)LUA", "=(hatch)" );
+
+				if ( !ran ) {
+					std::printf( "provider_escape_hatch_error=lua:%s\n", ran.error( ).msg.c_str( ) );
+				}
+
+				if ( ran ) {
+					auto applier = mcode::model::delta_applier{ *hatch };
+					auto lua_host_pointer = &*host;
+
+					applier.set_escape_hatch( [lua_host_pointer]( const std::string_view event_name,
+						const std::string_view data ) -> mcode::result< std::vector< mcode::model::chat_event > > {
+						(void)event_name;
+
+						auto result = lua_host_pointer->call_global( "on_event", data );
+
+						if ( !result ) {
+							return std::unexpected( result.error( ) );
+						}
+
+						auto events = std::vector< mcode::model::chat_event >{ };
+
+						if ( result->starts_with( "text_delta:" ) ) {
+							auto event = mcode::model::chat_event{ };
+							event.type = mcode::model::chat_event::kind::text_delta;
+							event.text = result->substr( 11 );
+
+							events.push_back( std::move( event ) );
+						}
+
+						return events;
+					} );
+
+					const auto started = clock_type::now( );
+					auto total = std::size_t{ 0 };
+
+					for ( auto index = 0; index < dispatch_iterations; ++index ) {
+						auto produced = applier.feed( "message", payload );
+
+						if ( produced ) {
+							total += produced->size( );
+						}
+					}
+
+					std::printf( "provider_escape_hatch_us_per_event=%.4f\n",
+						milliseconds_since( started ) * 1000.0 / dispatch_iterations );
+					std::printf( "provider_escape_hatch_events=%llu\n",
+						static_cast< unsigned long long >( total ) );
+				}
 			}
 		}
 	}

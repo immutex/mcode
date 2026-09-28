@@ -45,6 +45,10 @@ namespace mcode::model {
 	delta_applier::delta_applier( provider_descriptor&& descriptor )
 		: descriptor_( std::move( descriptor ) ) { }
 
+	auto delta_applier::set_escape_hatch( escape_hatch callback ) -> void {
+		escape_ = std::move( callback );
+	}
+
 	auto delta_applier::pending_for( const int index ) -> pending_call& {
 		for ( auto& call : pending_ ) {
 			if ( call.index == index ) {
@@ -60,6 +64,13 @@ namespace mcode::model {
 	auto delta_applier::feed( const std::string_view event_name, const std::string_view data )
 		-> result< std::vector< chat_event > > {
 		auto produced = std::vector< chat_event >{ };
+
+		// The escape hatch replaces the whole mapping, including terminal detection:
+		// a provider exotic enough to need it is exotic enough that the sentinel and
+		// event-name rules do not apply.
+		if ( descriptor_.escape_hatch && escape_ ) {
+			return escape_( event_name, data );
+		}
 
 		for ( const auto& terminal : descriptor_.stream.terminal_events ) {
 			if ( event_name == terminal ) {

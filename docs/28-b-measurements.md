@@ -82,6 +82,24 @@ The budget stays at ≤0.5 ms because the risk it guards is not handler count �
 | `26` B2 acceptance | per-ext + aggregate load | Met |
 | `26` B3 acceptance | `ext doctor` shows bytes per extension | Met — `bytes_allocated()` per host is exact |
 | `26` B4 acceptance | dispatch budget | Met, 138× margin at 50 handlers |
+| `26` D4 acceptance | escape-hatch cost measured | Met — 1.85× the declarative path, both producing identical event counts |
+
+## D4 — escape hatch vs the declarative path
+
+`on_event` moves per-event work into the VM. Measured on the same stream, same payload, 50,000 events:
+
+| Path | µs per event | Relative |
+|---|---|---|
+| Declarative (JSON pointers, applied natively) | **0.275** | 1.0× |
+| Escape hatch (Lua callback per event) | **0.510** | **1.85×** |
+
+**The hatch costs 1.9×, or +0.235 µs per event.** Both paths produced the same 50,000 events, which is the assertion that makes the comparison meaningful — a hatch that silently dropped events would otherwise look fast.
+
+At a realistic 50 tokens/second the declarative path costs 0.014 ms per second of streaming and the hatch 0.026 ms. Neither is measurable against a network round-trip, so **the hatch is affordable, and the reason to prefer the declarative path is not speed** — it is that a descriptor is reviewable data while a callback is code, and a descriptor can be validated at load rather than failing at first token.
+
+The hatch stays opt-in per provider, and validation permits it only when `stream.*` maps nothing (`provider.hxx`). That is deliberate: a provider the pointers *can* express must not use the hatch, and the loader enforces it rather than relying on author discipline.
+
+**What the measurement does not cover.** The 0.51 µs is one string extraction. A real exotic provider would build tables, and the return path would marshal a table rather than a string, which costs more than the crossing measured here. Treat 1.9× as a floor, not a ceiling.
 
 ## B5 — budget gates
 

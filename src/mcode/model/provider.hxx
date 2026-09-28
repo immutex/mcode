@@ -100,6 +100,16 @@ namespace mcode::model {
 
 		// Sent as-is on every request. For gateway-specific flags.
 		std::string extra_headers_json;
+
+		// Escape hatch (D4). When set, the applier delegates every event to a
+		// host-supplied callback instead of applying the pointer mapping, and the
+		// stream.* pointers may all be empty.
+		//
+		// Opt-in and per-provider, because it moves per-token work into the VM: the
+		// callback runs once per SSE event, and `28` measures what that costs
+		// against the declarative path. A provider that the pointers can express
+		// must not use this.
+		bool escape_hatch = false;
 	};
 
 	// Validates a descriptor. Rejects the cases that would otherwise fail

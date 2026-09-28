@@ -42,3 +42,16 @@ load_total_ms = { kind = "ceiling", limit = 10 }
 # full budget would pass even a 100x regression, so this gates at 10% of it.
 dispatch_handlers_50_us_per_call = { kind = "ceiling", limit = 50 }
 dispatch_handlers_10_us_per_call = { kind = "ceiling", limit = 10 }
+
+# D4. The escape hatch costs ~1.9x the declarative path (docs/28); this gate
+# catches the ratio moving, not the absolute number, so it is set well above the
+# measured ~0.5 us. Both metrics are emitted by the same run, so a change in
+# either shows up as a ratio shift.
+provider_declarative_us_per_event = { kind = "ceiling", limit = 2 }
+provider_escape_hatch_us_per_event = { kind = "ceiling", limit = 5 }
+
+# Both paths must produce the same events. A hatch that silently drops events is
+# the failure this catches -- it would otherwise show up as a suspiciously fast
+# escape hatch.
+provider_declarative_events = { kind = "baseline", expected = 50000, tolerance = 0.001 }
+provider_escape_hatch_events = { kind = "baseline", expected = 50000, tolerance = 0.001 }
