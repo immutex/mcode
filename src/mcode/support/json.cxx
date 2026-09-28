@@ -1,5 +1,7 @@
 #include "mcode/support/json.hxx"
 
+#include "mcode/support/json_internal.hxx"
+
 #include <yyjson.h>
 
 #include <array>
@@ -12,12 +14,6 @@
 namespace mcode::json {
 
 	namespace {
-
-		struct free_deleter {
-			auto operator( )( char* pointer ) const noexcept -> void { std::free( pointer ); }
-		};
-
-		using owned_cstr = std::unique_ptr< char, free_deleter >;
 
 		// One conversion for both accessors. yyjson_is_num admits real numbers, and
 		// yyjson_get_sint returns 0 for anything that is not an integer, so a
@@ -48,16 +44,18 @@ namespace mcode::json {
 				std::string{ what } + " is not an integer" ) );
 		}
 
-		auto free_mut_doc( yyjson_mut_doc* doc ) noexcept -> void {
-			if ( doc != nullptr ) {
-				yyjson_mut_doc_free( doc );
-			}
-		}
+	}
 
-		[[nodiscard]] auto write_flags( const bool pretty ) -> yyjson_write_flag {
-			return pretty ? YYJSON_WRITE_PRETTY : YYJSON_WRITE_NOFLAG;
-		}
+	auto node::member( const std::string_view key ) -> node* {
+		const auto found = members.find( key );
 
+		return found == members.end( ) ? nullptr : &found->second;
+	}
+
+	auto node::member( const std::string_view key ) const -> const node* {
+		const auto found = members.find( key );
+
+		return found == members.end( ) ? nullptr : &found->second;
 	}
 
 	document::document( mut_doc_pointer doc ) : mut_( std::move( doc ) ), mutable_( true ) { }
@@ -71,7 +69,7 @@ namespace mcode::json {
 	document::document( document&& other ) noexcept
 		: doc_( other.doc_ )
 		, mut_( std::move( other.mut_ ) )
-		, members_( std::move( other.members_ ) )
+		, root_( std::move( other.root_ ) )
 		, mutable_( other.mutable_ ) {
 		other.doc_ = nullptr;
 		other.mutable_ = false;
@@ -85,7 +83,7 @@ namespace mcode::json {
 
 			doc_ = other.doc_;
 			mut_ = std::move( other.mut_ );
-			members_ = std::move( other.members_ );
+			root_ = std::move( other.root_ );
 			mutable_ = other.mutable_;
 			other.doc_ = nullptr;
 			other.mutable_ = false;
@@ -116,24 +114,24 @@ namespace mcode::json {
 	}
 
 	auto document::make_object( ) -> document {
-		auto doc = mut_doc_pointer{ yyjson_mut_doc_new( nullptr ), free_mut_doc };
+		auto doc = mut_doc_pointer{ yyjson_mut_doc_new( nullptr ), detail::free_mut_doc };
 
 		return document{ std::move( doc ) };
 	}
 
 	auto document::get_int( const std::string_view key ) const -> result< std::int64_t > {
 		if ( mutable_ ) {
-			const auto entry = members_.find( key );
+			const auto* entry = root_.member( key );
 
-			if ( entry == members_.end( ) ) {
+			if ( entry == nullptr ) {
 				return std::unexpected( fail( errc::json, "missing key: " + std::string{ key } ) );
 			}
 
-			if ( entry->second.type != value::kind::integer ) {
+			if ( entry->type != node::kind::integer ) {
 				return std::unexpected( fail( errc::json, "key is not an integer: " + std::string{ key } ) );
 			}
 
-			return entry->second.number;
+			return entry->integer;
 		}
 
 		if ( doc_ == nullptr ) {
@@ -157,17 +155,17 @@ namespace mcode::json {
 
 	auto document::get_string( const std::string_view key ) const -> result< std::string > {
 		if ( mutable_ ) {
-			const auto entry = members_.find( key );
+			const auto* entry = root_.member( key );
 
-			if ( entry == members_.end( ) ) {
+			if ( entry == nullptr ) {
 				return std::unexpected( fail( errc::json, "missing key: " + std::string{ key } ) );
 			}
 
-			if ( entry->second.type != value::kind::string ) {
+			if ( entry->type != node::kind::string ) {
 				return std::unexpected( fail( errc::json, "key is not a string: " + std::string{ key } ) );
 			}
 
-			return entry->second.text;
+			return entry->text;
 		}
 
 		if ( doc_ == nullptr ) {
@@ -209,7 +207,7 @@ namespace mcode::json {
 			return std::string{ yyjson_get_str( found ), yyjson_get_len( found ) };
 		}
 
-		const auto rendered = owned_cstr{ yyjson_val_write( found, YYJSON_WRITE_NOFLAG, nullptr ) };
+		const auto rendered = detail::owned_cstr{ yyjson_val_write( found, YYJSON_WRITE_NOFLAG, nullptr ) };
 
 		if ( !rendered ) {
 			return std::unexpected( fail( errc::json, "failed to render pointer value" ) );
@@ -307,7 +305,7 @@ namespace mcode::json {
 			return std::unexpected( fail( errc::json, "pointer not found: " + std::string{ path } ) );
 		}
 
-		const auto rendered = owned_cstr{ yyjson_val_write( found, YYJSON_WRITE_NOFLAG, nullptr ) };
+		const auto rendered = detail::owned_cstr{ yyjson_val_write( found, YYJSON_WRITE_NOFLAG, nullptr ) };
 
 		if ( !rendered ) {
 			return std::unexpected( fail( errc::json, "failed to render pointer value" ) );
@@ -390,115 +388,6 @@ namespace mcode::json {
 		}
 
 		return yyjson_ptr_getn( yyjson_doc_get_root( doc_ ), path.data( ), path.size( ) ) != nullptr;
-	}
-
-	auto document::set_string( const std::string_view key, const std::string_view text ) -> status {
-		if ( !mutable_ ) {
-			return std::unexpected( fail( errc::json, "set_string on a non-mutable document" ) );
-		}
-
-		if ( key.empty( ) ) {
-			return std::unexpected( fail( errc::json, "empty key" ) );
-		}
-
-		auto entry = value{ };
-		entry.type = value::kind::string;
-		entry.text = std::string{ text };
-
-		members_[ std::string{ key } ] = std::move( entry );
-
-		return { };
-	}
-
-	auto document::set_int( const std::string_view key, const std::int64_t number ) -> status {
-		if ( !mutable_ ) {
-			return std::unexpected( fail( errc::json, "set_int on a non-mutable document" ) );
-		}
-
-		if ( key.empty( ) ) {
-			return std::unexpected( fail( errc::json, "empty key" ) );
-		}
-
-		auto entry = value{ };
-		entry.type = value::kind::integer;
-		entry.number = number;
-
-		members_[ std::string{ key } ] = std::move( entry );
-
-		return { };
-	}
-
-	auto document::size( ) const noexcept -> std::size_t {
-		if ( mutable_ ) {
-			return members_.size( );
-		}
-
-		if ( doc_ == nullptr ) {
-			return 0;
-		}
-
-		auto* root = yyjson_doc_get_root( doc_ );
-
-		return ( root != nullptr && yyjson_is_obj( root ) ) ? yyjson_obj_size( root ) : 0;
-	}
-
-	auto document::dump( const bool pretty ) const -> result< std::string > {
-		if ( mutable_ ) {
-			auto doc = mut_doc_pointer{ yyjson_mut_doc_new( nullptr ), free_mut_doc };
-
-			if ( !doc ) {
-				return std::unexpected( fail( errc::json, "yyjson_mut_doc_new failed" ) );
-			}
-
-			auto* root = yyjson_mut_obj( doc.get( ) );
-
-			if ( root == nullptr ) {
-				return std::unexpected( fail( errc::json, "yyjson_mut_obj failed" ) );
-			}
-
-			yyjson_mut_doc_set_root( doc.get( ), root );
-
-			for ( const auto& [ key, member ] : members_ ) {
-				auto added = false;
-
-				if ( member.type == value::kind::string ) {
-					added = yyjson_mut_obj_add_strncpy( doc.get( ), root, key.c_str( ),
-						member.text.data( ), member.text.size( ) );
-				} else {
-					added = yyjson_mut_obj_add_int( doc.get( ), root, key.c_str( ), member.number );
-				}
-
-				if ( !added ) {
-					return std::unexpected( fail( errc::json, "failed to add member: " + key ) );
-				}
-			}
-
-			auto write_error = yyjson_write_err{ };
-			const auto raw = owned_cstr{
-				yyjson_mut_write_opts( doc.get( ), write_flags( pretty ), nullptr, nullptr, &write_error ) };
-
-			if ( !raw ) {
-				return std::unexpected(
-					fail( errc::json, write_error.msg != nullptr ? write_error.msg : "write error" ) );
-			}
-
-			return std::string{ raw.get( ) };
-		}
-
-		if ( doc_ == nullptr ) {
-			return std::unexpected( fail( errc::json, "dump on an empty document" ) );
-		}
-
-		auto write_error = yyjson_write_err{ };
-		const auto raw =
-			owned_cstr{ yyjson_write_opts( doc_, write_flags( pretty ), nullptr, nullptr, &write_error ) };
-
-		if ( !raw ) {
-			return std::unexpected(
-				fail( errc::json, write_error.msg != nullptr ? write_error.msg : "write error" ) );
-		}
-
-		return std::string{ raw.get( ) };
 	}
 
 }

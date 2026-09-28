@@ -8,6 +8,8 @@ add_library(mcode_core STATIC
 
     mcode/support/logging.cxx
     mcode/support/json.cxx
+    mcode/support/json_internal.cxx
+    mcode/support/json_write.cxx
     mcode/support/text.cxx
     mcode/support/toml.cxx
     mcode/support/toml_access.cxx
@@ -39,6 +41,7 @@ add_library(mcode_core STATIC
     mcode/ext/manifest.cxx
 
     mcode/fs/workspace.cxx
+    mcode/fs/workspace_write.cxx
 
     mcode/net/sse.cxx
     mcode/net/http_client.cxx

@@ -153,11 +153,17 @@ containing `tools[]`. Phase 0 extends `json::document` with `set_array` /
 `set_object` (`docs/26` §Phase 0). You consume it; do not add a second JSON
 writer, and do not hand-roll the body as string concatenation.
 
-**Key order is not automatic.** `dump()` passes `YYJSON_WRITE_PRETTY` or
-`YYJSON_WRITE_NOFLAG` — there is no `YYJSON_WRITE_SORT_KEYS` in this version, and
-the non-mutable path re-emits the parsed order verbatim. The mutable path happens
-to emit sorted order only because it iterates a `std::map`. **Do not rely on that
-as a contract** — emit keys in an explicitly chosen order and assert it.
+**Key order: sorted, and it is a tested contract.** `dump()` passes
+`YYJSON_WRITE_PRETTY` or `YYJSON_WRITE_NOFLAG` — there is no
+`YYJSON_WRITE_SORT_KEYS` in this version, and the *parse* path re-emits the source
+order verbatim. The *mutable* writer emits sorted key order because it holds
+members in a `std::map`, and `test_json.cxx` asserts that two documents built in
+different insertion orders serialize identically. Phase 0 extended that rule
+recursively, so nesting inherits it.
+
+So the rule is: build with the setters and you get sorted, order-independent
+bytes. Do not switch the container to a vector to "control" the order — that
+breaks the determinism the cache depends on.
 
 **Acceptance:** two calls with equal inputs produce byte-identical output.
 Assert it. Use `tools` in a non-sorted insertion order in the test so the sort

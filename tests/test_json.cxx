@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -241,4 +242,140 @@ TEST_CASE( "typed pointer accessors read the right types", "[json]" ) {
 	// A non-array is an error, not an empty list.
 	REQUIRE_FALSE( static_cast< bool >( doc->pointer_string_array( "/name" ) ) );
 	REQUIRE_FALSE( static_cast< bool >( doc->pointer_string_array( "/missing" ) ) );
+}
+
+TEST_CASE( "a nested body round-trips through the mutable writer", "[json]" ) {
+	// The shape a model request actually has: an array of objects, each carrying an
+	// array of content blocks. Flat string/int writing could not express it.
+	auto doc = document::make_object( );
+	REQUIRE( doc.set_string( "model", "gpt-5" ) );
+
+	auto* messages = doc.make_array_at( "messages" );
+	REQUIRE( messages != nullptr );
+
+	auto first = mcode::json::node{ .type = mcode::json::node::kind::object };
+	REQUIRE( first.members.emplace( "role", mcode::json::node{ .type = mcode::json::node::kind::string,
+		.text = "user" } ).second );
+
+	auto* blocks = &first.members.emplace( "content",
+		mcode::json::node{ .type = mcode::json::node::kind::array } ).first->second;
+	blocks->items.push_back( mcode::json::node{ .type = mcode::json::node::kind::object } );
+
+	messages->items.push_back( std::move( first ) );
+
+	auto text = doc.dump( );
+	REQUIRE( static_cast< bool >( text ) );
+
+	// Re-parsing is the real assertion: the bytes are valid JSON and the structure
+	// survived, which a string comparison against a hand-written literal would not
+	// prove.
+	auto reparsed = document::parse( *text );
+	REQUIRE( static_cast< bool >( reparsed ) );
+
+	if ( !reparsed ) {
+		FAIL( reparsed.error( ).msg );
+	}
+
+	auto role = reparsed->pointer_string( "/messages/0/role" );
+	REQUIRE( static_cast< bool >( role ) );
+	CHECK( *role == "user" );
+
+	// An empty object inside an array is still an object, not a dropped element.
+	CHECK( reparsed->has_pointer( "/messages/0/content/0" ) );
+}
+
+TEST_CASE( "nesting preserves the sorted-key contract", "[json]" ) {
+	// The top-level rule is that two documents with the same fields serialize
+	// identically. It has to hold inside a nested object too, or a request body's
+	// bytes vary with construction order and the prompt cache misses silently.
+	auto build = []( const bool reverse ) {
+		auto doc = document::make_object( );
+
+		auto* outer = doc.make_object_at( "options" );
+		REQUIRE( outer != nullptr );
+
+		const auto keys = std::array< std::string, 3 >{ "zebra", "alpha", "middle" };
+
+		for ( auto index = std::size_t{ 0 }; index < keys.size( ); ++index ) {
+			const auto at = reverse ? ( keys.size( ) - 1 - index ) : index;
+
+			outer->members.emplace( keys[ at ],
+				mcode::json::node{ .type = mcode::json::node::kind::integer,
+					.integer = static_cast< std::int64_t >( at ) } );
+		}
+
+		return doc.dump( );
+	};
+
+	auto forward = build( false );
+	auto backward = build( true );
+
+	REQUIRE( static_cast< bool >( forward ) );
+	REQUIRE( static_cast< bool >( backward ) );
+	CHECK( *forward == *backward );
+
+	// And the order is sorted, not merely stable.
+	const auto alpha = forward->find( "alpha" );
+	const auto middle = forward->find( "middle" );
+	const auto zebra = forward->find( "zebra" );
+	CHECK( alpha < middle );
+	CHECK( middle < zebra );
+}
+
+TEST_CASE( "set_json embeds pre-rendered JSON as structure", "[json]" ) {
+	auto doc = document::make_object( );
+	REQUIRE( doc.set_json( "schema", R"({"type":"object","properties":{"path":{"type":"string"}}})" ) );
+
+	auto text = doc.dump( );
+	REQUIRE( static_cast< bool >( text ) );
+
+	auto reparsed = document::parse( *text );
+	REQUIRE( static_cast< bool >( reparsed ) );
+
+	// Embedded as parsed structure, so a pointer reaches inside it.
+	auto kind = reparsed->pointer_string( "/schema/type" );
+	REQUIRE( static_cast< bool >( kind ) );
+	CHECK( *kind == "object" );
+
+	// Malformed input is refused rather than embedded as a string.
+	REQUIRE_FALSE( doc.set_json( "bad", "{not json}" ) );
+}
+
+TEST_CASE( "scalar setters round-trip their types", "[json]" ) {
+	auto doc = document::make_object( );
+	REQUIRE( doc.set_bool( "flag", true ) );
+	REQUIRE( doc.set_real( "ratio", 0.5 ) );
+	REQUIRE( doc.set_int( "count", -3 ) );
+
+	auto text = doc.dump( );
+	REQUIRE( static_cast< bool >( text ) );
+
+	auto reparsed = document::parse( *text );
+	REQUIRE( static_cast< bool >( reparsed ) );
+
+	// A real must not become an integer, and a bool must not become a number.
+	auto ratio = reparsed->pointer( "/ratio" );
+	REQUIRE( static_cast< bool >( ratio ) );
+	CHECK( ratio->find( "0.5" ) != std::string::npos );
+
+	auto flag = reparsed->pointer_bool( "/flag" );
+	REQUIRE( static_cast< bool >( flag ) );
+	CHECK( *flag );
+
+	auto count = reparsed->pointer_int( "/count" );
+	REQUIRE( static_cast< bool >( count ) );
+	CHECK( *count == -3 );
+}
+
+TEST_CASE( "make_array_at does not silently replace a scalar", "[json]" ) {
+	// insert_or_assign would turn an existing string into an array without a word.
+	auto doc = document::make_object( );
+	REQUIRE( doc.set_string( "messages", "not-an-array" ) );
+
+	CHECK( doc.make_array_at( "messages" ) == nullptr );
+
+	// The scalar is intact.
+	auto still = doc.get_string( "messages" );
+	REQUIRE( static_cast< bool >( still ) );
+	CHECK( *still == "not-an-array" );
 }

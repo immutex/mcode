@@ -25,12 +25,28 @@ namespace mcode::json {
 	// string.
 	auto append_escaped( std::string& out, std::string_view text ) -> void;
 
-	struct value {
-		enum class kind { string, integer };
+	// A JSON value being built. Recursive because a request body is nested: an
+	// array of messages, each an object with an array of content blocks.
+	//
+	// Members are held in a map, so an object serializes in sorted key order
+	// regardless of the order it was built in. That is a contract, not a side
+	// effect: the prompt cache hashes the serialized prefix, so two runs that set
+	// the same fields must produce the same bytes. Array order is the caller's and
+	// is preserved.
+	struct node {
+		enum class kind { null_value, boolean, integer, real, string, array, object };
 
-		kind type = kind::string;
+		kind type = kind::null_value;
+		bool boolean = false;
+		std::int64_t integer = 0;
+		double real = 0.0;
 		std::string text;
-		std::int64_t number = 0;
+
+		std::vector< node > items;
+		std::map< std::string, node, std::less<> > members;
+
+		[[nodiscard]] auto member( std::string_view key ) -> node*;
+		[[nodiscard]] auto member( std::string_view key ) const -> const node*;
 	};
 
 	using mut_doc_pointer = std::unique_ptr< yyjson_mut_doc, void ( * )( yyjson_mut_doc* ) >;
@@ -86,6 +102,26 @@ namespace mcode::json {
 
 		auto set_string( std::string_view key, std::string_view text ) -> status;
 		auto set_int( std::string_view key, std::int64_t number ) -> status;
+		auto set_bool( std::string_view key, bool value ) -> status;
+		auto set_real( std::string_view key, double value ) -> status;
+
+		// Attaches a whole subtree. The node is moved in, so a caller builds a
+		// message object and appends it to an array without a copy per element.
+		auto set_node( std::string_view key, node value ) -> status;
+		auto append( node value ) -> status;
+
+		// Builds an empty object or array at `key`, returning a pointer into this
+		// document that stays valid until the document is destroyed or re-set. Null
+		// on a non-mutable document, an empty key, or a key already holding a
+		// non-container.
+		[[nodiscard]] auto make_object_at( std::string_view key ) -> node*;
+		[[nodiscard]] auto make_array_at( std::string_view key ) -> node*;
+
+		// Parses `text` and attaches the result at `key`. This is how a
+		// pre-rendered schema or a raw argument blob is embedded without the caller
+		// re-encoding it field by field -- and it is the only path that preserves
+		// the source's own key order.
+		auto set_json( std::string_view key, std::string_view text ) -> status;
 
 		[[nodiscard]] auto dump( bool pretty = false ) const -> result< std::string >;
 		[[nodiscard]] auto size( ) const noexcept -> std::size_t;
@@ -96,7 +132,10 @@ namespace mcode::json {
 
 		yyjson_doc* doc_ = nullptr;
 		mut_doc_pointer mut_{ nullptr, nullptr };
-		std::map< std::string, value, std::less<> > members_;
+
+		// The mutable document's whole content. One representation rather than a
+		// flat map plus a tree, so nesting cannot drift from the flat path.
+		node root_ = node{ .type = node::kind::object };
 		bool mutable_ = false;
 	};
 
