@@ -16,7 +16,7 @@ vs18 = (r"C:\Program Files\Microsoft Visual Studio\18\Community"
 
 WARN = ("-Wall -Wextra -Wpedantic -Wshadow -Wnon-virtual-dtor -Wold-style-cast "
         "-Wcast-align -Wunused -Woverloaded-virtual -Wconversion -Wsign-conversion "
-        "-Wnull-dereference -Wdouble-promotion -Wformat=2 -Wimplicit-fallthrough -Werror")
+        "-Wdouble-promotion -Wformat=2 -Wimplicit-fallthrough -Werror")
 
 cc = json.loads((repo / "build/Release/compile_commands.json").read_text(encoding="utf-8"))
 pattern = sys.argv[1] if len(sys.argv) > 1 else r"\.cxx$"

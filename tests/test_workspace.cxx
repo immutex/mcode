@@ -6,6 +6,10 @@
 #include <fstream>
 #include <string>
 
+#if defined( _WIN32 )
+#include <windows.h>
+#endif
+
 #include "mcode/fs/workspace.hxx"
 
 using mcode::workspace;
@@ -30,6 +34,22 @@ namespace {
 			out << content;
 		}
 	};
+
+#if defined( _WIN32 )
+	// The 8.3 form of a path. CI runs under a temp directory whose spelling is
+	// `RUNNER~1`, and that is the exact input that broke `contains`.
+	auto short_path( const std::filesystem::path& path ) -> std::filesystem::path {
+		auto buffer = std::array< wchar_t, 1024 >{ };
+		const auto length = ::GetShortPathNameW( path.c_str( ), buffer.data( ),
+			static_cast< DWORD >( buffer.size( ) ) );
+
+		if ( length == 0 || length >= buffer.size( ) ) {
+			return { };
+		}
+
+		return std::filesystem::path{ buffer.data( ) };
+	}
+#endif
 
 }
 
@@ -272,3 +292,38 @@ TEST_CASE( "display paths use forward slashes on every platform", "[workspace]" 
 	REQUIRE( resolved );
 	CHECK( opened->display_path( *resolved ) == "a/b/c.txt" );
 }
+
+#if defined( _WIN32 )
+TEST_CASE( "contains accepts the 8.3 spelling of the same directory", "[workspace]" ) {
+	// Windows spells one directory two ways, and `%TEMP%` on a CI runner is the
+	// short form (`RUNNER~1`). The canonical root is the long form, so a
+	// component-wise comparison against a raw short path fails on a directory that
+	// is plainly inside the workspace -- which is how this test was found.
+	//
+	// A long leaf name is required: only components over eight characters get a
+	// short form at all.
+	const auto directory = temp_directory{ };
+
+	const auto short_root = short_path( directory.path );
+
+	if ( short_root.empty( ) || short_root == directory.path ) {
+		// Short names can be disabled on a volume; the case cannot be constructed,
+		// so there is nothing to assert.
+		SUCCEED( "short names unavailable on this volume" );
+
+		return;
+	}
+
+	auto opened = workspace::open( directory.path );
+	REQUIRE( opened );
+
+	// Both spellings resolve to the same directory and both must be accepted.
+	CHECK( opened->contains( directory.path / "child" ) );
+	CHECK( opened->contains( short_root / "child" ) );
+
+	// And the guarantee the function exists for still holds for the short form:
+	// a sibling that merely shares a string prefix is not contained.
+	const auto sibling = std::filesystem::path{ short_root.string( ) + "-evil" };
+	CHECK_FALSE( opened->contains( sibling ) );
+}
+#endif

@@ -270,7 +270,22 @@ code comments.
 33. **`lua_objlen` returns `int`, not `size_t`.** Every comparison against a
     `size_t` counter is then a sign-compare. Convert once at the source.
 
-34. **Sorting before comparison is not optional in reports.** Extension discovery
+34. **`-Wnull-dereference` is deliberately not in the warning set.** GCC emits it
+    from inside `boost/asio/io_context.hpp` and
+    `boost/beast/http/impl/fields.hpp` under `-O3` inlining, where the
+    system-header suppression does not survive the optimizer. Every occurrence in
+    this project is Boost's code; the flag buys a build failure we cannot fix.
+
+35. **`std::filesystem::contains`-style comparison must canonicalize its input.**
+    Windows spells one directory two ways, and a CI runner's `%TEMP%` is the 8.3
+    short form (`RUNNER~1`). The canonical root is the long form, so comparing a
+    raw short path component-wise rejects a directory that is plainly inside the
+    workspace. `weakly_canonical` resolves the existing prefix and leaves the rest
+    lexical, so a path that does not exist yet still compares correctly. The
+    regression test builds a long directory name, takes its short form via
+    `GetShortPathNameW`, and asserts both spellings are accepted.
+
+36. **Sorting before comparison is not optional in reports.** Extension discovery
     sorts by name, and JSON object keys are emitted in sorted order, so two runs
     are byte-identical. An unsorted report makes a duplicate-name or load-order
     failure unreproducible.

@@ -208,11 +208,26 @@ namespace mcode {
 	}
 
 	auto workspace::contains( const std::filesystem::path& absolute ) const -> bool {
+		// The root is canonical, so the input must be too or the comparison is
+		// between two spellings of the same directory. Windows makes this concrete:
+		// `%TEMP%` commonly arrives as an 8.3 short name (`RUNNER~1`), which is the
+		// same directory as its long form and compares unequal component-wise.
+		// weakly_canonical resolves the existing prefix and leaves the rest lexical,
+		// so a path that does not exist yet still compares correctly -- and a
+		// sibling that merely shares a string prefix still fails, which is the
+		// guarantee this function exists to provide.
+		auto error_code = std::error_code{ };
+		const auto canonical = std::filesystem::weakly_canonical( absolute, error_code );
+
+		if ( error_code ) {
+			return false;
+		}
+
 		auto root_entry = canonical_root_.begin( );
-		auto path_entry = absolute.begin( );
+		auto path_entry = canonical.begin( );
 
 		for ( ; root_entry != canonical_root_.end( ); ++root_entry, ++path_entry ) {
-			if ( path_entry == absolute.end( ) ) {
+			if ( path_entry == canonical.end( ) ) {
 				return false;
 			}
 
