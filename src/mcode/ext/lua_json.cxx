@@ -164,7 +164,9 @@ namespace mcode::ext {
 			++context.depth;
 
 			const auto table = lua_absindex( state, index );
-			const auto length = lua_objlen( state, table );
+			// lua_objlen returns int; the counters below are size_t, so the
+			// conversion happens once here rather than at every comparison.
+			const auto length = static_cast< std::size_t >( lua_objlen( state, table ) );
 
 			auto keys = std::vector< std::string >{ };
 			auto array_like = true;

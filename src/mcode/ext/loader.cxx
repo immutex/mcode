@@ -229,8 +229,8 @@ namespace mcode::ext {
 		// home path, because the platform seam owns that decision (docs/24).
 		if ( const auto* profile = std::getenv( "USERPROFILE" ); profile != nullptr ) {
 			roots.push_back( std::filesystem::path{ profile } / ".mcode" / "extensions" );
-		} else if ( const auto* profile = std::getenv( "HOME" ); profile != nullptr ) {
-			roots.push_back( std::filesystem::path{ profile } / ".mcode" / "extensions" );
+		} else if ( const auto* home = std::getenv( "HOME" ); home != nullptr ) {
+			roots.push_back( std::filesystem::path{ home } / ".mcode" / "extensions" );
 		}
 
 		return roots;
