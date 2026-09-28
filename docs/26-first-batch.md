@@ -271,11 +271,40 @@ Every extension tool is currently callable but never advertised, and no test
 notices — the fixture's own `hello` tool has a schema that nothing can read. P1
 carries the schema through and adds the regression test.
 
-**Each of P1–P4 is a single-purpose commit with its own test**, on the branch that
-needs it least so the diff stays reviewable. None of them is a design change: P1
-and P3 extend an existing type additively, P2 adds a function to a class that
-already owns the concept, and P4 adds an outcome to a failure path that currently
-loses information.
+**All four landed.** One commit each, each with its own test, all on `master`
+before any branch was cut.
+
+| # | Commit | What landed |
+|---|---|---|
+| P1 | `1141276` | `tool_def::schema_json`; `registered_tool::schema_json` deleted as a second copy nothing read |
+| P2 | `9673b6e` | `write_file` (atomic, mode-checked, boundary-checked) and `is_protected` |
+| P3 | `e82f26c` | `json::node`, the setters, `set_json`, and a recursive writer |
+| P4 | `17cd367` | `http_failure` and the optional out-parameter on `stream_sse` |
+
+Three further bugs surfaced while implementing them, all fixed here rather than
+left for a branch to trip over:
+
+- **P1 exposed a live bug.** `ext/api.cxx` rendered every Lua tool's schema and then
+  dropped it, so extension tools were callable but never advertised. The
+  regression test fails without the fix.
+- **P3's test caught a bug in P3.** `make_array_at` used `insert_or_assign`, which
+  replaced an existing scalar *before* the type check ran, turning a refusal into a
+  silent replacement.
+- **P4's test caught a data-loss bug in the SSE path.** `read_header` can leave body
+  bytes in its buffer, and a server that writes its first event in the same TCP
+  segment as the response headers puts them there. The stream was read straight
+  from the socket, so those bytes were dropped — the first event of a fast stream,
+  intermittently. The buffer is now drained first.
+
+**Two files crossed the 600-line limit and are split by concern:**
+`json.cxx` reads, `json_write.cxx` writes; `workspace.cxx` reads,
+`workspace_write.cxx` holds the new write path. The three helpers both JSON halves
+need moved to `json_internal.*` — the point at which a header is justified, since
+that is the first time it has two consumers.
+
+**None of it is a design change:** P1 and P3 extend an existing type additively, P2
+adds a function to a class that already owns the concept, and P4 adds an outcome to
+a failure path that was discarding information.
 
 **What Phase 0 deliberately does not do:** it does not add a capability/pricing
 registry (workstream 1's T8), does not extend `request_spec` with body-shape
