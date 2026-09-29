@@ -13,6 +13,7 @@
 #include "mcode/ext/hooks.hxx"
 #include "mcode/ext/loader.hxx"
 #include "mcode/fs/workspace.hxx"
+#include "mcode/mcp/connect.hxx"
 #include "mcode/model/capabilities.hxx"
 #include "mcode/model/http_client.hxx"
 #include "mcode/model/provider.hxx"
@@ -170,10 +171,16 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	// tools run through, so the result has to outlive the loop.
 	auto extensions = mcode::ext::load_result{ };
 
+	// Declared here for the same lifetime reason: the store receives every
+	// server an extension declares while loading, and the MCP connect step
+	// reads it after the loader has run. It owns nothing; the supervisors live
+	// in the server set below.
+	auto extension_servers = mcode::ext::mcp_server_store{ };
+
 	if ( !parsed->no_extensions ) {
 		auto options = mcode::ext::loader_options{ };
 		options.register_api = mcode::ext::default_register_api( tool_registry,
-			&skills_context.skills );
+			&skills_context.skills, &extension_servers );
 
 		auto roots = mcode::ext::default_roots( workspace_path );
 
@@ -423,6 +430,11 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	dependencies.instruction_chain = skills_context.chain.text;
 	dependencies.skill_index = skills_context.skill_index;
 
+	// Declared before the loop: the supervisors own the child processes and the
+	// handlers the loop dispatches into, so they must outlive it. Destruction
+	// runs each supervisor's graceful shutdown after the loop is gone.
+	auto mcp_servers = mcode::mcp::server_set{ };
+
 	auto loop = mcode::agent_loop{ dependencies };
 
 	for ( auto& [ name, handler ] : sink.take( ) ) {
@@ -438,6 +450,21 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 			const std::string_view arguments_json ) -> mcode::result< std::string > {
 			return extensions.invoke( tool_name, arguments_json );
 		} );
+	}
+
+	// The MCP servers: parse the merged config, merge the extension-declared
+	// set, start the enabled ones, register their tools and handlers.
+	const auto connected = mcode::mcp::connect_servers(
+		mcode::mcp::connect_input{ .config_values = &config->keys( ),
+			.extension_servers = &extension_servers, .registry = &tool_registry,
+			.loop = &loop, .owned = &mcp_servers } );
+
+	if ( !connected ) {
+		std::fprintf( stderr, "mcode: %s\n", connected.error( ).msg.c_str( ) );
+		stream.emit_run_end( mcode::cli::exit_code_for( connected.error( ).code ),
+			connected.error( ).msg );
+
+		return mcode::cli::to_int( mcode::cli::exit_code_for( connected.error( ).code ) );
 	}
 
 	const auto outcome = loop.run( parsed->prompt );

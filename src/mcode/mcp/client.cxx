@@ -199,22 +199,18 @@ namespace mcode::mcp {
 		auto parsed = jsonrpc::parse_line( item.line_json );
 
 		if ( !parsed ) {
-			
 			log_line( "unparseable line: " + parsed.error( ).msg );
 
 			return;
 		}
 
 		if ( !parsed->has_value( ) ) {
-			
-
 			return;
 		}
 
 		auto frame = std::move( **parsed );
 
 		if ( frame.kind == jsonrpc::message_kind::response ) {
-			
 			const auto found = pending_.find( frame.id );
 
 			if ( found == pending_.end( ) ) {
@@ -306,6 +302,10 @@ namespace mcode::mcp {
 			return std::unexpected( fail( errc::io, "the server's stdout has ended" ) );
 		}
 
+		// The absolute maximum is enforced here, on every request, so no caller
+		// can exceed it. A caller-supplied shorter timeout still wins.
+		const auto effective = timeout < ABSOLUTE_MAX_TIMEOUT ? timeout : ABSOLUTE_MAX_TIMEOUT;
+
 		auto stamped = jsonrpc::stamp_meta( params_json );
 
 		if ( !stamped ) {
@@ -334,7 +334,7 @@ namespace mcode::mcp {
 		// loop is driven by whoever owns the transport -- `pump` below -- so the
 		// timeout is enforced here, at the call site, where the deadline is
 		// known.
-		const auto deadline = std::chrono::steady_clock::now( ) + timeout;
+		const auto deadline = std::chrono::steady_clock::now( ) + effective;
 		auto outcome = result< std::string >{ };
 
 		while ( true ) {
@@ -355,8 +355,6 @@ namespace mcode::mcp {
 			}
 
 			if ( std::chrono::steady_clock::now( ) >= deadline ) {
-				// The absolute maximum is enforced by the caller clamping the
-				// timeout; here the per-request deadline fires.
 				auto cancelled = send_notification( jsonrpc::CANCELLED_NOTIFICATION,
 					cancel_params( id ) );
 

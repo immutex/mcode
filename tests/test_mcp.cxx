@@ -1,7 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "mcode/agent/loop.hxx"
 #include "mcode/core/registry.hxx"
 #include "mcode/mcp/client.hxx"
+#include "mcode/mcp/connect.hxx"
 #include "mcode/mcp/jsonrpc.hxx"
 #include "mcode/mcp/source.hxx"
 #include "mcode/mcp/supervisor.hxx"
@@ -425,4 +427,128 @@ TEST_CASE( "untrusted delimiters wrap description and result", "[mcp][source]" )
 	CHECK( tokens == 4 );
 	CHECK( estimate_exceeds_warning( MCP_SCHEMA_TOKEN_WARNING + 1 ) );
 	CHECK_FALSE( estimate_exceeds_warning( MCP_SCHEMA_TOKEN_WARNING ) );
+}
+
+TEST_CASE( "the wiring registers a configured server's tools on the loop",
+	"[mcp][connect]" ) {
+	// The acceptance test for the integration gap: a supervisor was built and
+	// tested but nothing in the shipped binary ever constructed one. This
+	// drives the same connect path `run_exec` drives, against the fixture.
+	auto registry = tool_registry{ };
+	auto servers = server_set{ };
+	auto loop = mcode::agent_loop{ mcode::agent_loop::dependencies{ } };
+
+	auto input = connect_input{ };
+	input.registry = &registry;
+	input.loop = &loop;
+	input.owned = &servers;
+
+	auto report = connect_list( { config_with( "normal" ) }, input );
+	REQUIRE( report );
+
+	CHECK( report->started.size( ) == 1 );
+	CHECK( report->started.front( ) == "echo" );
+	CHECK( report->failed.empty( ) );
+
+	CHECK( registry.find( qualified_tool_name( "echo", "upper" ) ) != nullptr );
+	CHECK( registry.find( qualified_tool_name( "echo", "count" ) ) != nullptr );
+
+	// The handler the loop dispatches into routes to the server's client and
+	// returns the result wrapped as untrusted data.
+	const auto* handler = loop.handler_for( qualified_tool_name( "echo", "upper" ) );
+	REQUIRE( handler != nullptr );
+
+	auto outcome = ( *handler )( R"({"text":"hello"})" );
+	REQUIRE( outcome );
+	CHECK( outcome->find( "HELLO" ) != std::string::npos );
+	CHECK( outcome->find( UNTRUSTED_BEGIN ) != std::string::npos );
+	CHECK( outcome->find( UNTRUSTED_END ) != std::string::npos );
+
+	servers.shutdown_all( );
+}
+
+TEST_CASE( "a disabled server is not started and a bad one does not fail the session",
+	"[mcp][connect]" ) {
+	auto registry = tool_registry{ };
+	auto servers = server_set{ };
+	auto loop = mcode::agent_loop{ mcode::agent_loop::dependencies{ } };
+
+	auto disabled = config_with( "normal" );
+	disabled.enabled = false;
+
+	auto unstartable = config_with( "normal" );
+	unstartable.name = "missing";
+	unstartable.command = { "mcode-mcp-echo-not-on-path-xyz" };
+
+	auto input = connect_input{ };
+	input.registry = &registry;
+	input.loop = &loop;
+	input.owned = &servers;
+
+	auto report = connect_list( { disabled, unstartable }, input );
+	REQUIRE( report );
+
+	// The disabled server never started: nothing registered, nothing owned.
+	CHECK( report->started.empty( ) );
+	CHECK( registry.size( ) == 0 );
+	CHECK( servers.all( ).empty( ) );
+
+	// The enabled-but-unstartable one is reported, and the call still returns
+	// a report -- one bad server did not fail the session.
+	CHECK( report->failed.size( ) == 1 );
+	CHECK( report->failed.front( ) == "missing" );
+
+	servers.shutdown_all( );
+}
+
+TEST_CASE( "a tool result comes back wrapped as untrusted data", "[mcp][connect]" ) {
+	auto registry = tool_registry{ };
+	auto servers = server_set{ };
+	auto loop = mcode::agent_loop{ mcode::agent_loop::dependencies{ } };
+
+	auto input = connect_input{ };
+	input.registry = &registry;
+	input.loop = &loop;
+	input.owned = &servers;
+
+	auto report = connect_list( { config_with( "normal" ) }, input );
+	REQUIRE( report );
+
+	const auto* handler = loop.handler_for( qualified_tool_name( "echo", "count" ) );
+	REQUIRE( handler != nullptr );
+
+	auto outcome = ( *handler )( R"({"text":"abcd"})" );
+	REQUIRE( outcome );
+
+	const auto expected = std::string{ UNTRUSTED_BEGIN } + "4" + std::string{ UNTRUSTED_END };
+	CHECK( *outcome == expected );
+
+	servers.shutdown_all( );
+}
+
+TEST_CASE( "no request can exceed the absolute maximum timeout", "[mcp][client]" ) {
+	// The clamp lives inside `client::call`: a caller asking for a year still
+	// waits at most ABSOLUTE_MAX_TIMEOUT, and a caller asking for less keeps
+	// its shorter deadline -- which is what the timeout-path tests rely on.
+	auto [ wire, session_client ] = handshaked_client( "hang" );
+
+	const auto started = std::chrono::steady_clock::now( );
+	auto outcome = session_client->call_tool( "upper", R"({"text":"x"})",
+		std::chrono::milliseconds{ ABSOLUTE_MAX_TIMEOUT } + std::chrono::hours{ 1 } );
+	const auto elapsed = std::chrono::steady_clock::now( ) - started;
+
+	REQUIRE_FALSE( outcome );
+	CHECK( outcome.error( ).code == errc::cancelled );
+	CHECK( elapsed < ABSOLUTE_MAX_TIMEOUT + std::chrono::seconds{ 10 } );
+
+	// The shorter caller timeout still wins: the existing timeout-path tests
+	// pass 300-500ms and observe cancellation within seconds; asserted here
+	// once, against the same fixture, so the clamp is not order-dependent.
+	auto short_call_started = std::chrono::steady_clock::now( );
+	auto short_outcome = session_client->call_tool( "upper", R"({"text":"x"})",
+		std::chrono::milliseconds{ 400 } );
+	auto short_elapsed = std::chrono::steady_clock::now( ) - short_call_started;
+
+	REQUIRE_FALSE( short_outcome );
+	CHECK( short_elapsed < std::chrono::seconds{ 5 } );
 }

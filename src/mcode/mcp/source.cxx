@@ -11,17 +11,6 @@ namespace mcode::mcp {
 		inline constexpr std::string_view NAME_SEPARATOR = "__";
 		inline constexpr std::string_view OWNER_PREFIX = "mcp:";
 
-		auto qualified_name( const std::string& server_name, const std::string& tool_name )
-			-> std::string {
-			auto out = std::string{ "mcp" };
-			out += NAME_SEPARATOR;
-			out += server_name;
-			out += NAME_SEPARATOR;
-			out += tool_name;
-
-			return out;
-		}
-
 		auto owner_of( const std::string& server_name ) -> std::string {
 			return std::string{ OWNER_PREFIX } + server_name;
 		}
@@ -39,7 +28,7 @@ namespace mcode::mcp {
 		}
 
 		auto definition = tool_def{ };
-		definition.name = qualified_name( server_name, tool.name );
+		definition.name = qualified_tool_name( server_name, tool.name );
 		definition.description = wrap_untrusted( tool.description );
 		definition.klass = tool_class::mcp;
 		definition.source = tool_source::mcp;
@@ -73,6 +62,17 @@ namespace mcode::mcp {
 
 	auto source::unregister_server( const std::string& server_name ) -> std::size_t {
 		return registry_->remove_owner( owner_of( server_name ) );
+	}
+
+	auto qualified_tool_name( const std::string& server_name,
+		const std::string& tool_name ) -> std::string {
+		auto out = std::string{ "mcp" };
+		out += NAME_SEPARATOR;
+		out += server_name;
+		out += NAME_SEPARATOR;
+		out += tool_name;
+
+		return out;
 	}
 
 }

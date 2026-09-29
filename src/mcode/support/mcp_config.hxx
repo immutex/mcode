@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -55,6 +56,12 @@ namespace mcode::mcp {
 	// without `enabled = true` stays disabled, and any key under `[mcp]` that is
 	// not a server field is an error rather than an ignored setting.
 	[[nodiscard]] auto parse_mcp_servers( const toml::table& values )
+		-> result< std::vector< server_config > >;
+
+	// The same parse over a merged config's flattened key map, which is a
+	// `std::map`, not a `toml::table`.
+	[[nodiscard]] auto parse_mcp_servers(
+		const std::map< std::string, toml::value, std::less<> >& values )
 		-> result< std::vector< server_config > >;
 
 	// The schema-cost estimate for one server's tools, in tokens.

@@ -347,6 +347,16 @@ namespace mcode {
 
 		auto register_handler( const std::string name, tool_handler handler ) -> void;
 
+		// The registered handler for one tool, or nullptr. Tests and the MCP
+		// connect path use it to exercise the dispatch entry the loop itself
+		// calls, without running a whole turn.
+		[[nodiscard]] auto handler_for( const std::string_view name ) const
+			-> const tool_handler* {
+			const auto found = handlers_.find( std::string{ name } );
+
+			return found != handlers_.end( ) ? &found->second : nullptr;
+		}
+
 		// Runs the ReAct state machine over one user task until a terminal state.
 		// The scripted client in tests, the HTTP client in production.
 		[[nodiscard]] auto run( const std::string_view user_task ) -> result< turn_outcome >;

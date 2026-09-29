@@ -134,10 +134,15 @@ namespace mcode::ext {
 	// the discovered skills, which `mcode.skill.read` resolves against. The
 	// skills pointer must outlive every loaded extension.
 	//
+	// The MCP server store, when given, receives every server an extension
+	// declares through `mcode.mcp.register`. The host process owns it and must
+	// outlive every loaded extension, for the same reason the skills report does.
+	//
 	// Providers and hooks arrive per call, because the caller owns them and a
 	// second reference would be a second source of truth.
 	[[nodiscard]] auto default_register_api( tool_registry& registry,
-		const skills::discovery_report* skills = nullptr )
+		const skills::discovery_report* skills = nullptr,
+		mcp_server_store* servers = nullptr )
 		-> std::function< status( const registration& ) >;
 
 	// The extension roots, in precedence order: project, then user. Project

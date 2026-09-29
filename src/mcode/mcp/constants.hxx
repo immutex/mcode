@@ -8,8 +8,8 @@
 namespace mcode::mcp {
 
 	// Per-request timeouts. A list is cheap and a call may be slow work, but the
-	// absolute maximum is enforced on every request regardless: a server that
-	// never answers must never block the loop forever.
+	// absolute maximum is enforced inside `client::call` on every request
+	// regardless: a server that never answers must never block the loop forever.
 	inline constexpr std::chrono::milliseconds DEFAULT_LIST_TIMEOUT{ 30'000 };
 	inline constexpr std::chrono::milliseconds DEFAULT_CALL_TIMEOUT{ 120'000 };
 	inline constexpr std::chrono::milliseconds ABSOLUTE_MAX_TIMEOUT{ 300'000 };

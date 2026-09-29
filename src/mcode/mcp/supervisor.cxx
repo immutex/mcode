@@ -8,6 +8,30 @@
 
 namespace mcode::mcp {
 
+	namespace {
+
+		// The canonical form of a tool list, for hash-pinning. One rendering:
+		// the pin and the comparison must agree exactly, or a server could
+		// change its tools and have the change go undetected -- or be flagged
+		// for a difference that is not one.
+		[[nodiscard]] auto render_tool_list( const std::vector< server_tool >& tools )
+			-> std::string {
+			auto out = std::string{ };
+
+			for ( const auto& tool : tools ) {
+				out += tool.name;
+				out.push_back( '\x1f' );
+				out += tool.description;
+				out.push_back( '\x1f' );
+				out += tool.schema_json;
+				out.push_back( '\x1e' );
+			}
+
+			return out;
+		}
+
+	}
+
 	auto to_string( const server_state value ) noexcept -> std::string_view {
 		switch ( value ) {
 			case server_state::starting: return "starting";
@@ -54,18 +78,7 @@ namespace mcode::mcp {
 
 		// Hash-pin the canonicalized list body so a server that changes its
 		// tools after approval is detected rather than silently re-registered.
-		auto rendered = std::string{ };
-
-		for ( const auto& tool : *listed ) {
-			rendered += tool.name;
-			rendered.push_back( '\x1f' );
-			rendered += tool.description;
-			rendered.push_back( '\x1f' );
-			rendered += tool.schema_json;
-			rendered.push_back( '\x1e' );
-		}
-
-		pinned_hash_ = hash_bytes( rendered );
+		pinned_hash_ = hash_bytes( render_tool_list( *listed ) );
 		tools_ = std::move( *listed );
 
 		return tools_;
@@ -186,18 +199,7 @@ namespace mcode::mcp {
 
 	auto supervisor::detect_changed_tools( const std::vector< server_tool >& fresh ) const
 		-> bool {
-		auto rendered = std::string{ };
-
-		for ( const auto& tool : fresh ) {
-			rendered += tool.name;
-			rendered.push_back( '\x1f' );
-			rendered += tool.description;
-			rendered.push_back( '\x1f' );
-			rendered += tool.schema_json;
-			rendered.push_back( '\x1e' );
-		}
-
-		return hash_bytes( rendered ) != pinned_hash_;
+		return hash_bytes( render_tool_list( fresh ) ) != pinned_hash_;
 	}
 
 	auto supervisor::report( ) const -> server_report {

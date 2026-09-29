@@ -17,6 +17,7 @@ add_library(mcode_core STATIC
     mcode/support/mcp_config.cxx
     mcode/support/time.cxx
     mcode/support/parse.cxx
+    mcode/support/glob.cxx
 
     mcode/ext/hooks.cxx
     mcode/ext/lua_host.cxx
@@ -61,6 +62,7 @@ add_library(mcode_core STATIC
     mcode/fs/workspace_write.cxx
 
     mcode/perm/permission.cxx
+    mcode/perm/rules.cxx
     mcode/perm/store.cxx
     mcode/perm/argv.cxx
     mcode/perm/floor.cxx
@@ -89,6 +91,7 @@ add_library(mcode_core STATIC
     mcode/mcp/client.cxx
     mcode/mcp/supervisor.cxx
     mcode/mcp/source.cxx
+    mcode/mcp/connect.cxx
     mcode/mcp/constants.cxx
     mcode/support/mcp_config.cxx
 

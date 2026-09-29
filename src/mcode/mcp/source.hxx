@@ -41,4 +41,9 @@ namespace mcode::mcp {
 		tool_registry* registry_ = nullptr;
 	};
 
+	// The registry-side name for one server tool, `mcp__<server>__<tool>`.
+	// Shared so registration and handler wiring cannot drift.
+	[[nodiscard]] auto qualified_tool_name( const std::string& server_name,
+		const std::string& tool_name ) -> std::string;
+
 }
