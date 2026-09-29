@@ -69,12 +69,27 @@ namespace mcode::loop_internal {
 		auto calls = std::vector< tool_call >{ };
 		auto args = std::map< int, std::string >{ };
 		auto names = std::map< int, std::string >{ };
+		auto ids = std::map< int, std::string >{ };
 
 		for ( const auto& event : events ) {
 			switch ( event.type ) {
 				case model::chat_event::kind::tool_call_delta: {
+					// Mid-stream events carry one fragment; the applier's finish()
+					// re-emits the whole call as one event. A fragment that extends
+					// what is already accumulated is that snapshot, so it replaces;
+					// anything else concatenates.
 					names[ event.index ] = event.tool_name;
-					args[ event.index ] += event.args_fragment;
+					ids[ event.index ] = event.tool_call_id;
+
+					auto& accumulated = args[ event.index ];
+
+					if ( !event.args_fragment.empty( ) ) {
+						if ( event.args_fragment.starts_with( accumulated ) ) {
+							accumulated = event.args_fragment;
+						} else {
+							accumulated += event.args_fragment;
+						}
+					}
 
 					break;
 				}
@@ -84,7 +99,12 @@ namespace mcode::loop_internal {
 		}
 
 		for ( const auto& [ index, name ] : names ) {
-			calls.push_back( { name, args.contains( index ) ? args.at( index ) : "{}" } );
+			auto call = tool_call{ };
+			call.id = ids.contains( index ) ? ids.at( index ) : std::string{ };
+			call.name = name;
+			call.args_json = args.contains( index ) ? args.at( index ) : "{}";
+
+			calls.push_back( std::move( call ) );
 		}
 
 		return calls;

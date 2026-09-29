@@ -54,6 +54,19 @@ namespace mcode {
 		}
 	}
 
+	auto agent_loop::publish( const events::kind type, std::string payload_json ) -> void {
+		if ( bus_ == nullptr ) {
+			return;
+		}
+
+		auto value = events::event{ };
+		value.type = type;
+		value.timestamp_ms = support::epoch_milliseconds( );
+		value.payload_json = std::move( payload_json );
+
+		bus_->publish( std::move( value ) );
+	}
+
 	auto agent_loop::register_handler( std::string name, tool_handler handler ) -> void {
 		handlers_.insert_or_assign( std::move( name ), std::move( handler ) );
 	}
@@ -95,6 +108,12 @@ namespace mcode {
 
 				if ( event.type == model::chat_event::kind::text_delta ) {
 					text += event.text;
+
+					auto payload = std::string{ "{\"text\":\"" };
+					json::append_escaped( payload, event.text );
+					payload += "\"}";
+
+					publish( events::kind::assistant_delta, std::move( payload ) );
 				}
 			} );
 
@@ -131,6 +150,7 @@ namespace mcode {
 		for ( const auto& call : calls ) {
 			auto block = model::block{ };
 			block.kind = model::block_kind::tool_call;
+			block.tool_call_id = call.id;
 			block.tool_name = call.name;
 			block.args_json = call.args_json;
 			assistant.blocks.push_back( std::move( block ) );
@@ -269,7 +289,12 @@ namespace mcode {
 
 		state_ = loop_state::plan;
 
+		publish( events::kind::turn_start, "{}" );
+
 		while ( true ) {
+			publish( events::kind::step_start, std::string{ "{\"state\":\"" }
+				+ std::string{ to_string( state_ ) } + "\"}" );
+
 			visited_.push_back( state_ );
 
 			switch ( state_ ) {
@@ -390,7 +415,7 @@ namespace mcode {
 					json::append_escaped( arguments, verification_command_ );
 					arguments += "}";
 
-					auto checked = execute( tool_call{ "bash", arguments } );
+					auto checked = execute( tool_call{ std::string{ }, "bash", arguments } );
 
 					// A non-zero exit is a successful tool call: the result
 					// carries the exit code, and the gate reads it from there.
@@ -519,11 +544,16 @@ namespace mcode {
 				}
 			}
 
+			publish( events::kind::step_end, std::string{ "{\"state\":\"" }
+				+ std::string{ to_string( state_ ) } + "\"}" );
+
 			if ( auto compacted = maybe_compact( ); !compacted ) {
 				finish_run( loop_state::handoff, compacted.error( ).msg );
 				state_ = loop_state::handoff;
 			}
 		}
+
+		publish( events::kind::turn_end, "{}" );
 	}
 
 	auto agent_loop::execute( const tool_call& call ) -> tool_outcome {

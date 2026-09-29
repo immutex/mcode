@@ -10,17 +10,61 @@
 #include <windows.h>
 #endif
 
+#include "mcode/agent/loop.hxx"
 #include "mcode/cli/exec.hxx"
 #include "mcode/core/registry.hxx"
 #include "mcode/events/bus.hxx"
 #include "mcode/ext/hooks.hxx"
 #include "mcode/ext/loader.hxx"
+#include "mcode/fs/workspace.hxx"
 #include "mcode/model/capabilities.hxx"
 #include "mcode/model/http_client.hxx"
 #include "mcode/model/provider.hxx"
 #include "mcode/net/http_client.hxx"
 #include "mcode/support/config.hxx"
-#include "mcode/support/json.hxx"
+#include "mcode/support/time.hxx"
+#include "mcode/tools/context.hxx"
+#include "mcode/tools/exec_policy.hxx"
+#include "mcode/tools/register.hxx"
+
+namespace {
+
+#if defined( _WIN32 )
+	inline constexpr std::string_view PLATFORM_NAME = "windows";
+#elif defined( __APPLE__ )
+	inline constexpr std::string_view PLATFORM_NAME = "macos";
+#else
+	inline constexpr std::string_view PLATFORM_NAME = "linux";
+#endif
+
+	// Forwards the inner client's events to the loop. In human mode it mirrors
+	// text deltas to stdout as they arrive; in JSON mode the bus subscription
+	// below emits them as lines instead, so raw text never breaks the stream.
+	class streaming_client final : public mcode::model::model_client {
+	public:
+		streaming_client( mcode::model::model_client& inner, std::FILE* out, const bool json )
+			: inner_( inner ), out_( out ), json_( json ) { }
+
+		auto stream( const mcode::model::stream_request& request,
+			const mcode::model::event_sink& sink ) -> mcode::status override {
+			return inner_.stream( request,
+				[ this, &sink ]( const mcode::model::chat_event& event ) {
+					if ( !json_ && event.type == mcode::model::chat_event::kind::text_delta ) {
+						std::fwrite( event.text.data( ), 1, event.text.size( ), out_ );
+						std::fflush( out_ );
+					}
+
+					sink( event );
+				} );
+		}
+
+	private:
+		mcode::model::model_client& inner_;
+		std::FILE* out_;
+		bool json_;
+	};
+
+}
 
 // `mcode exec [options] [prompt]` -- the headless surface.
 	// Returns the process exit code.
@@ -162,68 +206,168 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
 	}
 
-	auto request = mcode::model::chat_request{ };
-	request.model = model_name;
-	request.reasoning_effort = mcode::model::effort::medium;
-
-	auto user_message = mcode::model::message{ };
-	user_message.speaker = mcode::model::role::user;
-
-	auto text_block = mcode::model::block{ };
-	text_block.kind = mcode::model::block_kind::text;
-	text_block.text = parsed->prompt;
-
-	user_message.blocks.push_back( std::move( text_block ) );
-	request.messages.push_back( std::move( user_message ) );
-
-	auto stream_request = mcode::model::stream_request{ };
-	stream_request.request = std::move( request );
-	stream_request.provider = *descriptor;
-	stream_request.api_key = *api_key;
-	stream_request.caps = *caps;
-
-	if ( base_url ) {
-		stream_request.provider.endpoint = *base_url;
-	}
-
 	auto transport = mcode::net::http_client{ };
 	auto client = mcode::model::http_model_client{ transport };
+	auto loop_client = streaming_client{ client, stdout, parsed->json };
 
-	const auto sent = client.stream( stream_request,
-		[ & ]( const mcode::model::chat_event& event ) {
-			switch ( event.type ) {
-				case mcode::model::chat_event::kind::text_delta:
-					std::fwrite( event.text.data( ), 1, event.text.size( ), stdout );
-					std::fflush( stdout );
-					break;
+	// The loop publishes on this bus; in JSON mode the stream carries the
+	// progress kinds out as one JSON object per line, flushed as they happen.
+	bus.subscribe( mcode::events::kind::assistant_delta, [&]( const mcode::events::event& value ) {
+		stream.emit_event( value );
+	} );
 
-				case mcode::model::chat_event::kind::thinking_delta:
-				case mcode::model::chat_event::kind::tool_call_delta:
-				case mcode::model::chat_event::kind::usage:
-				case mcode::model::chat_event::kind::turn_done:
-				case mcode::model::chat_event::kind::error:
-					break;
+	bus.subscribe( mcode::events::kind::turn_start, [&]( const mcode::events::event& value ) {
+		stream.emit_event( value );
+	} );
+
+	bus.subscribe( mcode::events::kind::turn_end, [&]( const mcode::events::event& value ) {
+		stream.emit_event( value );
+	} );
+
+	bus.subscribe( mcode::events::kind::step_start, [&]( const mcode::events::event& value ) {
+		stream.emit_event( value );
+	} );
+
+	bus.subscribe( mcode::events::kind::step_end, [&]( const mcode::events::event& value ) {
+		stream.emit_event( value );
+	} );
+
+	bus.subscribe( mcode::events::kind::tool_call, [&]( const mcode::events::event& value ) {
+		stream.emit_event( value );
+	} );
+
+	bus.subscribe( mcode::events::kind::tool_result, [&]( const mcode::events::event& value ) {
+		stream.emit_event( value );
+	} );
+
+	auto space = mcode::workspace::open( parsed->working_directory.empty( )
+		? std::filesystem::current_path( )
+		: std::filesystem::path{ parsed->working_directory } );
+
+	if ( !space ) {
+		std::fprintf( stderr, "mcode: %s\n", space.error( ).msg.c_str( ) );
+		stream.emit_run_end( mcode::cli::exit_code::usage_error, space.error( ).msg );
+
+		return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
+	}
+
+	auto reads = mcode::tools::session_reads{ };
+	auto policy = mcode::tools::exec_policy{ };
+	policy.yolo = parsed->yolo;
+
+	auto run_id = std::to_string( static_cast< long long >( mcode::support::epoch_milliseconds( ) ) );
+
+	auto tools_context = mcode::tools::tool_context{ };
+	tools_context.space = &*space;
+	tools_context.reads = &reads;
+	tools_context.policy = &policy;
+	tools_context.run_id = run_id;
+	tools_context.headless = parsed->json;
+
+	auto sink = mcode::tools::vector_sink{ };
+
+	const auto registered = mcode::tools::register_core_tools( tool_registry, sink, tools_context );
+
+	if ( !registered ) {
+		std::fprintf( stderr, "mcode: %s\n", registered.error( ).msg.c_str( ) );
+		stream.emit_run_end( mcode::cli::exit_code_for( registered.error( ).code ),
+			registered.error( ).msg );
+
+		return mcode::cli::to_int( mcode::cli::exit_code_for( registered.error( ).code ) );
+	}
+
+	auto budget = mcode::session_budget{ };
+
+	if ( parsed->max_steps > 0 ) {
+		budget.max_steps = parsed->max_steps;
+	}
+
+	if ( parsed->max_budget_usd > 0.0 ) {
+		budget.max_usd = parsed->max_budget_usd;
+	}
+
+	// The config endpoint overrides the descriptor's default; this must happen
+	// before the descriptor is copied into the loop's dependencies.
+	auto provider = *descriptor;
+
+	if ( base_url ) {
+		provider.endpoint = *base_url;
+	}
+
+	auto log = mcode::event_log{ };
+
+	auto dependencies = mcode::agent_loop::dependencies{ };
+	dependencies.registry = &tool_registry;
+	dependencies.client = &loop_client;
+	dependencies.log = &log;
+	dependencies.bus = &bus;
+	dependencies.budget = budget;
+	dependencies.model_name = model_name;
+	dependencies.caps = *caps;
+	dependencies.provider_name = provider_name;
+	dependencies.provider = provider;
+	dependencies.api_key = *api_key;
+	dependencies.workspace_root = space->root( ).string( );
+	dependencies.platform_name = std::string{ PLATFORM_NAME };
+
+	auto loop = mcode::agent_loop{ dependencies };
+
+	for ( auto& [ name, handler ] : sink.take( ) ) {
+		loop.register_handler( name, std::move( handler ) );
+	}
+
+	const auto outcome = loop.run( parsed->prompt );
+
+	if ( !outcome ) {
+		std::fprintf( stderr, "\nmcode: %s\n", outcome.error( ).msg.c_str( ) );
+		stream.emit_run_end( mcode::cli::exit_code_for( outcome.error( ).code ),
+			outcome.error( ).msg );
+
+		return mcode::cli::to_int( mcode::cli::exit_code_for( outcome.error( ).code ) );
+	}
+
+	auto code = mcode::cli::exit_code::success;
+
+	if ( outcome->final_state == mcode::loop_state::failed ) {
+		code = mcode::cli::exit_code::provider_error;
+	} else if ( outcome->final_state == mcode::loop_state::handoff ) {
+		// The run's reason lives in the log's final run.end payload; a handoff that
+		// the budget caused exits differently from one that merely had no gate.
+		auto budget_caused = false;
+
+		for ( const auto& logged : log.events( ) ) {
+			if ( logged.kind == "run.end" ) {
+				budget_caused = logged.payload_json.find( "budget exhausted" )
+					!= std::string::npos;
 			}
-		} );
+		}
 
-	if ( !sent ) {
-		std::fprintf( stderr, "\nmcode: %s\n", sent.error( ).msg.c_str( ) );
-		stream.emit_run_end( mcode::cli::exit_code_for( sent.error( ).code ), sent.error( ).msg );
+		if ( budget_caused ) {
+			code = mcode::cli::exit_code::budget_exhausted;
+		}
+	}
 
-		return mcode::cli::to_int( mcode::cli::exit_code_for( sent.error( ).code ) );
+	if ( parsed->verbose ) {
+		const auto usage = client.accumulated_usage( );
+		const auto cost = mcode::model::compute_cost( *caps, usage );
+
+		std::fprintf( stderr, "mcode: %d steps, %lld in, %lld out, $%.4f\n",
+			static_cast< int >( outcome->model_calls ),
+			static_cast< long long >( usage.input ), static_cast< long long >( usage.output ),
+			cost );
 	}
 
 	std::fputc( '\n', stdout );
 
-	const auto cost = mcode::model::compute_cost( *caps, client.accumulated_usage( ) );
+	auto summary = std::string{ "run ended in state " };
 
-	if ( parsed->verbose ) {
-		std::fprintf( stderr, "mcode: %lld in, %lld out, $%.4f\n",
-			static_cast< long long >( client.accumulated_usage( ).input ),
-			static_cast< long long >( client.accumulated_usage( ).output ), cost );
+	if ( outcome->final_state == mcode::loop_state::done ) {
+		summary = "completed";
+	} else {
+		summary += to_string( outcome->final_state );
 	}
 
-	stream.emit_run_end( mcode::cli::exit_code::success, "completed" );
+	stream.emit_run_end( code, summary );
 
-	return mcode::cli::to_int( mcode::cli::exit_code::success );
+	return mcode::cli::to_int( code );
 }

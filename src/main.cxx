@@ -551,18 +551,18 @@ auto main( int argument_count, char** arguments ) -> int {
 
 		check( pending == 8, "collected a handler for every core tool" );
 
-		auto ok = loop.execute( { "read", R"({"path":"README.md"})" } );
+		auto ok = loop.execute( { std::string{ }, "read", R"({"path":"README.md"})" } );
 		check( ok.ok, "dispatched the real read tool" );
 		check( ok.content.find( "Non-obvious constraints" ) != std::string::npos,
 			"read returned actual file content, not a placeholder" );
 		check( log.size( ) == 2, "logged both the call and the result" );
 
-		auto unknown = loop.execute( { "nope", "{}" } );
+		auto unknown = loop.execute( { std::string{ }, "nope", "{}" } );
 		check( !unknown.ok && unknown.code == mcode::errc::tool_failed,
 			"unknown tool returned a value-level failure" );
 
 		loop.budget( ).max_steps = loop.budget( ).steps_used;
-		auto blocked = loop.execute( { "read", "{}" } );
+		auto blocked = loop.execute( { std::string{ }, "read", "{}" } );
 		check( !blocked.ok && blocked.code == mcode::errc::budget_exhausted,
 			"budget exhaustion stops dispatch" );
 

@@ -193,6 +193,7 @@ namespace mcode {
 		-> result< replay_result >;
 
 	struct tool_call {
+		std::string id;
 		std::string name;
 		std::string args_json;
 	};
@@ -345,6 +346,7 @@ namespace mcode {
 		auto request_and_fold( model::effort effort ) -> result< bool >;
 		auto dispatch_calls( const std::vector< tool_call >& calls ) -> bool;
 		auto maybe_compact( ) -> status;
+		auto publish( events::kind type, std::string payload_json ) -> void;
 
 		tool_registry* registry_ = nullptr;
 		model::model_client* client_ = nullptr;
