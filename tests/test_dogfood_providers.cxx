@@ -187,6 +187,24 @@ TEST_CASE( "openai chat completions drives a full stream", "[dogfood]" ) {
 	REQUIRE( applier.accumulated_usage( ).cached_read == 1024 );
 }
 
+TEST_CASE( "an event arriving after the terminal is ignored", "[dogfood]" ) {
+	// Providers emit trailing events after the one that ends the stream -- a
+	// rate-limit notice, a keepalive -- and new event types appear without
+	// warning. Processing one lets a late fallthrough overwrite state that is
+	// already final: the text appends to a finished turn and the usage re-adds.
+	auto applier = model::delta_applier{ load( OPENAI_CHAT ) };
+
+	const auto events = drive( applier, {
+		{ "message", R"({"choices":[{"delta":{"content":"done"}}]})" },
+		{ "message", "[DONE]" },
+		{ "message", R"({"choices":[{"delta":{"content":" late"}}],"usage":{"prompt_tokens":99,"completion_tokens":99}})" },
+	} );
+
+	REQUIRE( text_of( events ) == "done" );
+	REQUIRE( applier.accumulated_usage( ).input == 0 );
+	REQUIRE( applier.accumulated_usage( ).output == 0 );
+}
+
 TEST_CASE( "anthropic drives text, thinking, and tool input", "[dogfood]" ) {
 	auto applier = model::delta_applier{ load( ANTHROPIC ) };
 

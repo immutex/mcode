@@ -96,6 +96,18 @@ namespace mcode::model {
 			return escape_( event_name, data );
 		}
 
+		// Everything after the terminal event is ignorable.
+		//
+		// A provider may emit a trailing event -- a rate-limit notice, a keepalive
+		// -- after the one that ended the stream, and new event types appear
+		// without warning. Processing one lets a late fallthrough overwrite state
+		// that is already final: a text delta would append to a finished turn, a
+		// usage event would re-add to the totals. The escape hatch above owns its
+		// own terminal detection, so this sits after it.
+		if ( terminal_seen_ ) {
+			return produced;
+		}
+
 		for ( const auto& terminal : descriptor_.stream.terminal_events ) {
 			if ( event_name == terminal ) {
 				terminal_seen_ = true;
