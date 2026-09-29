@@ -6,10 +6,14 @@ namespace mcode::tools {
 
 	namespace {
 
-		inline constexpr auto SHELL_METACHARS = std::array{ '|', ';', '&', '`' };
+		// Redirection and newline are command-shape, not token text: `>` writes
+		// where the file tools are forbidden, and an embedded newline is a command
+		// separator the gate would never see.
+		inline constexpr auto SHELL_METACHARS = std::array{ '|', ';', '&', '`', '<', '>', '\n', '\r' };
 
-		inline constexpr auto EXEC_RUNNERS = std::array< std::string_view, 6 >{
-			"sh", "bash", "cmd", "cmd.exe", "xargs", "powershell",
+		inline constexpr auto EXEC_RUNNERS = std::array< std::string_view, 10 >{
+			"sh", "sh.exe", "bash", "bash.exe", "cmd", "cmd.exe",
+			"xargs", "powershell", "powershell.exe", "pwsh",
 		};
 
 		[[nodiscard]] auto contains_metachar( const std::string_view token ) noexcept -> bool {
@@ -24,9 +28,12 @@ namespace mcode::tools {
 			return false;
 		}
 
+		// Both shells expand `$` and `%` forms; either in argv means the executed
+		// text differs from the judged text. Both are rare in legitimate single
+		// commands, so refusing outright is the cheap exact gate.
 		[[nodiscard]] auto is_substitution( const std::string_view token ) noexcept -> bool {
-			return token.find( "$(" ) != std::string_view::npos ||
-				token.find( "%VAR%" ) != std::string_view::npos;
+			return token.find( '$' ) != std::string_view::npos ||
+				token.find( '%' ) != std::string_view::npos;
 		}
 
 		[[nodiscard]] auto list_contains( const std::vector< std::string >& list,
@@ -51,14 +58,16 @@ namespace mcode::tools {
 			return exec_decision::deny;
 		}
 
-		if ( yolo ) {
-			return exec_decision::allow;
-		}
-
 		const auto& program = argv.front( );
 
+		// Deny is checked before allow regardless of list order; the two ifs are
+		// the precedence, not an accident of it.
 		if ( list_contains( deny_argv, program ) ) {
 			return exec_decision::deny;
+		}
+
+		if ( yolo ) {
+			return exec_decision::allow;
 		}
 
 		if ( list_contains( allow_argv, program ) ) {
@@ -131,8 +140,25 @@ namespace mcode::tools {
 	}
 
 	auto is_exec_runner( const std::string_view program ) noexcept -> bool {
+		// Normalize the spelling the gate sees to the one the OS resolves: strip
+		// any leading path (both separators), lowercase, then compare. `/bin/sh`,
+		// `C:\...\cmd.exe` and `CMD` must all land on the runner list.
+		auto name = std::string{ };
+
+		for ( const auto character : program ) {
+			if ( character == '/' || character == '\\' ) {
+				name.clear( );
+
+				continue;
+			}
+
+			name += character >= 'A' && character <= 'Z'
+				? static_cast< char >( character - 'A' + 'a' )
+				: character;
+		}
+
 		for ( const auto runner : EXEC_RUNNERS ) {
-			if ( program == runner ) {
+			if ( name == runner ) {
 				return true;
 			}
 		}

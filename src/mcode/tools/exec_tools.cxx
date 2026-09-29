@@ -177,27 +177,24 @@ namespace mcode::tools {
 				false );
 		}
 
+		// Execute the argv the policy judged, not the raw string: a shell would
+		// re-split, redirect or expand text the gate never approved. The shell
+		// itself is an explicitly denied runner, so nothing here goes through one.
 		auto options = process_options{ };
 		options.working_directory = context.space->root( ).string( );
 		options.timeout = std::chrono::milliseconds{ timeout_ms };
 		options.scrub_environment = true;
 
-#if defined( _WIN32 )
-		const auto shell_name = std::string{ "cmd.exe" };
-		options.args = { "/c", *command };
-#else
-		const auto shell_name = std::string{ "sh" };
-		options.args = { "-c", *command };
-#endif
+		const auto program_path = find_executable( tokens->front( ) );
 
-		const auto shell = find_executable( shell_name );
-
-		if ( !shell ) {
-			return error_result( "cannot resolve " + shell_name + " to run the command",
-				"the shell binary was not found on PATH; check the environment", false );
+		if ( !program_path ) {
+			return error_result( "cannot resolve " + tokens->front( ) + " on PATH",
+				"the program was approved but not found; check the spelling and that it is installed",
+				false );
 		}
 
-		options.executable = *shell;
+		options.executable = *program_path;
+		options.args.assign( tokens->begin( ) + 1, tokens->end( ) );
 
 		auto outcome = run_process( options );
 
