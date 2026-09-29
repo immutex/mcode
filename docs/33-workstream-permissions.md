@@ -3,9 +3,10 @@
 > TL;DR: The permission layer today is a gate that denies everything or allows
 > everything, and it prompts nobody. This slice makes it a real engine —
 > `allow` / `ask` / `deny`, four scopes, a terminal approval prompt, and a
-> persisted "don't ask again" store — so the agent is usable without a `--yolo`
-> flag and safe without one. **The product requirement is that the common path
-> never prompts.**
+> persisted "don't ask again" store — plus a small **hard-deny floor** that
+> survives `--yolo`, so the flag means "stop asking me" rather than "no policy".
+> **The product requirement: the common path prompts at most once per distinct
+> command, and editing files in your own repository never prompts at all.**
 
 ## Why this slice is first
 
@@ -41,7 +42,9 @@ real repository, which is why it goes first.
 - Reading `[permissions]` config (`deny`, `ask`, `allow`) and `[sandbox] approval`
 - Wiring into the loop's dispatch so **every** tool is checked, not just `exec`
 - Turning `workspace::resolve`'s hard refusal outside the workspace into a policy decision
+- The **hard-deny floor**: the handful of actions that are refused rather than asked about, and that `--yolo` does not bypass
 - `--yolo` and `--approval <never|on-request|always>`; `--add-dir` for extra roots
+- Fixing `--yolo`'s help text, which currently claims the sandbox is active
 
 **Out**
 
