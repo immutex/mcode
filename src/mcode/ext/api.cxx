@@ -499,6 +499,10 @@ namespace mcode::ext {
 			return surface_from( state )->handle_emit( state );
 		}
 
+		auto lua_mcp_register( lua_State* state ) -> int {
+			return surface_from( state )->handle_mcp_register( state );
+		}
+
 	}
 
 	auto api_surface::install( const install_request& request ) -> status {
@@ -509,6 +513,7 @@ namespace mcode::ext {
 		providers_ = &request.providers;
 		hooks_ = &request.hooks;
 		manifest_ = request.details;
+		servers_ = request.servers;
 
 		// Identity first: `mcode.ext.name` is read by tools and by the log prefix,
 		// and the definition file declares it as a field rather than a call.
@@ -536,6 +541,7 @@ namespace mcode::ext {
 			{ "log.info", lua_log_info },
 			{ "log.warn", lua_log_warn },
 			{ "log.error", lua_log_error },
+			{ "mcp.register", lua_mcp_register },
 		};
 
 		for ( const auto& entry : ENTRIES ) {

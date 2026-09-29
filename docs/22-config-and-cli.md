@@ -17,7 +17,7 @@ The never-widen rule is the defense against a cloned repo shipping a config that
 
 Two load-time rules make the merge safe:
 
-- **Unknown sections are refused.** A top-level key outside `model`, `agent`, `context`, `sandbox`, `ui`, `extensions` and `permissions` is a typo, and storing it silently means the user believes a setting took effect when it did not. Checked at section granularity; the nested keys belong to the docs that define them.
+- **Unknown sections are refused.** A top-level key outside `model`, `agent`, `context`, `sandbox`, `ui`, `extensions`, `permissions` and `mcp` is a typo, and storing it silently means the user believes a setting took effect when it did not. Checked at section granularity; the nested keys belong to the docs that define them.
 - **Project scope may only APPEND.** A project file may name `permissions.deny` or `permissions.ask` and nothing else, and only as a list. A scalar at one of those names — `permissions.deny = "everything"`, which is valid TOML — would otherwise overwrite the user's list in the merge, and every consumer reads the result through a string-array accessor that turns the type mismatch into an empty list. The user's deny rules would vanish and the blocked tool would become callable. The merge itself also refuses to let a non-list replace a list, so a future layer type inherits the rule rather than re-deriving it.
 
 ```toml
@@ -70,9 +70,22 @@ enabled = false
 enabled = true
 config = { default_remote = "origin" }
 
-[telemetry]
-enabled = false                    # never phones home; see "Telemetry" below
+[mcp.servers.filesystem]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allow"]
+enabled = true                    # a new server is DISABLED until this is written
 ```
+
+**`[mcp]` declares MCP servers** (`07`). Each `[mcp.servers.<name>]` table is one
+server: `command` is the argv to spawn (program first, then `args`, joined into
+one list — never a shell string), `transport` defaults to the only shipped one
+(`stdio`), and `enabled` defaults to **false**. A missing or empty `command` is a
+load error, not a defaulted launch. A server whose tool schemas estimate above
+8K tokens is warned about with the measured cost when its tools are listed, so
+the context spend is visible before it happens. Extensions can declare servers
+too, through `mcode.mcp.register` (`18`); both routes produce the same
+declaration, and neither bypasses consent — the launch command is approved
+explicitly the first time it runs regardless of who wrote it down.
 
 Precedence for instruction files (`08`) and permissions (`12`) is defined in those docs; this table defines precedence for *config*. They use the same four scopes so a user reasons about one model.
 

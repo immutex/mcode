@@ -12,6 +12,7 @@
 #include "mcode/ext/hooks.hxx"
 #include "mcode/ext/manifest.hxx"
 #include "mcode/model/provider.hxx"
+#include "mcode/ext/api_mcp.hxx"
 
 namespace mcode::ext {
 
@@ -59,6 +60,11 @@ namespace mcode::ext {
 			model::provider_registry& providers;
 			hook_registry& hooks;
 			const manifest& details;
+
+			// Where `mcode.mcp.register` puts a declared server. Null when the
+			// host built no store; the entry then reports so rather than dropping
+			// the declaration.
+			mcp_server_store* servers = nullptr;
 		};
 
 		auto install( const install_request& request ) -> status;
@@ -101,6 +107,12 @@ namespace mcode::ext {
 		auto handle_on( lua_State* state ) -> int;
 		auto handle_off( lua_State* state ) -> int;
 		auto handle_emit( lua_State* state ) -> int;
+		auto handle_mcp_register( lua_State* state ) -> int;
+
+		// The store extension-declared servers land in. Null before install.
+		[[nodiscard]] auto installed_servers( ) const noexcept -> mcp_server_store* {
+			return servers_;
+		}
 
 	private:
 
@@ -108,6 +120,10 @@ namespace mcode::ext {
 		tool_registry* registry_ = nullptr;
 		model::provider_registry* providers_ = nullptr;
 		hook_registry* hooks_ = nullptr;
+
+		// Borrowed, not owned: the host process owns the store, and every loaded
+		// surface writes declared servers into it.
+		mcp_server_store* servers_ = nullptr;
 
 		// A COPY, not a pointer. The loader builds a manifest per candidate and
 		// destroys it at the end of the iteration, so a pointer here dangles the

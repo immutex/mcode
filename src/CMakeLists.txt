@@ -14,6 +14,7 @@ add_library(mcode_core STATIC
     mcode/support/toml.cxx
     mcode/support/toml_access.cxx
     mcode/support/config.cxx
+    mcode/support/mcp_config.cxx
     mcode/support/time.cxx
     mcode/support/parse.cxx
 
@@ -40,6 +41,8 @@ add_library(mcode_core STATIC
 
     mcode/ext/api.cxx
     mcode/ext/api_invoke.cxx
+    mcode/ext/api_mcp.cxx
+    mcode/ext/api_mcp_store.cxx
     mcode/ext/loader.cxx
     mcode/ext/lua_json.cxx
     mcode/ext/manifest.cxx

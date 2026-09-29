@@ -183,8 +183,13 @@ declare mcode: {
 	},
 
 	mcp: {
-		-- Declares an MCP server. Requires the `mcp` permission.
-		-- Its tools land in the registry as `mcp__<server>__<tool>`.
+		-- Declares an MCP server. Requires the `mcp` permission; without it the
+		-- call returns `nil, err` rather than raising.
+		--
+		-- The declaration does not bypass consent: the server is DISABLED until
+		-- the user enables it, and its launch command requires explicit approval
+		-- the first time it runs. Its tools land in the registry as
+		-- `mcp__<server>__<tool>`.
 		register: (definition: {
 			name: string,
 			transport: string,
