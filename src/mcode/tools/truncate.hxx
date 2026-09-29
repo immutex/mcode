@@ -9,8 +9,7 @@
 
 namespace mcode::tools {
 
-	// Inline cap for a tool result, ~2K tokens at ~4 chars/token (docs/05 owns the
-	// number).
+	// Inline cap for a tool result: ~2K tokens at ~4 chars/token.
 	inline constexpr std::size_t INLINE_RESULT_CHARS = 8u * 1024u;
 
 	// Absolute hard cap. Beyond this even the preview is cut, with a resume hint
