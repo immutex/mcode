@@ -84,18 +84,21 @@ namespace mcode::perm {
 			return lower_ascii( base );
 		}
 
-		// True when the token names a filesystem root or the user's home. The
-		// canonical form is what makes `rm -rf /`, `rm -rf //` and `rm -rf /./`
-		// one command; the tilde and $HOME spellings resolve to the same
-		// directory and are caught by the same comparison.
-		[[nodiscard]] auto is_root_or_home( const std::filesystem::path& target,
-			const std::filesystem::path& home ) -> bool {
-			if ( home.empty( ) ) {
-				return false;
-			}
+		// True when the token names a filesystem root. Unconditional: it must not
+		// depend on the home directory being resolvable, or `rm -rf /` stops
+		// firing the floor on a machine with no HOME set -- and then `--yolo`
+		// turns the resulting `ask` into an allow.
+		[[nodiscard]] auto is_filesystem_root( const std::filesystem::path& target ) -> bool {
+			return target == target.root_path( );
+		}
 
-			return target == home || target == home.root_path( ) ||
-				target == target.root_path( );
+		// True when the token names the user's home directory. The canonical form
+		// is what makes `rm -rf /`, `rm -rf //` and `rm -rf /./` one command; the
+		// tilde spelling resolves to the same directory and is caught by the same
+		// comparison.
+		[[nodiscard]] auto is_home_directory( const std::filesystem::path& target,
+			const std::filesystem::path& home ) -> bool {
+			return !home.empty( ) && ( target == home || target == home.root_path( ) );
 		}
 
 		// Resolves an argv token to a canonical path. Relative tokens resolve
@@ -210,8 +213,12 @@ namespace mcode::perm {
 					continue;
 				}
 
-				if ( is_root_or_home( *resolved, home ) ) {
-					return "recursive delete of a filesystem root or the home directory";
+				if ( is_filesystem_root( *resolved ) ) {
+					return "recursive delete of a filesystem root";
+				}
+
+				if ( is_home_directory( *resolved, home ) ) {
+					return "recursive delete of the home directory";
 				}
 			}
 
@@ -281,6 +288,69 @@ namespace mcode::perm {
 			}
 
 			return std::nullopt;
+		}
+
+		// Which store section a request belongs to, and the key within it. One
+		// function for both the write and the read: when the two disagreed, a
+		// remembered answer was written to a section nothing ever looked in.
+		//
+		// Exec keys on the canonical argv, never a prefix -- a remembered
+		// `git push` must not authorize `git push --force`. Everything else
+		// keys on the tool name, because its resource is an opaque argument
+		// blob rather than a stable identity.
+		enum class store_section { exec, paths, tools };
+
+		struct store_key {
+			store_section section = store_section::tools;
+			std::string key;
+		};
+
+		[[nodiscard]] auto store_key_for( const permission_request& request )
+			-> std::optional< store_key > {
+			if ( request.resource.empty( ) && request.klass == tool_class::exec ) {
+				// An unparsable command has no canonical form to remember.
+				return std::nullopt;
+			}
+
+			if ( request.klass == tool_class::exec ) {
+				return store_key{ store_section::exec, request.resource };
+			}
+
+			if ( request.klass == tool_class::read || request.klass == tool_class::write ) {
+				// The user's own `paths` entries are hand-written globs; we
+				// never auto-persist one, so there is nothing to key here.
+				return std::nullopt;
+			}
+
+			if ( request.tool_name.empty( ) ) {
+				return std::nullopt;
+			}
+
+			return store_key{ store_section::tools, request.tool_name };
+		}
+
+		using store_map = std::map< std::string, store_decision, std::less<> >;
+
+		[[nodiscard]] auto section_of( store_layer& layer, const store_section section )
+			-> store_map& {
+			switch ( section ) {
+				case store_section::exec: return layer.exec;
+				case store_section::paths: return layer.paths;
+				case store_section::tools: return layer.tools;
+			}
+
+			return layer.tools;
+		}
+
+		[[nodiscard]] auto section_of( const store_layer& layer, const store_section section )
+			-> const store_map& {
+			switch ( section ) {
+				case store_section::exec: return layer.exec;
+				case store_section::paths: return layer.paths;
+				case store_section::tools: return layer.tools;
+			}
+
+			return layer.tools;
 		}
 
 	}
@@ -387,47 +457,37 @@ namespace mcode::perm {
 				candidate = space_->root( ) / candidate;
 			}
 
-			auto canonical = platform::canonicalize( candidate );
+			const auto canonical = platform::canonicalize( candidate );
 
-			if ( canonical && !space_->is_protected( *canonical ) ) {
+			// A path that cannot be canonicalized cannot be shown to be outside
+			// the protected set, so it is refused. Falling through here would
+			// let an unresolvable path skip the floor entirely.
+			if ( !canonical ) {
+				return "write to an unresolvable path";
+			}
+
+			if ( !space_->is_protected( *canonical ) ) {
 				return std::nullopt;
 			}
 
-			if ( canonical ) {
-				return "write to protected harness internals";
-			}
+			return "write to protected harness internals";
 		}
 
 		if ( request.klass != tool_class::exec ) {
 			return std::nullopt;
 		}
 
-		// The argv is pre-parsed by the caller; an unparsable or compound
-		// command never reaches the floor, it is an `ask` by the default set.
-		const auto argv_text = request.resource;
-		auto argv = std::vector< std::string >{ };
-		auto current = std::string{ };
+		// The caller hands us the canonical argv as one string. Re-parsing with
+		// the same parser the tool layer used is what keeps a quoted token
+		// containing a space intact -- splitting on ' ' would turn one token
+		// into two and resolve a path that was never named.
+		const auto parsed = parse_command_line( request.resource );
 
-		for ( const auto character : argv_text ) {
-			if ( character == ' ' ) {
-				if ( !current.empty( ) ) {
-					argv.push_back( std::move( current ) );
-					current.clear( );
-				}
-
-				continue;
-			}
-
-			current += character;
-		}
-
-		if ( !current.empty( ) ) {
-			argv.push_back( std::move( current ) );
-		}
-
-		if ( argv.empty( ) ) {
+		if ( !parsed || parsed->empty( ) ) {
 			return std::nullopt;
 		}
+
+		const auto& argv = *parsed;
 
 		if ( const auto hit = floor_privilege_escalation( argv ) ) {
 			return hit;
@@ -618,27 +678,24 @@ namespace mcode::perm {
 				}
 			}
 
-			// The store's entries join the evaluation as remembered answers:
-			// exact exec argv, canonical path globs, or tool names. The store
-			// holds no ask entries, so only deny and allow participate.
+			// The store's entries join the evaluation as remembered answers.
+			// The key comes from the same function that wrote them, so a
+			// remembered answer is found by the same identity that stored it.
+			// The store holds no ask entries, so only deny and allow participate.
 			if ( decision != permission_decision::ask ) {
-				const auto* entries = &stored_.tools;
-
-				if ( request.klass == tool_class::exec ) {
-					entries = &stored_.exec;
-				} else if ( request.klass == tool_class::read ||
-					request.klass == tool_class::write ) {
-					entries = &stored_.paths;
-				}
+				const auto key = store_key_for( request );
 
 				const auto wanted = decision == permission_decision::deny
 					? store_decision::deny
 					: store_decision::allow;
 
-				const auto found = entries->find( request.resource );
+				if ( key ) {
+					const auto& entries = section_of( stored_, key->section );
+					const auto found = entries.find( key->key );
 
-				if ( found != entries->end( ) && found->second == wanted ) {
-					return rule_match{ "store", request.resource, decision };
+					if ( found != entries.end( ) && found->second == wanted ) {
+						return rule_match{ "store", key->key, decision };
+					}
 				}
 			}
 		}
@@ -755,35 +812,39 @@ namespace mcode::perm {
 				return permission_decision::allow;
 
 			case approval_outcome::allow_remember: {
-				// Persist the canonical argv, never a prefix. A remembered
-				// `git push` must not authorize `git push --force`. Writes
-				// outside the workspace are never auto-persisted, so only exec
-				// argv reaches the store here.
-				if ( store_ != nullptr && request.klass == tool_class::exec ) {
+				// Persist the canonical key, never a prefix. A remembered
+				// `git push` must not authorize `git push --force`. A write
+				// outside the workspace is never auto-persisted (`12`), and
+				// `store_key_for` returns nothing for it.
+				const auto key = store_key_for( request );
+
+				if ( store_ != nullptr && key ) {
 					auto additions = store_layer{ };
-					additions.exec.insert_or_assign( request.resource,
+					section_of( additions, key->section ).insert_or_assign( key->key,
 						store_decision::allow );
 
-					if ( const auto saved = store_->save( additions ); !saved ) {
+					const auto saved = store_->save( additions );
+
+					// The in-memory layer must reflect the answer either way, or
+					// the second identical call in the same session prompts
+					// again -- the failure the remember store exists to prevent.
+					section_of( stored_, key->section ).insert_or_assign( key->key,
+						store_decision::allow );
+
+					if ( !saved ) {
 						// A failed save is not a failed approval: the session
-						// rule below still applies, and the warning is visible
-						// in the verdict.
+						// rule below still applies, and the reason is visible in
+						// the verdict.
 						last_verdict_ = { permission_decision::allow,
 							{ "prompt", matched.pattern, permission_decision::allow },
 							"allowed for the session; the store write failed: " +
 								saved.error( ).msg };
 
-						session_rules_.push_back( rule{ request.klass, request.resource,
+						session_rules_.push_back( rule{ request.klass, key->key,
 							permission_decision::allow } );
 
 						return permission_decision::allow;
 					}
-
-					// The in-memory layer must reflect the save, or the second
-					// identical argv in the same session prompts again -- which
-					// is the failure the remember store exists to prevent.
-					stored_.exec.insert_or_assign( request.resource,
-						store_decision::allow );
 				}
 
 				last_verdict_ = { permission_decision::allow,
