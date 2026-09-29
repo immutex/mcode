@@ -84,6 +84,7 @@ mcode.model.register({
                    args  = "/choices/0/delta/tool_calls/0/function/arguments" },
     finish     = "/choices/0/finish_reason",
     usage      = { in = "/usage/prompt_tokens", out = "/usage/completion_tokens" },
+    error      = { message = "/error/message", code = "/error/code" },
   },
 })
 ```
@@ -102,6 +103,16 @@ So two optional descriptor fields gate the pointers by event name:
 | `tool_call_events` | `tool_calls.*` | every event |
 
 Empty is "every event", which is correct for a format that encodes meaning in the payload alone. A format that encodes it in the name declares the names.
+
+### Mid-stream failures (added in integration)
+
+A provider reports a failure as an ordinary stream event, not an HTTP status: an overloaded backend, a content filter, a quota that ran out after tokens were already delivered. Without a mapping the provider's message is discarded and the turn ends as an unexplained truncation, so the descriptor carries an `error` block. `error` is an object with `message` and optional `code`, following the same nested convention as `usage` and `tool_calls`. A match is terminal and is checked before the text and tool-call pointers.
+
+The applier's failure is a protocol error carrying the provider's own text. Whether it is retryable is the retry taxonomy's decision, not the applier's — but the stream has already reached the sink by then, so it is never retried.
+
+### Events after the terminal (added in integration)
+
+Once a terminal event or the `[DONE]` sentinel has been seen, every later event is ignored. Providers emit trailing events — a rate-limit notice, a keepalive — and add new event types without warning, so a fallthrough would otherwise overwrite state that is already final: a late text delta appended to a finished turn, a late usage event re-added to the totals. Observed as `"done late"` from a turn that had already ended. The escape hatch owns its own terminal detection and is not subject to this check.
 
 ### Bounds on wire-supplied values
 

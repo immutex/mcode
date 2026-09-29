@@ -241,6 +241,14 @@ place the quota distinction lives.
   handles `[DONE]`; check what it does before adding a second guard.
 - The `[DONE]` sentinel and declared `terminal_events` both set `terminal_seen_`
   in the applier. Read `delta_applier.cxx` before adding a third path.
+- **Once `terminal_seen_` is set, `feed` returns empty for every later event.**
+  Providers emit trailing events and add new types without warning; a fallthrough
+  overwrites state that is already final. The escape hatch is exempt — it owns
+  its own terminal detection.
+- A provider error arrives as an ordinary event, not an HTTP status. It is
+  mapped through the descriptor's `error` block and returned as a protocol
+  failure carrying the provider's own message. It is not retried: tokens already
+  reached the sink.
 
 ### T5 — Retry and error taxonomy
 
