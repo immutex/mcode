@@ -1,5 +1,11 @@
 # First Batch — Gate Decisions and the Measurement Spine
 
+> **Status: shipped, and no longer the current plan.** This document is kept as
+> the record of what the first batch decided and measured. The current work
+> plan is `32-second-batch.md`; the parallel briefs are `33`–`35`. Read this one
+> for the measurement spine and the integration findings it accumulated, not
+> for what to build next.
+
 > TL;DR: The first batch is not M0 features. It is the four decisions that are expensive to reverse (extension VM, sandbox boundary, extension ABI, provider seam) plus the measurement spine that judges them. Everything else in `16` waits on these, because the VM choice is a build-time decision and the ABI is a forever commitment.
 
 ## Why this batch, and why now

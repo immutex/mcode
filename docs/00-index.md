@@ -71,11 +71,21 @@ is a self-contained brief for one agent; none depends on another's code.
 31. `30-workstream-turn-loop.md` — the state machine, context assembly, compaction.
 32. `31-workstream-core-tools.md` — the eight core tools, schemas, truncation, approval policy.
 
+**Second batch** — the three plans that make the agent usable on a real
+repository. Superseded the first batch's plans; read `32` first.
+
+33. `32-second-batch.md` — **the current work plan**: permissions, skills, MCP, and Phase 0.
+34. `33-workstream-permissions.md` — the permission engine, approvals, and the remember store.
+35. `34-workstream-skills.md` — skills, the `AGENTS.md` instruction chain, prompt sections 10–11.
+36. `35-workstream-mcp.md` — the stdio MCP client, tool registration, supervision.
+
 **If you only read three:** `01`, `03`, `21`.
 
-> **Before starting any work, read `26-first-batch.md`.** It supersedes `16`'s
-> ordering for the first batch. For one of the three parallel workstreams, read
-> its plan in `29`–`31` instead: those are the briefs for this batch.
+> **Before starting any work, read `32-second-batch.md`.** It supersedes `26`'s
+> ordering, and `16`'s for this batch. For one of the three parallel
+> workstreams, read its plan in `33`–`35` instead: those are the briefs for this
+> batch. `26-first-batch.md` remains the record of what shipped and the
+> measurement spine it established.
 
 ## Decisions at a glance
 
