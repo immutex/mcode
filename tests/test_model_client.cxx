@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <string>
 #include <thread>
@@ -70,11 +72,18 @@ namespace {
 		}
 
 		~scripted_server( ) {
+			stopped_ = true;
+
+			// A blocked accept() never notices the flag, so the listening socket
+			// is shut down first: a correct client that made fewer requests than
+			// scripted must not hang the test, and a client that made MORE must
+			// still terminate once the script is exhausted.
+			shutdown_socket( socket_ );
+			close_socket( socket_ );
+
 			if ( worker_.joinable( ) ) {
 				worker_.join( );
 			}
-
-			close_socket( socket_ );
 
 		#if defined( _WIN32 )
 			::WSACleanup( );
@@ -99,8 +108,22 @@ namespace {
 		#endif
 	}
 
+		static auto shutdown_socket( const socket_handle handle ) -> void {
+		#if defined( _WIN32 )
+			::shutdown( handle, SD_BOTH );
+		#else
+			::shutdown( handle, SHUT_RDWR );
+		#endif
+	}
+
+		// Serves one scripted response per accepted connection. The loop is
+		// driven by the stop flag, not the response count: the test's point is
+		// often that the client makes FEWER requests than scripted, and a loop
+		// over the script would block in accept() forever exactly when the
+		// implementation is correct. A client that makes more requests than
+		// scripted gets the last response repeated, so it still terminates.
 		auto serve( ) -> void {
-			for ( const auto& response : responses_ ) {
+			while ( !stopped_ ) {
 				const auto accepted = ::accept( socket_, nullptr, nullptr );
 
 				if ( accepted == INVALID_HANDLE ) {
@@ -109,11 +132,17 @@ namespace {
 
 				auto scratch = std::array< char, 8192 >{ };
 				::recv( accepted, scratch.data( ), static_cast< int >( scratch.size( ) ), 0 );
+
+				const auto index = std::min( requests_, responses_.size( ) - 1 );
+				const auto& response = responses_[ index ];
 				++requests_;
 
 				::send( accepted, response.data( ), static_cast< int >( response.size( ) ), 0 );
 
-				std::this_thread::sleep_for( std::chrono::milliseconds( 30 ) );
+				// Long enough for the client to drain both events of a multi-event
+				// response before the socket goes away; too short and the tail of
+				// the stream is lost to the reset.
+				std::this_thread::sleep_for( std::chrono::milliseconds( 200 ) );
 				close_socket( accepted );
 			}
 		}
@@ -123,6 +152,7 @@ namespace {
 		std::uint16_t port_ = 0;
 		std::size_t requests_ = 0;
 		std::thread worker_;
+		std::atomic< bool > stopped_{ false };
 	};
 
 	auto sse_response( const int status, const std::string& body ) -> std::string {
@@ -143,6 +173,7 @@ namespace {
 		descriptor.name = "openai-chat-completions";
 		descriptor.endpoint = endpoint;
 		descriptor.auth.from = model::auth_spec::source::none;
+		descriptor.stream.text_delta = "/choices/0/delta/content";
 
 		return descriptor;
 	}
@@ -206,7 +237,11 @@ TEST_CASE( "credentials resolve per source", "[credentials]" ) {
 	REQUIRE( static_cast< bool >( found ) );
 	REQUIRE( *found == "secret" );
 
-	auto missing_config = model::resolve_api_key( model::auth_spec{ }, from_config );
+	auto missing_config_auth = model::auth_spec{ };
+	missing_config_auth.from = model::auth_spec::source::config;
+	missing_config_auth.name = "absent.key";
+
+	auto missing_config = model::resolve_api_key( missing_config_auth, from_config );
 	REQUIRE_FALSE( static_cast< bool >( missing_config ) );
 
 	auto none_auth = model::auth_spec{ };
@@ -217,6 +252,7 @@ TEST_CASE( "credentials resolve per source", "[credentials]" ) {
 
 TEST_CASE( "the auth header carries the scheme, or the bare key without one", "[credentials]" ) {
 	auto bearer = model::auth_spec{ };
+	bearer.from = model::auth_spec::source::environment;
 	bearer.scheme = "Bearer";
 
 	auto value = model::auth_header_value( bearer, "key123" );
@@ -224,7 +260,8 @@ TEST_CASE( "the auth header carries the scheme, or the bare key without one", "[
 	REQUIRE( *value == "Bearer key123" );
 
 	auto bare = model::auth_spec{ };
-	bearer.scheme = "";
+	bare.from = model::auth_spec::source::environment;
+	bare.scheme = "";
 
 	auto raw = model::auth_header_value( bare, "key123" );
 	REQUIRE( static_cast< bool >( raw ) );
@@ -343,11 +380,13 @@ TEST_CASE( "a quota 429 is never retried but a rate-limit 429 is", "[retry]" ) {
 }
 
 TEST_CASE( "a partial stream is never retried", "[retry]" ) {
-	// Two events, then the connection drops with no terminal event. The sink
-	// has already seen text, so replaying would duplicate it in history.
+	// Two events in one response, then the connection drops with no terminal
+	// event. The sink has already seen text, so replaying would duplicate it
+	// in history.
 	auto server = scripted_server{ {
-		sse_response( 200, "data: {\"choices\":[{\"delta\":{\"content\":\"partial \"}}]}\n\n" ),
-		sse_response( 200, "data: {\"choices\":[{\"delta\":{\"content\":\"text\"}}]}\n\n" ),
+		sse_response( 200,
+			"data: {\"choices\":[{\"delta\":{\"content\":\"partial \"}}]}\n\n"
+			"data: {\"choices\":[{\"delta\":{\"content\":\"text\"}}]}\n\n" ),
 	} };
 
 	auto transport = net::http_client{ };

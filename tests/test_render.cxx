@@ -168,7 +168,8 @@ TEST_CASE( "render_request renders roles through the descriptor", "[render]" ) {
 	const auto body = model::render_chat_completions( request, descriptor.request );
 
 	REQUIRE( static_cast< bool >( body ) );
-	REQUIRE( body->find( R"("tool_calls":[{"id":"call_1")" ) != std::string::npos );
+	REQUIRE( body->find( R"("tool_calls":[{"function":{"arguments":"{\"path\":\"a.txt\"}","name":"read"},"id":"call_1")" )
+		!= std::string::npos );
 	REQUIRE( body->find( R"("role":"tool","tool_call_id":"call_1")" ) != std::string::npos );
 }
 
@@ -187,12 +188,12 @@ TEST_CASE( "breakpoints apply right-to-left", "[render]" ) {
 
 	// Two breakpoints at distinct offsets, ordered so a left-to-right pass
 	// corrupts the second one. Both offsets sit where a marker is valid JSON:
-	// right after the opening brace, and right after the comma that closes the
-	// first message object -- the marker's own trailing comma provides the
-	// next separator.
+	// right after the opening brace of the first message object, and right
+	// after the opening brace of the second — the marker's trailing comma
+	// provides the separator before the object's next member.
 	const auto marker_text = std::string{ "\"cache_control\":{\"type\":\"ephemeral\"}," };
-	const auto first_offset = std::size_t{ 1 };
-	const auto second_offset = plain->find( "}," ) + 2;
+	const auto first_offset = plain->find( "[{" ) + 2;
+	const auto second_offset = plain->find( "},{", first_offset ) + 3;
 
 	REQUIRE( second_offset != std::string::npos );
 	REQUIRE( second_offset > first_offset );
