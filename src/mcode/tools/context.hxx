@@ -50,8 +50,11 @@ namespace mcode::tools {
 	public:
 		using handler = std::function< result< std::string >( std::string_view args_json ) >;
 
-		auto add_handler( std::string name, handler handler ) -> void override {
-			handlers_.push_back( { std::move( name ), std::move( handler ) } );
+		// The parameter is `value`, not `handler`: a parameter named after the
+		// alias it carries is rejected by GCC as shadowing a member (-Wshadow),
+		// and clang does not implement that warning, so the local gate missed it.
+		auto add_handler( std::string name, handler value ) -> void override {
+			handlers_.push_back( { std::move( name ), std::move( value ) } );
 		}
 
 		[[nodiscard]] auto take( ) -> std::vector< std::pair< std::string, handler > > {

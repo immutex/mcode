@@ -26,6 +26,16 @@ using namespace mcode::tools;
 
 using namespace tools_test;
 
+// A command that runs, finds nothing, and exits 1. `missing.txt` does not work
+// for this: POSIX grep exits 2 when a file cannot be opened -- an error, not an
+// absence of matches -- so the file has to exist and be empty. Only the Windows
+// branch was ever executed, which is how the wrong exit code went unnoticed.
+#if defined( _WIN32 )
+inline constexpr auto NO_MATCH_COMMAND = R"({"command":"findstr x missing.txt"})";
+#else
+inline constexpr auto NO_MATCH_COMMAND = R"({"command":"grep x /dev/null"})";
+#endif
+
 TEST_CASE( "every core schema parses, validates and fits the budget", "[tools][schemas]" ) {
 	auto registry = tool_registry{ };
 	auto sink = stub_sink{ };
@@ -303,13 +313,7 @@ TEST_CASE( "grep reports a bad regex actionably", "[tools][grep]" ) {
 TEST_CASE( "bash denies exec by default and allows with an argv pattern", "[tools][bash]" ) {
 	auto setup = fixture{ };
 
-	const auto denied = run_tool( handle_bash,
-#if defined( _WIN32 )
-		R"({"command":"findstr x missing.txt"})"
-#else
-		R"({"command":"grep x missing.txt"})"
-#endif
-		, setup );
+	const auto denied = run_tool( handle_bash, NO_MATCH_COMMAND, setup );
 	CHECK( is_error_json( denied ) );
 	CHECK( denied.find( "denied by the approval policy" ) != std::string::npos );
 
@@ -321,13 +325,7 @@ TEST_CASE( "bash denies exec by default and allows with an argv pattern", "[tool
 #endif
 	);
 
-	const auto allowed = run_tool( handle_bash,
-#if defined( _WIN32 )
-		R"({"command":"findstr x missing.txt"})"
-#else
-		R"({"command":"grep x missing.txt"})"
-#endif
-		, setup );
+	const auto allowed = run_tool( handle_bash, NO_MATCH_COMMAND, setup );
 	CHECK( allowed.find( "\"ok\":true" ) != std::string::npos );
 	CHECK( allowed.find( "\"exit_code\":1" ) != std::string::npos );
 }
@@ -524,13 +522,7 @@ TEST_CASE( "bash executes the parsed argv, not the raw string", "[tools][bash]" 
 	auto setup = fixture{ };
 	setup.policy.yolo = true;
 
-	const auto out = run_tool( handle_bash,
-#if defined( _WIN32 )
-		R"({"command":"findstr x missing.txt"})"
-#else
-		R"({"command":"grep x missing.txt"})"
-#endif
-		, setup );
+	const auto out = run_tool( handle_bash, NO_MATCH_COMMAND, setup );
 	CHECK( out.find( "\"ok\":true" ) != std::string::npos );
 	CHECK( out.find( "\"exit_code\":1" ) != std::string::npos );
 }

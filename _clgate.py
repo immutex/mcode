@@ -205,7 +205,13 @@ def check_shadowed_member_types( files: list[ pathlib.Path ] ) -> list[ str ]:
 
     for path in files:
         text = path.read_text(encoding="utf-8", errors="replace")
+
+        # Nested types AND aliases. A `using handler = std::function<...>` shadows
+        # exactly like a nested struct does, and covering only struct/class/enum
+        # let a fourth instance through to CI.
         nested = set(re.findall(r"^\t+(?:struct|class|enum class)\s+([a-z_][a-z0-9_]*)\s*\{", text, re.M))
+        nested |= set(re.findall(r"^\s+using\s+([a-z_][a-z0-9_]*)\s*=", text, re.M))
+        nested |= set(re.findall(r"^\s+typedef\s+[^;]*?\b([a-z_][a-z0-9_]*)\s*;", text, re.M))
 
         if not nested:
             continue
