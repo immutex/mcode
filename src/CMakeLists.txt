@@ -49,6 +49,7 @@ add_library(mcode_core STATIC
 
     mcode/ext/api.cxx
     mcode/ext/api_invoke.cxx
+    mcode/ext/api_internal.cxx
     mcode/ext/api_skill.cxx
     mcode/ext/api_mcp.cxx
     mcode/ext/api_mcp_store.cxx

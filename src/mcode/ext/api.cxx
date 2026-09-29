@@ -1,4 +1,5 @@
 #include "mcode/ext/api.hxx"
+#include "mcode/ext/api_internal.hxx"
 
 #include <cstdio>
 #include <string>
@@ -54,37 +55,7 @@ namespace mcode::ext {
 		// Returns the api_surface bound as the closure's upvalue. Every raw entry
 		// point needs it, and a missing upvalue is a host bug rather than an
 		// extension error -- reported as an error rather than dereferenced.
-		auto surface_from( lua_State* state ) -> api_surface* {
-			auto* surface = static_cast< api_surface* >(
-				lua_touserdata( state, lua_upvalueindex( 1 ) ) );
 
-			if ( surface == nullptr ) {
-				lua_pushliteral( state, "host API is not bound" );
-				lua_error( state );
-			}
-
-			return surface;
-		}
-
-		auto read_field_string( lua_State* state, const int table, const char* key )
-			-> std::string {
-			lua_getfield( state, table, key );
-
-			auto value = std::string{ };
-
-			if ( lua_type( state, -1 ) == LUA_TSTRING ) {
-				auto length = std::size_t{ 0 };
-				const auto* text = lua_tolstring( state, -1, &length );
-
-				if ( text != nullptr ) {
-					value.assign( text, length );
-				}
-			}
-
-			lua_pop( state, 1 );
-
-			return value;
-		}
 
 	}
 

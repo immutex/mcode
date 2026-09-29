@@ -37,7 +37,6 @@ namespace mcode {
 	event_log::event_log( event_log&& other ) noexcept
 		: events_( std::move( other.events_ ) )
 		, next_sequence_( other.next_sequence_ )
-		, branch_id_( std::move( other.branch_id_ ) )
 		, sink_( std::move( other.sink_ ) )
 		, path_( std::move( other.path_ ) )
 		, write_failures_( other.write_failures_ ) {
@@ -53,7 +52,6 @@ namespace mcode {
 
 		events_ = std::move( other.events_ );
 		next_sequence_ = other.next_sequence_;
-		branch_id_ = std::move( other.branch_id_ );
 		sink_ = std::move( other.sink_ );
 		path_ = std::move( other.path_ );
 		write_failures_ = other.write_failures_;

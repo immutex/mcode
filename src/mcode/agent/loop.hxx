@@ -161,20 +161,17 @@ namespace mcode {
 		[[nodiscard]] auto size( ) const noexcept -> std::size_t { return events_.size( ); }
 		[[nodiscard]] auto empty( ) const noexcept -> bool { return events_.empty( ); }
 
-		[[nodiscard]] auto branch_id( ) const noexcept -> const std::string& { return branch_id_; }
 
 		// The next sequence number this log will assign. Used when reopening an
 		// existing file so a resumed session continues numbering.
 		[[nodiscard]] auto next_sequence( ) const noexcept -> std::uint64_t { return next_sequence_; }
 
-		auto set_branch_id( const std::string id ) -> void { branch_id_ = std::move( id ); }
 
 		[[nodiscard]] auto to_jsonl( ) const -> std::string;
 
 	private:
 		std::vector< event > events_;
 		std::uint64_t next_sequence_ = 0;
-		std::string branch_id_;
 
 		std::unique_ptr< std::FILE, void ( * )( std::FILE* ) > sink_{ nullptr, nullptr };
 		std::filesystem::path path_;
@@ -252,12 +249,6 @@ namespace mcode {
 	// One assembled request, recorded for tests.
 	struct assembled_request {
 		model::chat_request request;
-
-		// Byte offset where the frozen prefix (tools + system) ends.
-		std::size_t prefix_bytes = 0;
-
-		// The near-budget note, present in the volatile tail only.
-		bool near_budget_note = false;
 	};
 
 	// Inputs to assemble_request. A struct rather than eight positional

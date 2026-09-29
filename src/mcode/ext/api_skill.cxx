@@ -1,4 +1,5 @@
 #include "mcode/ext/api.hxx"
+#include "mcode/ext/api_internal.hxx"
 
 #include <algorithm>
 
@@ -8,20 +9,6 @@ namespace mcode::ext {
 
 	namespace {
 
-		// Same retrieval as api.cxx's helper: the upvalue is the owner surface.
-		// Duplicated because the original lives in that file's anonymous
-		// namespace and the closure contract is one lightuserdata at index 1.
-		auto surface_from( lua_State* state ) -> api_surface* {
-			auto* surface = static_cast< api_surface* >(
-				lua_touserdata( state, lua_upvalueindex( 1 ) ) );
-
-			if ( surface == nullptr ) {
-				lua_pushliteral( state, "host API is not bound" );
-				lua_error( state );
-			}
-
-			return surface;
-		}
 
 		// The discovered entries. A null pointer means discovery never ran --
 		// tests, or a host built without the skills subsystem -- and the honest

@@ -96,10 +96,7 @@ namespace mcode {
 			note.blocks.push_back( std::move( note_block ) );
 
 			out.request.messages.push_back( std::move( note ) );
-			out.near_budget_note = true;
 		}
-
-		out.prefix_bytes = out.request.messages.size( ) > 0 ? 1 : 0;
 
 		return out;
 	}
