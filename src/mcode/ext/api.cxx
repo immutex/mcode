@@ -505,6 +505,8 @@ namespace mcode::ext {
 
 		auto lua_skill_list( lua_State* state ) -> int {
 			return surface_from( state )->handle_skill_list( state );
+		}
+
 		auto lua_mcp_register( lua_State* state ) -> int {
 			return surface_from( state )->handle_mcp_register( state );
 		}

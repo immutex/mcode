@@ -8,12 +8,12 @@
 
 #include "mcode/core/error.hxx"
 #include "mcode/core/registry.hxx"
-#include "mcode/ext/lua_host.hxx"
+#include "mcode/ext/api_mcp.hxx"
 #include "mcode/ext/hooks.hxx"
+#include "mcode/ext/lua_host.hxx"
 #include "mcode/ext/manifest.hxx"
 #include "mcode/model/provider.hxx"
 #include "mcode/skills/discovery.hxx"
-#include "mcode/ext/api_mcp.hxx"
 
 namespace mcode::ext {
 
@@ -119,6 +119,8 @@ namespace mcode::ext {
 		[[nodiscard]] auto installed_skills( ) const noexcept
 			-> const mcode::skills::discovery_report* {
 			return skills_;
+		}
+
 		auto handle_mcp_register( lua_State* state ) -> int;
 
 		// The store extension-declared servers land in. Null before install.
