@@ -282,7 +282,7 @@ asserts something untrue about the sandbox, and it is a two-line change.
 | `src/mcode/perm/approval_headless.cxx` | A | fail-closed source, used under `--json` |
 | `src/mcode/perm/store.hxx` / `.cxx` | A | `permissions.json` read / atomic write |
 | `src/mcode/tools/exec_policy.{hxx,cxx}` | A | folded into the engine; `exec_decision` is deleted, not kept as a second vocabulary |
-| `src/mcode/tools/context.hxx` | A | **consumes** the `permission_engine*` / `approval_source*` fields Phase 0 adds; A does not add them |
+| `src/mcode/tools/context.hxx` | A | adds the `permission_engine*` / `approval_source*` fields. Phase 0 was reduced to `tool_class::mcp` alone, because those types are A's and nothing else reads them |
 | `src/mcode/agent/loop_tools.cxx` | A | the check, before the handler runs |
 | `src/mcode/tools/read_tool.cxx`, `write_tools.cxx`, `search_tools.cxx` | A | outside-workspace becomes a decision, not a hard refusal |
 | `src/mcode/cli/exec.{hxx,cxx}` | A | `--approval`, `--add-dir`; help text for `--yolo`. **A's exclusively** — B's `skill` command lives in `cli/skill_command.*` |

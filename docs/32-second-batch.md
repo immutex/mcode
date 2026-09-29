@@ -123,7 +123,7 @@ collisions, both fixed rather than tolerated:
 | Would collide | Fix |
 |---|---|
 | `cli/exec.{hxx,cxx}` — A's `--approval` / `--add-dir` flags, B's `mcode skill list\|validate` | `cli/exec.*` is **A's**. B puts its command in `cli/skill_command.{hxx,cxx}` and adds one dispatch branch to `main.cxx`, which is B's |
-| `ext/api.cxx` — Phase 0's rows, B's skill bodies, C's mcp body | Phase 0 owns the table and creates `api_skill.*` / `api_mcp.*` with stubs; B and C implement their own file and never open the table |
+| `ext/api.cxx` — B's `skill.*` rows, C's `mcp.register` row | Each slice creates its own `api_skill.*` / `api_mcp.*` and adds its own `ENTRIES` row in the same commit, so no slice is a stub; the two rows are resolved at integration |
 
 `src/cli_commands.cxx` is the third shared file and it is **integration's** by
 assignment, not by accident: all three slices need to construct something in it.
