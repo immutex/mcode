@@ -251,6 +251,58 @@ Stated so it is not mistaken for an oversight:
 | Skills index and instruction chain exceed the 8.5K session-start budget | Cold-start budget breach | Both are measured; a test asserts the sum with a realistic chain plus 15 skills |
 | The permission engine's defaults annoy rather than protect | Users reach for `--yolo` permanently, which is worse than no gate | That is the requirement, and it is the first acceptance criterion |
 
+## Shipped — what landed, and what the plan got wrong
+
+All three slices landed together and are green (344 tests, smoke, `_clgate.py`).
+Four things the plan did not anticipate, recorded because each is a defect class
+rather than a one-off:
+
+1. **`docs/33`'s file table left `agent/loop.{hxx,cxx}` unassigned.** Both A and
+   B need them — A for the engine pointer on the loop, B for the prompt's data
+   sections — and both added `instruction_chain_`/`skill_index_` independently,
+   which was a redefinition at merge. One writer per file would have avoided it;
+   the interface was settled mid-flight instead.
+
+2. **`src/main.cxx` was shared by A and B in disjoint regions**, which the table
+   did not say. `cli_commands.cxx` was correctly reserved for integration, but
+   `main.cxx` holds both the `exec_policy` construction and the subcommand
+   dispatch.
+
+3. **An extension tool needs a handler routed back into its VM.** `load_result`
+   had `invoke` and `tool_owners` all along; nothing wired them to the loop, so
+   an extension tool appeared in the schemas and every call returned "tool has no
+   handler registered". Every test passed. It was found by pointing the harness
+   at a real repository — the same way the first batch found its defects — and
+   `skills` is the first bundled extension to register a *tool* rather than a
+   provider, which is why it had never surfaced.
+
+4. **`mcode skill` was written, tested and unreachable.** The dispatch branch was
+   lost to a worktree revert and never restored; 344 tests were green because
+   they call `run_skill` directly and never go through argument dispatch.
+
+The batch's own acceptance criteria, as verified:
+
+| Criterion | Evidence |
+|---|---|
+| Workspace edits never prompt | `test_permissions` default-set assertions; the deviation is in `README` §48 |
+| A command prompts once, then never again | `an mcp call remembers per tool…` and the store round-trip tests; the store keys are written and read through one `store_key_for` |
+| A remembered allow is argv-exact | `a remembered allow is argv-exact` |
+| `--yolo` still denies the floor | `yolo allows an ask but still denies the floor`, plus the near-miss table in both directions |
+| Headless fails closed and names the rule | `headless fails closed and the model is told why` |
+| A project store cannot widen | `a project store cannot widen: allows are dropped with a warning` |
+| The instruction chain reaches the model, closest-wins | live turn: the agent followed a convention stated only in the fixture's `AGENTS.md` |
+| The skill index is emitted only when `skill_read` is registered | `the index is emitted only when skill_read is registered` (both directions) |
+| The session-start budget holds | 15 skills plus a realistic chain, asserted inside 8.5K |
+| An MCP server's tools register and are callable | `test_mcp` through the fixture binary, including crash-restart, timeout, banner and hash-pin |
+
+**Not achieved, and why.** The batch-level acceptance run's step 4 — answer
+"always" at a real prompt, then confirm a second identical command does not
+prompt — was not driven end-to-end, because the cheap model available here will
+not reliably emit a tool call; it answered from memory twice instead. The
+mechanism is covered by tests in both directions (same session, and a fresh
+engine over the same file), but the interactive prompt has not been exercised by
+hand.
+
 ## Sources
 
 - `docs/12-security.md` — the permission engine, the decision table, scope precedence, the sandbox deferral

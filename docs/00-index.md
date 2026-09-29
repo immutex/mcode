@@ -71,8 +71,10 @@ is a self-contained brief for one agent; none depends on another's code.
 31. `30-workstream-turn-loop.md` — the state machine, context assembly, compaction.
 32. `31-workstream-core-tools.md` — the eight core tools, schemas, truncation, approval policy.
 
-**Second batch** — the three plans that make the agent usable on a real
-repository. Superseded the first batch's plans; read `32` first.
+**Second batch — SHIPPED.** The three workstreams that make the agent usable on
+a real repository: a permission engine with an approval prompt and a remember
+store, `AGENTS.md` and skills, and a stdio MCP client. All three landed
+together; `32` remains the plan of record and `33`–`35` the per-slice briefs.
 
 33. `32-second-batch.md` — **the current work plan**: permissions, skills, MCP, and Phase 0.
 34. `33-workstream-permissions.md` — the permission engine, approvals, and the remember store.
@@ -81,11 +83,15 @@ repository. Superseded the first batch's plans; read `32` first.
 
 **If you only read three:** `01`, `03`, `21`.
 
-> **Before starting any work, read `32-second-batch.md`.** It supersedes `26`'s
-> ordering, and `16`'s for this batch. For one of the three parallel
-> workstreams, read its plan in `33`–`35` instead: those are the briefs for this
-> batch. `26-first-batch.md` remains the record of what shipped and the
-> measurement spine it established.
+> **Both batches have shipped.** `26-first-batch.md` and `32-second-batch.md`
+> are the records of what landed and why; `33`–`35` are the per-slice briefs.
+> `32` still owns the batch-level acceptance criteria and the deviations it
+> resolved — read it before changing a permission default.
+>
+> The deviations a reader would otherwise get wrong are in
+> `README.md` §Non-obvious constraints (items 48–54): workspace writes are
+> `allow` by default, `--yolo` skips questions but not the hard-deny floor, and
+> `--yolo` is not a sandbox.
 
 ## Decisions at a glance
 
