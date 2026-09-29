@@ -22,7 +22,11 @@ local loaded: boolean = pcall(function()
 			},
 			required = { "name" },
 		},
-		run = function(args: { [string]: any }, _context: { [string]: any }): (string?, string?)
+		run = function(args: { [string]: any }, _context: {
+			session: string,
+			seq: number,
+			extension: string,
+		}): (string?, string?)
 			local name = args.name
 			if name == nil or name == "" then
 				return nil, "name is required"
