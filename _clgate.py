@@ -140,8 +140,15 @@ WIN32_IDENTIFIERS = (
 )
 
 def code_only( line: str ) -> str:
-    """The line with any `//` comment removed, so prose is not matched."""
-    return line.split("//", 1)[0]
+    """The line with `//` comments and string literals removed.
+
+    Both are prose as far as these checks are concerned. A `TEST_CASE` name
+    containing `MAX_PATH`, or an error message quoting a Win32 call, is not a
+    use of it -- and matching those produced exactly that false positive.
+    """
+    code = line.split("//", 1)[0]
+
+    return re.sub(r'"(?:[^"\\]|\\.)*"', '""', code)
 
 def check_platform_guards( files: list[ pathlib.Path ] ) -> list[ str ]:
     """Win32 identifiers used where `_WIN32` is not defined."""
@@ -180,6 +187,11 @@ def check_platform_guards( files: list[ pathlib.Path ] ) -> list[ str ]:
                 if re.search(r"#\s*include\s*<" + re.escape(header) + ">", code):
                     problems.append(f"{path}:{number} includes <{header}> outside a _WIN32 guard")
 
+            # Skip a line that is only a comment: `code_only` already stripped
+            # `//`, but a block comment's interior lines are still prose.
+            if code.strip().startswith(("*", "/*")):
+                continue
+
             for token in WIN32_IDENTIFIERS:
                 if re.search(r"\b" + re.escape(token) + r"\b", code):
                     problems.append(f"{path}:{number} uses {token} outside a _WIN32 guard")
@@ -212,6 +224,73 @@ def check_shadowed_member_types( files: list[ pathlib.Path ] ) -> list[ str ]:
 
     return problems
 
+# POSIX-only breakages the Windows compile cannot see. The gate compiles with
+# `_WIN32` defined, so the `#else` branch of every platform conditional is
+# skipped entirely -- three separate macOS-only failures reached `master` this
+# way, including a `tests/` directory that had never compiled there at all.
+
+DARWIN_MACRO_FUNCTIONS = (
+    # Functions in glibc, cast-like MACROS in Darwin's <sys/_endian.h>. A leading
+    # `::` is valid on Linux and a syntax error on macOS, where the macro expands
+    # to `::((__uint32_t)(x))`.
+    "htonl", "htons", "ntohl", "ntohs",
+    "bswap_16", "bswap_32", "bswap_64",
+)
+
+def check_posix_call_syntax( files: list[ pathlib.Path ] ) -> list[ str ]:
+    """`::name(` where `name` is a macro on some platform, and Win32 calls.
+
+    Both checks are skipped inside a `_WIN32` branch: a `static_cast< int >` for
+    `send` is *correct* on Windows, and the point is to find the POSIX path that
+    lacks the branch, not to ban the Windows one.
+    """
+    problems = []
+
+    for path in files:
+        stack: list[ dict ] = []
+
+        for number, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            stripped = line.strip()
+
+            if stripped.startswith("#"):
+                if re.match(r"#\s*(if|ifdef|ifndef)\b", stripped):
+                    tests_windows = bool(re.search(r"_WIN32|_MSC_VER|_WINDOWS", stripped))
+                    stack.append({"chain_windows": tests_windows, "in_windows": tests_windows})
+                elif re.match(r"#\s*elif\b", stripped) and stack:
+                    tests_windows = bool(re.search(r"_WIN32|_MSC_VER|_WINDOWS", stripped))
+                    stack[-1] = {"chain_windows": tests_windows, "in_windows": tests_windows}
+                elif re.match(r"#\s*else\b", stripped) and stack:
+                    stack[-1]["in_windows"] = not stack[-1]["in_windows"]
+                elif re.match(r"#\s*endif\b", stripped) and stack:
+                    stack.pop()
+
+                continue
+
+            if any(frame["in_windows"] for frame in stack):
+                continue
+
+            code = code_only(line)
+
+            if not code.strip() or code.strip().startswith(("*", "/*")):
+                continue
+
+            for name in DARWIN_MACRO_FUNCTIONS:
+                if re.search(r"::\s*" + re.escape(name) + r"\s*\(", code):
+                    problems.append(
+                        f"{path}:{number} calls `::{name}(`, which does not compile on macOS "
+                        f"({name} is a cast-like macro in <sys/_endian.h>, so it cannot follow `::`)"
+                    )
+
+            # A `static_cast< int >` on a length passed to send/recv is a
+            # -Wsign-conversion error on POSIX under -Werror.
+            if re.search(r"::\s*(send|recv)\s*\(", code) and "static_cast< int >" in code:
+                problems.append(
+                    f"{path}:{number} casts a length to int for send/recv; POSIX takes size_t "
+                    f"and -Wsign-conversion rejects the cast"
+                )
+
+    return problems
+
 def main() -> int:
     clang = find_clang()
 
@@ -228,7 +307,12 @@ def main() -> int:
         return 2
 
     sources = sorted((repo / "src").rglob("*.cxx")) + sorted((repo / "src").rglob("*.hxx"))
-    problems = check_platform_guards(sources) + check_shadowed_member_types(sources)
+    sources += sorted((repo / "tests").rglob("*.cxx")) + sorted((repo / "tests").rglob("*.hxx"))
+    problems = (
+        check_platform_guards(sources)
+        + check_shadowed_member_types(sources)
+        + check_posix_call_syntax(sources)
+    )
 
     if problems:
         print("preflight failed:", file=sys.stderr)

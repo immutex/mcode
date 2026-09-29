@@ -22,7 +22,10 @@ namespace mcode {
 		}
 	};
 
-	enum class tool_class { read, write, exec, net, spawn };
+	// What a tool does, for the permission engine. The class is assigned by the
+	// registry, never by the tool: an MCP server's `readOnlyHint` is a claim, and
+	// `07` requires it to be treated as untrusted.
+	enum class tool_class { read, write, exec, net, spawn, mcp };
 
 	[[nodiscard]] auto to_string( tool_class klass ) noexcept -> std::string_view;
 

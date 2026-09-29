@@ -9,15 +9,7 @@
 #include "mcode/net/http_client.hxx"
 #include "mcode/net/sse.hxx"
 
-#if defined( _WIN32 )
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#else
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
-#endif
+#include "socket_test_helpers.hxx"
 
 using mcode::net::http_client;
 using mcode::net::http_failure;
@@ -26,15 +18,13 @@ using mcode::net::sse_event;
 
 namespace {
 
-	// `SOCKET` is 64-bit unsigned on Windows and `int` elsewhere, so the handle is
-	// named once rather than cast at every call site.
-#if defined( _WIN32 )
-	using socket_handle = SOCKET;
-	inline constexpr socket_handle INVALID_HANDLE = INVALID_SOCKET;
-#else
-	using socket_handle = int;
-	inline constexpr socket_handle INVALID_HANDLE = -1;
-#endif
+	using mcode::test::INVALID_SOCKET_HANDLE;
+	using mcode::test::close_socket;
+	using mcode::test::host_to_network_long;
+	using mcode::test::network_to_host_short;
+	using mcode::test::receive_bytes;
+	using mcode::test::send_bytes;
+	using mcode::test::socket_handle;
 
 	// A one-shot HTTP server on an ephemeral loopback port.
 	//
@@ -55,7 +45,7 @@ namespace {
 
 			auto address = sockaddr_in{ };
 			address.sin_family = AF_INET;
-			address.sin_addr.s_addr = ::htonl( INADDR_LOOPBACK );
+			address.sin_addr.s_addr = host_to_network_long( INADDR_LOOPBACK );
 			address.sin_port = 0;
 
 			// A failure here is not recoverable and the test would hang on connect,
@@ -73,7 +63,7 @@ namespace {
 				return;
 			}
 
-			port_ = ::ntohs( address.sin_port );
+			port_ = network_to_host_short( address.sin_port );
 
 			worker_ = std::thread{ [this] { serve( ); } };
 		}
@@ -105,17 +95,17 @@ namespace {
 		auto serve( ) -> void {
 			const auto accepted = ::accept( socket_, nullptr, nullptr );
 
-			if ( accepted == INVALID_HANDLE ) {
+			if ( accepted == INVALID_SOCKET_HANDLE ) {
 				return;
 			}
 
 			// Drain the request so the client's write completes. A single read is
 			// enough for a body this size.
 			auto scratch = std::array< char, 4096 >{ };
-			::recv( accepted, scratch.data( ), static_cast< int >( scratch.size( ) ), 0 );
+			receive_bytes( accepted, scratch );
 
 			if ( !response_.empty( ) ) {
-				::send( accepted, response_.data( ), static_cast< int >( response_.size( ) ), 0 );
+				(void)send_bytes( accepted, response_ );
 			}
 
 			if ( close_immediately_ ) {
@@ -131,7 +121,7 @@ namespace {
 
 		std::string response_;
 		bool close_immediately_ = false;
-		socket_handle socket_ = INVALID_HANDLE;
+		socket_handle socket_ = INVALID_SOCKET_HANDLE;
 		std::uint16_t port_ = 0;
 		std::thread worker_;
 	};

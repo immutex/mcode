@@ -1,5 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "socket_test_helpers.hxx"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -29,13 +31,13 @@ using namespace mcode;
 
 namespace {
 
-#if defined( _WIN32 )
-	using socket_handle = SOCKET;
-	inline constexpr socket_handle INVALID_HANDLE = INVALID_SOCKET;
-#else
-	using socket_handle = int;
-	inline constexpr socket_handle INVALID_HANDLE = -1;
-#endif
+	using mcode::test::INVALID_SOCKET_HANDLE;
+	using mcode::test::close_socket;
+	using mcode::test::host_to_network_long;
+	using mcode::test::network_to_host_short;
+	using mcode::test::receive_bytes;
+	using mcode::test::send_bytes;
+	using mcode::test::socket_handle;
 
 	// A scripted loopback server: one response per accepted connection, in
 	// order. The retry tests need a server that answers differently per
@@ -53,7 +55,7 @@ namespace {
 
 			auto address = sockaddr_in{ };
 			address.sin_family = AF_INET;
-			address.sin_addr.s_addr = ::htonl( INADDR_LOOPBACK );
+			address.sin_addr.s_addr = host_to_network_long( INADDR_LOOPBACK );
 			address.sin_port = 0;
 
 			if ( ::bind( socket_, reinterpret_cast< sockaddr* >( &address ), sizeof( address ) ) != 0
@@ -67,7 +69,7 @@ namespace {
 				return;
 			}
 
-			port_ = ::ntohs( address.sin_port );
+			port_ = network_to_host_short( address.sin_port );
 			worker_ = std::thread{ [this] { serve( ); } };
 		}
 
@@ -126,18 +128,18 @@ namespace {
 			while ( !stopped_ ) {
 				const auto accepted = ::accept( socket_, nullptr, nullptr );
 
-				if ( accepted == INVALID_HANDLE ) {
+				if ( accepted == INVALID_SOCKET_HANDLE ) {
 					return;
 				}
 
 				auto scratch = std::array< char, 8192 >{ };
-				::recv( accepted, scratch.data( ), static_cast< int >( scratch.size( ) ), 0 );
+				receive_bytes( accepted, scratch );
 
 				const auto index = std::min( requests_, responses_.size( ) - 1 );
 				const auto& response = responses_[ index ];
 				++requests_;
 
-				::send( accepted, response.data( ), static_cast< int >( response.size( ) ), 0 );
+				(void)send_bytes( accepted, response );
 
 				// Long enough for the client to drain both events of a multi-event
 				// response before the socket goes away; too short and the tail of
@@ -148,7 +150,7 @@ namespace {
 		}
 
 		std::vector< std::string > responses_;
-		socket_handle socket_ = INVALID_HANDLE;
+		socket_handle socket_ = INVALID_SOCKET_HANDLE;
 		std::uint16_t port_ = 0;
 		std::size_t requests_ = 0;
 		std::thread worker_;

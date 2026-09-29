@@ -15,6 +15,7 @@ namespace mcode {
 			case tool_class::exec: return "exec";
 			case tool_class::net: return "net";
 			case tool_class::spawn: return "spawn";
+			case tool_class::mcp: return "mcp";
 		}
 
 		return "read";

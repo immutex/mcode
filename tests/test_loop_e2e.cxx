@@ -30,45 +30,24 @@
 #include "mcode/tools/context.hxx"
 #include "mcode/tools/register.hxx"
 
+#include "socket_test_helpers.hxx"
 #include "test_scratch.hxx"
 
-#if defined( _WIN32 )
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#else
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
-#endif
 
 using namespace mcode;
 
 namespace {
 
-#if defined( _WIN32 )
-	using e2e_socket = SOCKET;
-	inline constexpr e2e_socket E2E_INVALID_SOCKET = INVALID_SOCKET;
-#else
-	using e2e_socket = int;
-	inline constexpr e2e_socket E2E_INVALID_SOCKET = -1;
-#endif
 
-	auto e2e_close_socket( const e2e_socket handle ) -> void {
-#if defined( _WIN32 )
-		::closesocket( handle );
-#else
-		::close( handle );
-#endif
-	}
-
-	auto e2e_shutdown_socket( const e2e_socket handle ) -> void {
-#if defined( _WIN32 )
-		::shutdown( handle, SD_BOTH );
-#else
-		::shutdown( handle, SHUT_RDWR );
-#endif
-	}
+	using mcode::test::INVALID_SOCKET_HANDLE;
+	using mcode::test::close_socket;
+	using mcode::test::ensure_sockets;
+	using mcode::test::host_to_network_long;
+	using mcode::test::network_to_host_short;
+	using mcode::test::receive_bytes;
+	using mcode::test::send_bytes;
+	using mcode::test::shutdown_socket;
+	using mcode::test::socket_handle;
 
 	// One SSE response per accepted connection, in order, on loopback. The
 	// teardown shuts the listening socket down before joining so a test that made
@@ -77,16 +56,13 @@ namespace {
 	public:
 		explicit e2e_server( std::vector< std::string > responses )
 			: responses_( std::move( responses ) ) {
-		#if defined( _WIN32 )
-			auto data = WSADATA{ };
-			::WSAStartup( MAKEWORD( 2, 2 ), &data );
-		#endif
+			ensure_sockets( );
 
 			socket_ = ::socket( AF_INET, SOCK_STREAM, 0 );
 
 			auto address = sockaddr_in{ };
 			address.sin_family = AF_INET;
-			address.sin_addr.s_addr = ::htonl( INADDR_LOOPBACK );
+			address.sin_addr.s_addr = host_to_network_long( INADDR_LOOPBACK );
 			address.sin_port = 0;
 
 			if ( ::bind( socket_, reinterpret_cast< sockaddr* >( &address ), sizeof( address ) ) != 0
@@ -101,14 +77,14 @@ namespace {
 				return;
 			}
 
-			port_ = ::ntohs( address.sin_port );
+			port_ = network_to_host_short( address.sin_port );
 			worker_ = std::thread{ [this] { serve( ); } };
 		}
 
 		~e2e_server( ) {
 			stopped_ = true;
-			e2e_shutdown_socket( socket_ );
-			e2e_close_socket( socket_ );
+			shutdown_socket( socket_ );
+			close_socket( socket_ );
 
 			if ( worker_.joinable( ) ) {
 				worker_.join( );
@@ -133,12 +109,12 @@ namespace {
 			while ( !stopped_ ) {
 				const auto accepted = ::accept( socket_, nullptr, nullptr );
 
-				if ( accepted == E2E_INVALID_SOCKET ) {
+				if ( accepted == INVALID_SOCKET_HANDLE ) {
 					return;
 				}
 
 				auto scratch = std::array< char, 8192 >{ };
-				::recv( accepted, scratch.data( ), static_cast< int >( scratch.size( ) ), 0 );
+				receive_bytes( accepted, scratch );
 
 				const auto& body = responses_[ std::min( index, responses_.size( ) - 1 ) ];
 				++index;
@@ -147,16 +123,16 @@ namespace {
 					"Content-Type: text/event-stream\r\nContent-Length: "
 					+ std::to_string( body.size( ) ) + "\r\nConnection: close\r\n\r\n" };
 
-				::send( accepted, head.data( ), static_cast< int >( head.size( ) ), 0 );
-				::send( accepted, body.data( ), static_cast< int >( body.size( ) ), 0 );
+				(void)send_bytes( accepted, head );
+				(void)send_bytes( accepted, body );
 
 				std::this_thread::sleep_for( std::chrono::milliseconds( 200 ) );
-				e2e_close_socket( accepted );
+				close_socket( accepted );
 			}
 		}
 
 		std::vector< std::string > responses_;
-		e2e_socket socket_ = E2E_INVALID_SOCKET;
+		socket_handle socket_ = INVALID_SOCKET_HANDLE;
 		std::uint16_t port_ = 0;
 		std::thread worker_;
 		std::atomic< bool > stopped_{ false };
