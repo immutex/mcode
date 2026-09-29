@@ -37,6 +37,12 @@ namespace {
 	inline constexpr std::string_view PLATFORM_NAME = "linux";
 #endif
 
+#if defined( _WIN32 )
+	// GetModuleFileNameA writes into this; a module path longer than it is not
+	// usable as an extension root and is treated as absent.
+	inline constexpr std::size_t BINARY_PATH_BYTES = 1024;
+#endif
+
 	// Forwards the inner client's events to the loop. In human mode it mirrors
 	// text deltas to stdout as they arrive; in JSON mode the bus subscription
 	// below emits them as lines instead, so raw text never breaks the stream.
@@ -144,7 +150,7 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		// The shipped providers are declared by an extension, not compiled in,
 		// and the loader only knows the workspace and user roots. The bundled
 		// copy lives beside the binary, so it is added here explicitly.
-		char binary_path[ 1024 ] = { };
+		char binary_path[ BINARY_PATH_BYTES ] = { };
 		const auto binary_size = GetModuleFileNameA( nullptr, binary_path,
 			static_cast< DWORD >( sizeof( binary_path ) ) );
 

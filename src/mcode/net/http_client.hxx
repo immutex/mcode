@@ -50,7 +50,7 @@ namespace mcode::net {
 	// answers with a stream of HTML cannot exhaust memory on the failure path.
 	inline constexpr std::uint64_t MAX_ERROR_BODY_BYTES = 64ull * 1024ull;
 
-	[[nodiscard]] auto parse_url( std::string_view text ) -> result< url >;
+	[[nodiscard]] auto parse_url( const std::string_view text ) -> result< url >;
 
 	class http_client {
 	public:

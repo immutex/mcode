@@ -41,6 +41,9 @@ namespace mcode::net {
 		using tcp = asio::ip::tcp;
 		using ssl_stream = ssl::stream< beast::tcp_stream >;
 
+		inline constexpr unsigned HTTP_VERSION_1_1 = 11;
+		inline constexpr std::size_t SSE_CHUNK_BYTES = 8192;
+
 		[[nodiscard]] auto classify( const boost::system::error_code& error_code ) -> errc {
 			if ( !error_code ) {
 				return errc::ok;
@@ -162,7 +165,7 @@ namespace mcode::net {
 		auto write_request( Stream& stream, const http_request& request, const url& parsed,
 			const bool event_stream ) -> void {
 			auto message = http::request< http::string_body >{
-				http::string_to_verb( request.method ), parsed.target, 11 };
+				http::string_to_verb( request.method ), parsed.target, HTTP_VERSION_1_1 };
 
 			message.set( http::field::host, parsed.host );
 			message.set( http::field::user_agent, "mcode" );
@@ -200,26 +203,33 @@ namespace mcode::net {
 		// Reads the SSE body incrementally. Shared by both transports; the
 		// buffered prefix from the header read is drained first, or a server that
 		// sends its first event with the response head loses it.
-		auto pump_sse( beast::flat_buffer& buffer, std::function< std::size_t( void*, std::size_t ) > read_some,
-			sse_parser& parser_state, const std::uint64_t max_response_bytes, const bool chunked ) -> status {
+		struct sse_pump_request {
+			beast::flat_buffer& buffer;
+			std::function< std::size_t( void*, std::size_t ) > read_some;
+			sse_parser& parser_state;
+			const std::uint64_t max_response_bytes;
+			const bool chunked;
+		};
+
+		auto pump_sse( const sse_pump_request& request ) -> status {
 			auto total = std::uint64_t{ 0 };
 			auto decoder = detail::chunked_decoder{ };
 
 			const auto deliver = [&]( const std::string_view bytes ) -> status {
 				total += bytes.size( );
 
-				if ( total > max_response_bytes ) {
+				if ( total > request.max_response_bytes ) {
 					return std::unexpected(
 						fail( errc::protocol, "SSE stream exceeded the response cap" ) );
 				}
 
-				parser_state.feed( bytes );
+				request.parser_state.feed( bytes );
 
 				return { };
 			};
 
 			const auto deliver_raw = [&]( const std::string_view bytes ) -> status {
-				if ( !chunked ) {
+				if ( !request.chunked ) {
 					return deliver( bytes );
 				}
 
@@ -232,21 +242,21 @@ namespace mcode::net {
 				return deliver( decoder.take_decoded( ) );
 			};
 
-			if ( buffer.size( ) > 0 ) {
-				const auto buffered = static_cast< const char* >( buffer.data( ).data( ) );
-				const auto carried = std::string_view{ buffered, buffer.size( ) };
+			if ( request.buffer.size( ) > 0 ) {
+				const auto buffered = static_cast< const char* >( request.buffer.data( ).data( ) );
+				const auto carried = std::string_view{ buffered, request.buffer.size( ) };
 
-				buffer.consume( buffer.size( ) );
+				request.buffer.consume( request.buffer.size( ) );
 
 				if ( const auto delivered = deliver_raw( carried ); !delivered ) {
 					return delivered;
 				}
 			}
 
-			auto chunk = std::array< char, 8192 >{ };
+			auto chunk = std::array< char, SSE_CHUNK_BYTES >{ };
 
 			while ( true ) {
-				const auto read = read_some( chunk.data( ), chunk.size( ) );
+				const auto read = request.read_some( chunk.data( ), chunk.size( ) );
 
 				if ( read == 0 ) {
 					break;
@@ -262,7 +272,7 @@ namespace mcode::net {
 				}
 			}
 
-			parser_state.finish( );
+			request.parser_state.finish( );
 
 			return { };
 		}
@@ -481,12 +491,15 @@ namespace mcode::net {
 
 				auto parser_state = sse_parser{ std::move( on_event ) };
 
-				const auto streamed = pump_sse( buffer,
-					[ &stream ]( void* destination, const std::size_t capacity ) {
-						return stream.read_some( asio::buffer( destination, capacity ) );
-					},
-					parser_state, max_response_bytes_,
-					detail::is_chunked( parser.get( ).base( )[ http::field::transfer_encoding ] ) );
+				const auto streamed = pump_sse( { .buffer = buffer,
+					.read_some =
+						[ &stream ]( void* destination, const std::size_t capacity ) {
+							return stream.read_some( asio::buffer( destination, capacity ) );
+						},
+					.parser_state = parser_state,
+					.max_response_bytes = max_response_bytes_,
+					.chunked = detail::is_chunked(
+						parser.get( ).base( )[ http::field::transfer_encoding ] ) } );
 
 				// `~ssl_stream` performs a graceful close: it waits for the peer's
 				// close_notify. A provider that keeps the connection alive never
@@ -524,12 +537,15 @@ namespace mcode::net {
 
 			auto parser_state = sse_parser{ std::move( on_event ) };
 
-			const auto streamed = pump_sse( buffer,
-				[ &stream ]( void* destination, const std::size_t capacity ) {
-					return stream.read_some( asio::buffer( destination, capacity ) );
-				},
-				parser_state, max_response_bytes_,
-				detail::is_chunked( parser.get( ).base( )[ http::field::transfer_encoding ] ) );
+			const auto streamed = pump_sse( { .buffer = buffer,
+				.read_some =
+					[ &stream ]( void* destination, const std::size_t capacity ) {
+						return stream.read_some( asio::buffer( destination, capacity ) );
+					},
+				.parser_state = parser_state,
+				.max_response_bytes = max_response_bytes_,
+				.chunked = detail::is_chunked(
+					parser.get( ).base( )[ http::field::transfer_encoding ] ) } );
 
 			auto ignored = boost::system::error_code{ };
 			stream.socket( ).close( ignored );
