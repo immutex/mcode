@@ -79,11 +79,11 @@ namespace mcode::proc {
 		// outlive mcode, and the destructor is the path that guarantees it.
 		auto ignored = boost::system::error_code{ };
 
-		auto closed = state_->stdin_pipe.close( ignored );
-
-		if ( closed ) {
-			(void)closed;
-		}
+		// Closing stdin is the polite half of shutdown; a failure here means the
+		// pipe was already gone, which is the same end state. The exit path below
+		// is what actually guarantees the child does not outlive us, so the
+		// result is deliberately discarded rather than checked with a no-op.
+		state_->stdin_pipe.close( ignored );
 
 		if ( state_->child.running( ignored ) ) {
 			const auto exited = wait_exit( SESSION_GRACE_WAIT );
