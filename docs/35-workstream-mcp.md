@@ -203,7 +203,13 @@ since `07`'s evidence is that the failure paths are what ship broken.
 | `src/mcode/proc/session.{hxx,cxx}` | C | long-lived child with an **open stdin** and an incremental read loop; `run_process` cannot be reused |
 | `src/mcode/mcp/source.{hxx,cxx}` | C | registry registration and teardown |
 | `src/mcode/support/config.hxx` | C | adds `[mcp]` to `CONFIG_SECTIONS` **in the same commit as its reader**, never before — a section nothing reads is a silent no-op (`22`) |
-| `docs/22-config-and-cli.md` | C | the `[mcp]` section itself, and the `[telemetry]` example fix below. Phase 0 adds the section *name* to the config list; C documents what goes in it |
+| `docs/22-config-and-cli.md` | C | the `[mcp]` section itself, and the `[telemetry]` example fix below. Phase 0 adds no config section: a section name without a reader is a silent no-op, so C adds the name and the reader together |
+| `src/mcode/ext/api_mcp.{hxx,cxx}` | C | **creates** these: the handler for `mcp.register` |
+| `src/mcode/ext/api.hxx` | C | the method declaration |
+| `src/mcode/ext/api.cxx` | C | the `ENTRIES` row. B adds its own to the same table — a one-line conflict integration resolves |
+| `tests/fixtures/mcp_echo.cxx` | C | the protocol fixture |
+| `tests/CMakeLists.txt` | C | fixture target |
+| `src/cli_commands.cxx` | **integration** | construct the supervisor, connect servers |
 
 **A pre-existing divergence found while planning this, fixed in the same commit
 because C already touches both files.** `docs/22`'s example config shows a
@@ -212,12 +218,6 @@ contain it, and an unknown section is a **hard load error**. A user who copies
 the documented example gets a config that refuses to load. Either the example
 loses the section or the list gains it; the doc's own §Telemetry says telemetry
 ships in no version at all, so **the example is what is wrong**.
-| `src/mcode/ext/api_mcp.{hxx,cxx}` | C | **creates** these: the handler for `mcp.register` |
-| `src/mcode/ext/api.hxx` | C | the method declaration |
-| `src/mcode/ext/api.cxx` | C | the `ENTRIES` row. B adds its own to the same table — a one-line conflict integration resolves |
-| `tests/fixtures/mcp_echo.cxx` | C | the protocol fixture |
-| `tests/CMakeLists.txt` | C | fixture target |
-| `src/cli_commands.cxx` | **integration** | construct the supervisor, connect servers |
 
 ## Steps
 
