@@ -136,6 +136,24 @@ namespace mcode::model {
 				"stream event is not JSON: " + parsed.error( ).msg ) );
 		}
 
+		// A mid-stream failure is terminal, and it is reported as an ordinary event
+		// rather than an HTTP status. Surfaced here or the provider's reason is
+		// discarded and the turn looks like an unexplained truncation.
+		if ( !descriptor_.stream.error_message.empty( ) ) {
+			if ( auto message = optional_string( *parsed, descriptor_.stream.error_message ) ) {
+				auto detail = std::string{ };
+
+				if ( !descriptor_.stream.error_code.empty( ) ) {
+					if ( auto code = optional_string( *parsed, descriptor_.stream.error_code ) ) {
+						detail = " (" + *code + ")";
+					}
+				}
+
+				return std::unexpected( fail( errc::protocol,
+					"provider reported a mid-stream error: " + *message + detail ) );
+			}
+		}
+
 		// A pointer may be gated on the SSE event name, for wire formats that put two
 		// different things at the same pointer. An empty gate means "every event".
 		const auto text_applies = event_allowed( event_name, descriptor_.stream.text_events );

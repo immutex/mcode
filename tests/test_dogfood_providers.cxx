@@ -205,6 +205,31 @@ TEST_CASE( "an event arriving after the terminal is ignored", "[dogfood]" ) {
 	REQUIRE( applier.accumulated_usage( ).output == 0 );
 }
 
+TEST_CASE( "a mid-stream provider error is surfaced, not dropped", "[dogfood]" ) {
+	// Providers report a failure as an ordinary event rather than an HTTP status:
+	// an overloaded backend, a content filter, a quota that ran out after tokens
+	// were already delivered. Unmapped, the message is discarded and the turn ends
+	// as a bare truncation with the provider's reason thrown away.
+	const auto descriptor = load( R"({
+		"name": "error-reporting",
+		"endpoint": "https://example.invalid/v1/chat",
+		"auth": { "from": "env", "name": "EXAMPLE_API_KEY", "header": "Authorization" },
+		"stream": {
+			"text_delta": "/choices/0/delta/content",
+			"error": { "message": "/error/message", "code": "/error/code" }
+		}
+	})" );
+
+	auto applier = model::delta_applier{ descriptor };
+
+	const auto produced = applier.feed( "message",
+		R"({"error":{"message":"upstream overloaded","code":"overloaded_error"}})" );
+
+	REQUIRE_FALSE( static_cast< bool >( produced ) );
+	CHECK( produced.error( ).msg.find( "upstream overloaded" ) != std::string::npos );
+	CHECK( produced.error( ).msg.find( "overloaded_error" ) != std::string::npos );
+}
+
 TEST_CASE( "anthropic drives text, thinking, and tool input", "[dogfood]" ) {
 	auto applier = model::delta_applier{ load( ANTHROPIC ) };
 

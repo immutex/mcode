@@ -77,7 +77,7 @@ namespace mcode::model {
 		// Every pointer the descriptor can carry, so a typo is caught here rather
 		// than silently dropping a field at first token. Adding a pointer to the
 		// struct without adding it here is the bug this array exists to prevent.
-		const auto pointers = std::array< std::pair< const char*, const std::string* >, 12 >{ {
+		const auto pointers = std::array< std::pair< const char*, const std::string* >, 14 >{ {
 			{ "stream.text_delta", &descriptor.stream.text_delta },
 			{ "stream.thinking_delta", &descriptor.stream.thinking_delta },
 			{ "stream.tool_call_index", &descriptor.stream.tool_call_index },
@@ -85,6 +85,8 @@ namespace mcode::model {
 			{ "stream.tool_call_name", &descriptor.stream.tool_call_name },
 			{ "stream.tool_call_args", &descriptor.stream.tool_call_args },
 			{ "stream.finish_reason", &descriptor.stream.finish_reason },
+			{ "stream.error_message", &descriptor.stream.error_message },
+			{ "stream.error_code", &descriptor.stream.error_code },
 			{ "stream.usage_input", &descriptor.stream.usage_input },
 			{ "stream.usage_output", &descriptor.stream.usage_output },
 			{ "stream.usage_cached_read", &descriptor.stream.usage_cached_read },
@@ -129,9 +131,13 @@ namespace mcode::model {
 			"from", "name", "header", "scheme",
 		};
 
-		inline constexpr auto ALLOWED_STREAM = std::array< std::string_view, 8 >{
-			"text_delta", "thinking_delta", "tool_calls", "finish", "usage", "terminal_events",
-			"text_events", "tool_call_events",
+		inline constexpr auto ALLOWED_STREAM = std::array< std::string_view, 9 >{
+			"text_delta", "thinking_delta", "tool_calls", "finish", "usage", "error",
+			"terminal_events", "text_events", "tool_call_events",
+		};
+
+		inline constexpr auto ALLOWED_ERROR = std::array< std::string_view, 2 >{
+			"message", "code",
 		};
 
 		inline constexpr auto ALLOWED_TOOL_CALLS = std::array< std::string_view, 4 >{
@@ -164,12 +170,13 @@ namespace mcode::model {
 			// Every level is checked, including the ones the descriptor may omit. A
 			// block that is absent yields no keys, so this costs nothing when the
 			// descriptor is minimal.
-			const auto levels = std::array< std::pair< const char*, std::span< const std::string_view > >, 6 >{ {
+			const auto levels = std::array< std::pair< const char*, std::span< const std::string_view > >, 7 >{ {
 				{ "", ALLOWED_TOP_LEVEL },
 				{ "/auth", ALLOWED_AUTH },
 				{ "/stream", ALLOWED_STREAM },
 				{ "/stream/tool_calls", ALLOWED_TOOL_CALLS },
 				{ "/stream/usage", ALLOWED_USAGE },
+				{ "/stream/error", ALLOWED_ERROR },
 				{ "/request", ALLOWED_REQUEST },
 			} };
 
@@ -310,6 +317,14 @@ namespace mcode::model {
 
 		if ( auto usage = parsed->pointer_string( "/stream/usage/reasoning" ) ) {
 			descriptor.stream.usage_reasoning = *usage;
+		}
+
+		if ( auto message = parsed->pointer_string( "/stream/error/message" ) ) {
+			descriptor.stream.error_message = *message;
+		}
+
+		if ( auto code = parsed->pointer_string( "/stream/error/code" ) ) {
+			descriptor.stream.error_code = *code;
 		}
 
 		if ( parsed->has_pointer( "/stream/text_events" ) ) {

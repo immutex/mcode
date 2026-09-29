@@ -58,6 +58,17 @@ namespace mcode::model {
 		// End of turn.
 		std::string finish_reason;
 
+		// A mid-stream failure. Providers report these as an ordinary event, not
+		// an HTTP status: an overloaded backend, a content filter, a quota that
+		// ran out after tokens were already delivered. Unmapped, the message is
+		// discarded and the turn ends as a bare truncation with the provider's
+		// reason -- the only useful part -- thrown away.
+		std::string error_message;
+
+		// Optional machine-readable companion to `error_message`, for providers
+		// that send a type or code alongside the text.
+		std::string error_code;
+
 		// Usage, reported once or cumulatively -- `usage::add` takes the max.
 		std::string usage_input;
 		std::string usage_output;
