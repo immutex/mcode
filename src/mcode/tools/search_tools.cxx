@@ -30,6 +30,12 @@ namespace mcode::tools {
 
 		inline constexpr std::size_t GREP_CONTEXT_CHARS = 120;
 
+		// The per-call glob candidate budget: this many candidates per possible
+		// match plus a base floor, so a narrow pattern still sees enough of the
+		// tree.
+		inline constexpr std::size_t GLOB_BUDGET_PER_RESULT = 4;
+		inline constexpr std::size_t GLOB_BUDGET_BASE = 256;
+
 		// The ignore filter, applied in this layer. The workspace walk is
 		// ignore-blind by design; these are the directories that would otherwise
 		// burn the whole result budget on artifacts.
@@ -323,7 +329,7 @@ namespace mcode::tools {
 		// the relative path. This costs one full walk per call; the workspace walk
 		// cannot be reused because it applies the pattern per segment without the
 		// ignore filter.
-		const auto budget = max_results * 4 + 256;
+		const auto budget = max_results * GLOB_BUDGET_PER_RESULT + GLOB_BUDGET_BASE;
 		auto candidates = collect_paths( space, rules, budget );
 
 		auto filtered = std::size_t{ 0 };

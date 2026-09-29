@@ -38,7 +38,15 @@ namespace mcode::tools {
 		// and this many candidates, so typo recovery never walks the tree.
 		inline constexpr std::size_t SUGGESTION_LIMIT = 12;
 
+		// The directory scan stops after this multiple of the suggestion limit, so
+		// typo recovery stays bounded even in a crowded directory.
+		inline constexpr std::size_t SUGGESTION_SCAN_MULTIPLIER = 16;
+
 		inline constexpr std::size_t MAX_READ_LINES = 1000;
+
+		// A file with more lines than this gets the large-file note even when the
+		// byte size is under the large-file threshold.
+		inline constexpr std::size_t LARGE_FILE_LINES = 50'000;
 
 		struct binary_extensions {
 			static constexpr auto NAMES = std::array< std::string_view, 24 >{
@@ -120,7 +128,7 @@ namespace mcode::tools {
 					break;
 				}
 
-				if ( ++candidates > SUGGESTION_LIMIT * 16 ) {
+				if ( ++candidates > SUGGESTION_LIMIT * SUGGESTION_SCAN_MULTIPLIER ) {
 					break;
 				}
 
@@ -158,13 +166,22 @@ namespace mcode::tools {
 			return best_name;
 		}
 
+		// The read window request, shared by the normal and large-file paths.
+		struct window_request {
+			std::filesystem::path absolute;
+			std::string_view relative;
+			std::size_t offset = 0;
+			std::size_t limit = 0;
+			const std::string* content = nullptr;
+			std::uintmax_t file_size = 0;
+			bool size_is_complete = false;
+			tool_context* context = nullptr;
+		};
+
 		// The read window itself, shared by the normal and large-file paths. Returns
 		// the rendered JSON result.
-		[[nodiscard]] auto render_window( const std::filesystem::path& absolute,
-			const std::string_view relative, const std::size_t offset, const std::size_t limit,
-			const std::string& content, const std::uintmax_t file_size,
-			const bool size_is_complete, tool_context& context ) -> result< std::string > {
-			const auto safe = text::sanitize_utf8( content );
+		[[nodiscard]] auto render_window( const window_request& request ) -> result< std::string > {
+			const auto safe = text::sanitize_utf8( *request.content );
 
 			auto lines = std::vector< std::string_view >{ };
 			auto start = std::size_t{ 0 };
@@ -194,16 +211,16 @@ namespace mcode::tools {
 			// past the end. Without this the default offset of 1 was rejected, so
 			// reading a file the agent had just created failed and the read was
 			// never recorded -- which then refused the write that followed.
-			if ( total_lines > 0 && offset > total_lines ) {
-				return error_result( "offset " + std::to_string( offset ) + " is past the end of " +
-						std::string{ relative } + " (" + std::to_string( total_lines ) + " lines)",
+			if ( total_lines > 0 && request.offset > total_lines ) {
+				return error_result( "offset " + std::to_string( request.offset ) + " is past the end of " +
+						std::string{ request.relative } + " (" + std::to_string( total_lines ) + " lines)",
 					"re-read with offset " + std::to_string( total_lines > 0 ? total_lines : 1 ) +
 						" or omit offset to start at line 1",
 					false );
 			}
 
-			const auto first = offset - 1;
-			const auto last = std::min( first + limit, total_lines );
+			const auto first = request.offset - 1;
+			const auto last = std::min( first + request.limit, total_lines );
 
 			auto rendered = std::string{ };
 
@@ -221,7 +238,7 @@ namespace mcode::tools {
 				notes += "\"truncated\":true,\"next_offset\":" + std::to_string( last + 1 ) + ",";
 			}
 
-			if ( !size_is_complete ) {
+			if ( !request.size_is_complete ) {
 				notes += "\"partial_read\":true,";
 			}
 
@@ -229,7 +246,7 @@ namespace mcode::tools {
 				notes += "\"generated\":true,";
 			}
 
-			if ( file_size > LARGE_FILE_BYTES || total_lines > 50'000 ) {
+			if ( request.file_size > LARGE_FILE_BYTES || total_lines > LARGE_FILE_LINES ) {
 				notes += "\"large_file\":true,";
 			}
 
@@ -241,8 +258,8 @@ namespace mcode::tools {
 			// The recorded hash must match what content_hash computes over the RAW
 			// bytes, or a non-UTF-8 file reads as stale on the first write. The
 			// sanitised text is for display only.
-			const auto hash = hash_bytes( content );
-			context.reads->record( absolute, hash );
+			const auto hash = hash_bytes( *request.content );
+			request.context->reads->record( request.absolute, hash );
 
 			return rendered;
 		}
@@ -342,8 +359,17 @@ namespace mcode::tools {
 			return refuse_binary( *path, size, "binary content" );
 		}
 
-		return render_window( absolute, *path, offset, limit, *content, size, complete,
-			context );
+		auto window = window_request{ };
+		window.absolute = absolute;
+		window.relative = *path;
+		window.offset = offset;
+		window.limit = limit;
+		window.content = &*content;
+		window.file_size = size;
+		window.size_is_complete = complete;
+		window.context = &context;
+
+		return render_window( window );
 	}
 
 }

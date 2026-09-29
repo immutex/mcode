@@ -38,7 +38,7 @@ namespace mcode::tools {
 	public:
 		virtual ~tool_handler_sink( ) = default;
 
-		virtual auto add_handler( std::string name,
+		virtual auto add_handler( const std::string name,
 			std::function< result< std::string >( std::string_view args_json ) > handler )
 			-> void = 0;
 	};
