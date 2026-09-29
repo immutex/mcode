@@ -299,8 +299,15 @@ TEST_CASE( "assembly stays within the session-start budget", "[loop]" ) {
 
 	CHECK( words <= SYSTEM_PROMPT_TOKEN_BUDGET );
 
-	auto assembled = assemble_request( fx.registry, prompt, { }, "test-model", fx.deps.caps,
-		model::cache_mode::implicit, false, { } );
+	const auto no_history = std::vector< model::message >{ };
+
+	auto assembled = assemble_request( fx.registry,
+		{ .system_prompt = prompt,
+			.history = no_history,
+			.model_name = "test-model",
+			.mode = model::cache_mode::implicit,
+			.near_budget = false,
+			.recitation = { } } );
 
 	auto total = std::int64_t{ 0 };
 

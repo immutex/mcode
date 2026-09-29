@@ -67,7 +67,7 @@ namespace mcode {
 		bus_->publish( std::move( value ) );
 	}
 
-	auto agent_loop::register_handler( std::string name, tool_handler handler ) -> void {
+	auto agent_loop::register_handler( const std::string name, tool_handler handler ) -> void {
 		handlers_.insert_or_assign( std::move( name ), std::move( handler ) );
 	}
 
@@ -89,8 +89,13 @@ namespace mcode {
 
 	auto agent_loop::request_and_fold( const model::effort effort ) -> result< bool > {
 		const auto near_budget = budget_.nearly_exhausted( );
-		const auto assembled = assemble_request( *registry_, build_system_prompt( *registry_ ),
-			history_, model_name_, caps_, caps_.caching, near_budget, { } );
+		const auto assembled = assemble_request( *registry_,
+			{ .system_prompt = build_system_prompt( *registry_ ),
+				.history = history_,
+				.model_name = model_name_,
+				.mode = caps_.caching,
+				.near_budget = near_budget,
+				.recitation = { } } );
 
 		auto stream_request = model::stream_request{ };
 		stream_request.request = assembled.request;
@@ -372,10 +377,10 @@ namespace mcode {
 
 					const auto repeats = thrash_.repeat_count( );
 
-					if ( repeats >= 2 * THRASH_REPEAT_LIMIT ) {
+					if ( repeats >= THRASH_ESCALATION_FACTOR * THRASH_REPEAT_LIMIT ) {
 						++replan_count_;
 
-						if ( replan_count_ >= 2 ) {
+						if ( replan_count_ >= REPLAN_GUARD_LIMIT ) {
 							finish_run( loop_state::handoff, "thrash beyond replan guard" );
 							state_ = loop_state::handoff;
 
@@ -483,7 +488,7 @@ namespace mcode {
 					if ( *reflected ) {
 						++last_failure_repeats_;
 
-						if ( last_failure_repeats_ >= 2 ) {
+						if ( last_failure_repeats_ >= REFLECT_REPEAT_LIMIT ) {
 							state_ = loop_state::replan;
 
 							break;
@@ -496,7 +501,7 @@ namespace mcode {
 				}
 
 				case loop_state::replan: {
-					if ( replan_count_ >= 2 ) {
+					if ( replan_count_ >= REPLAN_GUARD_LIMIT ) {
 						finish_run( loop_state::handoff, "no new plan" );
 						state_ = loop_state::handoff;
 

@@ -38,13 +38,11 @@ namespace mcode {
 		return repeats;
 	}
 
-	auto assemble_request( const tool_registry& registry, const std::string_view system_prompt,
-		const std::vector< model::message >& history, const std::string_view model_name,
-		const model::capabilities&, const model::cache_mode mode, const bool near_budget,
-		const std::string_view recitation ) -> assembled_request {
+	auto assemble_request( const tool_registry& registry, const assemble_request_options& options )
+		-> assembled_request {
 		auto out = assembled_request{ };
-		out.request.model = std::string{ model_name };
-		out.request.cache.mode = mode;
+		out.request.model = std::string{ options.model_name };
+		out.request.cache.mode = options.mode;
 
 		auto tools = registry.all( );
 		std::sort( tools.begin( ), tools.end( ),
@@ -66,28 +64,28 @@ namespace mcode {
 
 		auto system_block = model::block{ };
 		system_block.kind = model::block_kind::text;
-		system_block.text = std::string{ system_prompt };
+		system_block.text = std::string{ options.system_prompt };
 		system.blocks.push_back( std::move( system_block ) );
 
 		out.request.messages.push_back( std::move( system ) );
 
-		for ( const auto& value : history ) {
+		for ( const auto& value : options.history ) {
 			out.request.messages.push_back( value );
 		}
 
-		if ( !recitation.empty( ) ) {
+		if ( !options.recitation.empty( ) ) {
 			auto tail = model::message{ };
 			tail.speaker = model::role::user;
 
 			auto tail_block = model::block{ };
 			tail_block.kind = model::block_kind::text;
-			tail_block.text = std::string{ recitation };
+			tail_block.text = std::string{ options.recitation };
 			tail.blocks.push_back( std::move( tail_block ) );
 
 			out.request.messages.push_back( std::move( tail ) );
 		}
 
-		if ( near_budget ) {
+		if ( options.near_budget ) {
 			auto note = model::message{ };
 			note.speaker = model::role::user;
 

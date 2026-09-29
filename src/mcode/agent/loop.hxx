@@ -34,6 +34,11 @@ namespace mcode {
 	inline constexpr std::size_t MAX_REFLECTIONS_PER_FAILURE_CLASS = 2;
 	inline constexpr std::size_t MAX_REFLECTIONS_PER_RUN = 4;
 
+	// Escalation and guard thresholds for the thrash/replan/reflection policy.
+	inline constexpr std::size_t THRASH_ESCALATION_FACTOR = 2;
+	inline constexpr std::size_t REPLAN_GUARD_LIMIT = 2;
+	inline constexpr std::size_t REFLECT_REPEAT_LIMIT = 2;
+
 	// Compaction and clearing triggers, fractions of the usable window.
 	inline constexpr double COMPACTION_TRIGGER_FRACTION = 0.80;
 	inline constexpr double TOOL_CLEAR_TRIGGER_FRACTION = 0.60;
@@ -137,7 +142,7 @@ namespace mcode {
 		// never silent.
 		[[nodiscard]] auto write_failures( ) const noexcept -> std::uint64_t { return write_failures_; }
 
-		auto append( std::string kind, std::string payload_json = "{}" ) -> event;
+		auto append( const std::string kind, std::string payload_json = "{}" ) -> event;
 
 		// Adds an event that was read back from disk, preserving its recorded
 		// sequence, timestamp, run, turn, step and payload.
@@ -158,7 +163,7 @@ namespace mcode {
 		// existing file so a resumed session continues numbering.
 		[[nodiscard]] auto next_sequence( ) const noexcept -> std::uint64_t { return next_sequence_; }
 
-		auto set_branch_id( std::string id ) -> void { branch_id_ = std::move( id ); }
+		auto set_branch_id( const std::string id ) -> void { branch_id_ = std::move( id ); }
 
 		[[nodiscard]] auto to_jsonl( ) const -> std::string;
 
@@ -245,15 +250,24 @@ namespace mcode {
 		bool near_budget_note = false;
 	};
 
+	// Inputs to assemble_request. A struct rather than eight positional
+	// parameters.
+	struct assemble_request_options {
+		std::string_view system_prompt;
+		const std::vector< model::message >& history;
+		std::string_view model_name;
+		model::cache_mode mode = model::cache_mode::none;
+		bool near_budget = false;
+		std::string_view recitation;
+	};
+
 	// Assembles one request from the registry and the history.
 	//
 	// The prefix order is tools → system → messages and is byte-stable for the
 	// session: sorted tool schemas, no timestamps, no cwd, no session id. The
 	// near-budget note and everything mutable live in the volatile tail.
-	[[nodiscard]] auto assemble_request( const tool_registry& registry, std::string_view system_prompt,
-		const std::vector< model::message >& history, std::string_view model_name,
-		const model::capabilities& caps, model::cache_mode mode, bool near_budget,
-		std::string_view recitation ) -> assembled_request;
+	[[nodiscard]] auto assemble_request( const tool_registry& registry,
+		const assemble_request_options& options ) -> assembled_request;
 
 	// The core system prompt, sections 1-8 in the cache-stable order. Byte-stable
 	// for the session; the environment block and recitation live in the tail.
@@ -264,7 +278,7 @@ namespace mcode {
 	public:
 		// Records one call. Returns the repeat count of this exact hash within the
 		// window, so the caller can escalate monotonically.
-		auto record( std::string_view tool_name, std::string_view args_json ) -> std::size_t;
+		auto record( const std::string_view tool_name, const std::string_view args_json ) -> std::size_t;
 
 		[[nodiscard]] auto repeat_count( ) const noexcept -> std::size_t { return current_repeats_; }
 
@@ -313,11 +327,11 @@ namespace mcode {
 
 		[[nodiscard]] auto execute( const tool_call& call ) -> tool_outcome;
 
-		auto register_handler( std::string name, tool_handler handler ) -> void;
+		auto register_handler( const std::string name, tool_handler handler ) -> void;
 
 		// Runs the ReAct state machine over one user task until a terminal state.
 		// The scripted client in tests, the HTTP client in production.
-		[[nodiscard]] auto run( std::string_view user_task ) -> result< turn_outcome >;
+		[[nodiscard]] auto run( const std::string_view user_task ) -> result< turn_outcome >;
 
 		[[nodiscard]] auto budget( ) const noexcept -> const session_budget& { return budget_; }
 		[[nodiscard]] auto budget( ) noexcept -> session_budget& { return budget_; }
@@ -325,7 +339,7 @@ namespace mcode {
 
 		// The command the Verify state runs; empty means none configured, which
 		// routes Verify to Handoff per the no-self-certification rule.
-		auto set_verification_command( std::string command ) -> void {
+		auto set_verification_command( const std::string command ) -> void {
 			verification_command_ = std::move( command );
 		}
 
@@ -339,14 +353,14 @@ namespace mcode {
 		auto observe_result( const tool_call& call, const tool_outcome& outcome ) -> void;
 
 		// Marks a run's terminal state and emits the structured summary.
-		auto finish_run( loop_state terminal, std::string_view reason ) -> void;
+		auto finish_run( const loop_state terminal, const std::string_view reason ) -> void;
 
 	private:
 		auto run_state_machine( ) -> turn_outcome;
 		auto request_and_fold( model::effort effort ) -> result< bool >;
 		auto dispatch_calls( const std::vector< tool_call >& calls ) -> bool;
 		auto maybe_compact( ) -> status;
-		auto publish( events::kind type, std::string payload_json ) -> void;
+		auto publish( const events::kind type, std::string payload_json ) -> void;
 
 		tool_registry* registry_ = nullptr;
 		model::model_client* client_ = nullptr;
