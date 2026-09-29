@@ -63,7 +63,7 @@ TEST_CASE( "a config with an mcp server loads", "[config][mcp]" ) {
 
 	write_file( root / "config.toml", R"(
 [mcp.servers.filesystem]
-command = "npx"
+command = ["npx"]
 args = ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allow"]
 enabled = true
 )" );
@@ -150,7 +150,7 @@ enabled = true
 enabled = false
 
 [mcp.servers.filesystem]
-command = "npx"
+command = ["npx"]
 args = ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allow"]
 enabled = true
 )" );
@@ -193,7 +193,7 @@ enabled = true
 TEST_CASE( "a server without enabled = true stays disabled", "[mcp]" ) {
 	auto servers = parse_servers( R"(
 [mcp.servers.filesystem]
-command = "npx"
+command = ["npx"]
 )" );
 
 	REQUIRE( static_cast< bool >( servers ) );
@@ -239,10 +239,12 @@ command = "npx"
 }
 
 TEST_CASE( "an unknown field under a server is refused", "[mcp]" ) {
+	// Inline tables are refused by the TOML reader itself, so the unknown field
+	// is written as a plain key -- the shape a real typo takes.
 	auto servers = parse_servers( R"(
 [mcp.servers.filesystem]
 command = ["npx"]
-env = { FOO = "bar" }
+env = "production"
 )" );
 
 	REQUIRE_FALSE( static_cast< bool >( servers ) );
@@ -286,15 +288,18 @@ command = ["npx"]
 }
 
 TEST_CASE( "the token estimate uses the named heuristic", "[mcp]" ) {
-	// 8192 characters over the named divisor, exactly at the threshold: not a
-	// warning. One character more is.
-	const auto at_threshold = std::string( 8192, 'x' );
+	// The threshold is 8192 TOKENS; at four characters per token that is 32768
+	// characters, exactly at the threshold: not a warning. One character more
+	// is one token more and crosses it.
+	const auto at_threshold = std::string( 32768, 'x' );
 
 	CHECK( mcp::estimate_schema_tokens( at_threshold ) == mcp::MCP_SCHEMA_TOKEN_WARNING );
 	CHECK_FALSE( mcp::estimate_exceeds_warning(
 		mcp::estimate_schema_tokens( at_threshold ) ) );
 
-	const auto over_threshold = std::string( 8193, 'x' );
+	// Integer division: one character more still divides to 8192, so the
+	// crossing needs a whole extra token -- 32772 characters is 8193 tokens.
+	const auto over_threshold = std::string( 32772, 'x' );
 
 	CHECK( mcp::estimate_exceeds_warning(
 		mcp::estimate_schema_tokens( over_threshold ) ) );
@@ -332,7 +337,7 @@ end
 	auto store = ext::mcp_server_store{ };
 
 	auto options = ext::loader_options{ };
-	options.register_api = [ &store ]( const ext::registration& given ) -> status {
+	options.register_api = [ &store, &registry ]( const ext::registration& given ) -> status {
 		return given.surface.install( ext::api_surface::install_request{
 			.host = given.host, .registry = registry, .providers = given.providers,
 			.hooks = given.hooks, .details = given.details, .servers = &store } );
@@ -376,7 +381,7 @@ end
 	auto store = ext::mcp_server_store{ };
 
 	auto options = ext::loader_options{ };
-	options.register_api = [ &store ]( const ext::registration& given ) -> status {
+	options.register_api = [ &store, &registry ]( const ext::registration& given ) -> status {
 		return given.surface.install( ext::api_surface::install_request{
 			.host = given.host, .registry = registry, .providers = given.providers,
 			.hooks = given.hooks, .details = given.details, .servers = &store } );
@@ -448,7 +453,7 @@ end
 	auto store = ext::mcp_server_store{ };
 
 	auto options = ext::loader_options{ };
-	options.register_api = [ &store ]( const ext::registration& given ) -> status {
+	options.register_api = [ &store, &registry ]( const ext::registration& given ) -> status {
 		return given.surface.install( ext::api_surface::install_request{
 			.host = given.host, .registry = registry, .providers = given.providers,
 			.hooks = given.hooks, .details = given.details, .servers = &store } );
