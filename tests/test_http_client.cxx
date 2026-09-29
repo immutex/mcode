@@ -203,6 +203,75 @@ TEST_CASE( "an SSE event arriving with the headers is not dropped", "[http]" ) {
 	CHECK( received[ 1 ].data == "[DONE]" );
 }
 
+TEST_CASE( "a throwing event callback becomes a failure, not a terminate", "[http]" ) {
+	// The model client reports an unusable stream event by throwing out of the
+	// callback. Nothing between it and the transport catches, so a throw that
+	// escaped here reached std::terminate: observed as 0xC0000409 against a real
+	// gateway, on whichever request first delivered an event the applier rejected.
+	// The boundary must convert it into a failure.
+	const auto response = std::string{ "HTTP/1.1 200 OK\r\n"
+		"Content-Type: text/event-stream\r\n"
+		"Connection: close\r\n\r\n" } + "data: {\"delta\":\"first\"}\n\n";
+
+	const auto server = loopback_server{ response };
+
+	auto request = http_request{ };
+	request.url = server.url( );
+
+	auto result = http_client{ }.stream_sse( request,
+		[]( sse_event&& ) -> void { throw std::runtime_error{ "malformed event" }; } );
+
+	REQUIRE_FALSE( static_cast< bool >( result ) );
+	CHECK( result.error( ).code == mcode::errc::protocol );
+}
+
+TEST_CASE( "a chunked SSE body is decoded before it is parsed", "[http]" ) {
+	// Cloudflare fronts the gateway and sends the stream chunked. The body is read
+	// straight off the socket, so the framing reached the event parser: a chunk
+	// boundary inside an event split its JSON across two lines, the continuation
+	// was discarded as a line with no colon, and the truncated payload was
+	// rejected. Observed against the real endpoint as 0xC0000409; a de-chunking
+	// loopback proxy hid it.
+	const auto first = std::string{ "data: {\"del" };
+	const auto second = std::string{ "ta\":\"split\"}\n\n" };
+
+	const auto size = []( const std::size_t bytes ) {
+		auto out = std::string{ };
+		auto value = bytes;
+
+		do {
+			const auto digit = value & 0xf;
+			out.insert( out.begin( ),
+				static_cast< char >( digit < 10 ? '0' + digit : 'a' + digit - 10 ) );
+			value >>= 4;
+		} while ( value != 0 );
+
+		return out;
+	};
+
+	const auto response = std::string{ "HTTP/1.1 200 OK\r\n"
+		"Content-Type: text/event-stream\r\n"
+		"Transfer-Encoding: chunked\r\n"
+		"Connection: close\r\n\r\n" }
+		+ size( first.size( ) ) + "\r\n" + first + "\r\n"
+		+ size( second.size( ) ) + "\r\n" + second + "\r\n"
+		+ "0\r\n\r\n";
+
+	const auto server = loopback_server{ response };
+
+	auto request = http_request{ };
+	request.url = server.url( );
+
+	auto received = std::vector< sse_event >{ };
+
+	auto result = http_client{ }.stream_sse( request,
+		[&received]( sse_event&& event ) { received.push_back( std::move( event ) ); } );
+
+	REQUIRE( static_cast< bool >( result ) );
+	REQUIRE( received.size( ) == 1 );
+	CHECK( received[ 0 ].data == "{\"delta\":\"split\"}" );
+}
+
 TEST_CASE( "a successful stream leaves the failure struct untouched", "[http]" ) {
 	const auto response = std::string{ "HTTP/1.1 200 OK\r\n"
 		"Content-Type: text/event-stream\r\n"
