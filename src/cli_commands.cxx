@@ -168,7 +168,7 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 
 	// Declared outside the branch: the loaded extensions own the closures their
 	// tools run through, so the result has to outlive the loop.
-	auto loaded = mcode::ext::load_result{ };
+	auto extensions = mcode::ext::load_result{ };
 
 	if ( !parsed->no_extensions ) {
 		auto options = mcode::ext::loader_options{ };
@@ -190,10 +190,10 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 			roots.push_back( *bundled_directory / "extensions" );
 		}
 
-		loaded = mcode::ext::load_extensions( roots, registry, hooks, options );
+		extensions = mcode::ext::load_extensions( roots, registry, hooks, options );
 
 		if ( parsed->verbose ) {
-			for ( const auto& failure : loaded.report.failed ) {
+			for ( const auto& failure : extensions.report.failed ) {
 				std::fprintf( stderr, "mcode: extension '%s' failed to load: %s\n",
 					failure.name.c_str( ), failure.reason.c_str( ) );
 			}
@@ -433,10 +433,10 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	// extension's VM. Without this the loop finds the definition and reports
 	// "no handler registered", which is what happened the first time an
 	// extension registered a *tool* rather than a provider.
-	for ( const auto& [ name, owner ] : loaded.tool_owners ) {
-		loop.register_handler( name, [ &loaded, tool_name = name ](
+	for ( const auto& [ name, owner ] : extensions.tool_owners ) {
+		loop.register_handler( name, [ &extensions, tool_name = name ](
 			const std::string_view arguments_json ) -> mcode::result< std::string > {
-			return loaded.invoke( tool_name, arguments_json );
+			return extensions.invoke( tool_name, arguments_json );
 		} );
 	}
 
