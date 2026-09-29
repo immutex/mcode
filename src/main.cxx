@@ -24,7 +24,10 @@
 #include "mcode/support/logging.hxx"
 #include "mcode/support/text.hxx"
 #include "mcode/tools/context.hxx"
-#include "mcode/tools/exec_policy.hxx"
+#include "mcode/perm/approval_headless.hxx"
+#include "mcode/perm/approval_terminal.hxx"
+#include "mcode/perm/permission.hxx"
+#include "mcode/perm/store.hxx"
 #include "mcode/tools/register.hxx"
 #include "smoke.hxx"
 
@@ -527,12 +530,25 @@ auto main( int argument_count, char** arguments ) -> int {
 		}
 
 		auto reads = mcode::tools::session_reads{ };
-		auto policy = mcode::tools::exec_policy{ };
+
+		// The smoke test is headless: the fail-closed source never prompts.
+		auto store = mcode::perm::remember_store{
+			std::filesystem::temp_directory_path( ) / "mcode-smoke-permissions.json" };
+		auto engine = mcode::perm::permission_engine{ *space, &store };
+		auto headless_source = mcode::perm::headless_approval_source{ };
+
+		{
+			auto engine_options = mcode::perm::permission_engine::options{ };
+			engine_options.headless = true;
+			engine.set_options( engine_options );
+			engine.set_approval_source( &headless_source );
+			std::ignore = engine.load_store( );
+		}
 
 		auto tools_context = mcode::tools::tool_context{ };
 		tools_context.space = &*space;
 		tools_context.reads = &reads;
-		tools_context.policy = &policy;
+		tools_context.permissions = &engine;
 		tools_context.run_id = "smoke";
 		tools_context.headless = true;
 

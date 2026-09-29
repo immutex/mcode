@@ -5,15 +5,19 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <deque>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <optional>
 #include <string>
 
 #include "mcode/core/registry.hxx"
 #include "mcode/fs/workspace.hxx"
+#include "mcode/perm/approval.hxx"
+#include "mcode/perm/permission.hxx"
+#include "mcode/perm/store.hxx"
 #include "mcode/tools/errors.hxx"
-#include "mcode/tools/exec_policy.hxx"
 #include "mcode/tools/exec_tools.hxx"
 #include "mcode/tools/file_tools.hxx"
 #include "mcode/tools/register.hxx"
@@ -34,15 +38,58 @@ namespace tools_test {
 	inline constexpr std::size_t TOKEN_CHARS_PER_TOKEN = 4;
 	inline constexpr std::size_t CORE_SCHEMA_BUDGET_TOKENS = 3000;
 
+	// A scripted approval source: answers come from a queue, never from a
+	// terminal. Records what it was asked, so tests can assert prompt counts.
+	class scripted_approval_source final : public perm::approval_source {
+	public:
+		auto queue( const perm::approval_outcome answer ) -> void {
+			answers_.push_back( answer );
+		}
+
+		[[nodiscard]] auto asks( ) const noexcept -> std::size_t {
+			return asks_;
+		}
+
+		[[nodiscard]] auto last_request( ) const -> const perm::approval_request& {
+			return last_request_;
+		}
+
+		[[nodiscard]] auto ask( const perm::approval_request& request,
+			const std::function< std::string( ) >& detail ) -> perm::approval_outcome override {
+			++asks_;
+			last_request_ = request;
+
+			std::ignore = detail;
+
+			if ( answers_.empty( ) ) {
+				return perm::approval_outcome::refused;
+			}
+
+			const auto answer = answers_.front( );
+			answers_.pop_front( );
+
+			return answer;
+		}
+
+	private:
+		std::deque< perm::approval_outcome > answers_;
+		std::size_t asks_ = 0;
+		perm::approval_request last_request_;
+	};
+
 	struct fixture {
 		std::filesystem::path path;
 		workspace space;
 		session_reads reads;
-		exec_policy policy;
+		perm::remember_store store;
+		scripted_approval_source approval;
+		perm::permission_engine engine;
 		tool_context context;
 
-		explicit fixture( bool yolo = false )
-			: space( make_space( ) ), policy( make_policy( yolo ) ) {
+		explicit fixture( const bool yolo = false )
+			: space( make_space( ) ),
+			store( test::scratch_directory( "mcode-perm-store" ) / "permissions.json" ),
+			engine( space, &store ) {
 			path = test::scratch_directory( "mcode-tools-test" );
 
 			write_raw( "src/main.cxx", "int main( ) {\n\treturn 0;\n}\n" );
@@ -51,9 +98,20 @@ namespace tools_test {
 			write_raw( "notes.txt", "alpha\nbeta\ngamma\n" );
 
 			space = workspace::open( path ).value( );
+			engine = perm::permission_engine{ space, &store };
+
+			auto options = perm::permission_engine::options{ };
+			options.yolo = yolo;
+			// The engine must be free to prompt: the scripted source answers
+			// without a terminal. context.headless stays true for the ask_user
+			// tests, which is a separate flag.
+			options.headless = false;
+			engine.set_options( options );
+			engine.set_approval_source( &approval );
+
 			context.space = &space;
 			context.reads = &reads;
-			context.policy = &policy;
+			context.permissions = &engine;
 			context.run_id = "test-run";
 			context.headless = true;
 		}
@@ -101,13 +159,6 @@ namespace tools_test {
 	private:
 		static auto make_space( ) -> workspace {
 			return workspace::open( std::filesystem::current_path( ) ).value( );
-		}
-
-		static auto make_policy( bool yolo ) -> exec_policy {
-			auto value = exec_policy{ };
-			value.yolo = yolo;
-
-			return value;
 		}
 	};
 

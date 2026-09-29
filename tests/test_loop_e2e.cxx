@@ -26,6 +26,9 @@
 #include "mcode/model/http_client.hxx"
 #include "mcode/model/provider.hxx"
 #include "mcode/net/http_client.hxx"
+#include "mcode/perm/permission.hxx"
+#include "mcode/perm/approval_headless.hxx"
+#include "mcode/perm/store.hxx"
 #include "mcode/support/json.hxx"
 #include "mcode/tools/context.hxx"
 #include "mcode/tools/register.hxx"
@@ -219,11 +222,22 @@ TEST_CASE( "exec drives a real read tool call over a loopback provider", "[loop]
 	auto loop = agent_loop{ deps };
 
 	auto reads = tools::session_reads{ };
-	auto policy = tools::exec_policy{ };
+	auto store = perm::remember_store{
+		test::scratch_directory( "mcode-e2e-perm" ) / "permissions.json" };
+	auto engine = perm::permission_engine{ *space, &store };
+	auto headless = perm::headless_approval_source{ };
+
+	{
+		auto options = perm::permission_engine::options{ };
+		options.headless = true;
+		engine.set_options( options );
+		engine.set_approval_source( &headless );
+	}
+
 	auto context = tools::tool_context{ };
 	context.space = &*space;
 	context.reads = &reads;
-	context.policy = &policy;
+	context.permissions = &engine;
 	context.run_id = "e2e";
 	context.headless = true;
 

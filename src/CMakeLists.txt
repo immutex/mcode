@@ -47,9 +47,14 @@ add_library(mcode_core STATIC
     mcode/fs/workspace.cxx
     mcode/fs/workspace_write.cxx
 
+    mcode/perm/permission.cxx
+    mcode/perm/store.cxx
+    mcode/perm/argv.cxx
+    mcode/perm/approval_terminal.cxx
+    mcode/perm/approval_headless.cxx
+
     mcode/tools/session_reads.cxx
     mcode/tools/truncate.cxx
-    mcode/tools/exec_policy.cxx
     mcode/tools/errors.cxx
     mcode/tools/tool_args.cxx
     mcode/tools/read_tool.cxx

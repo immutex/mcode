@@ -7,6 +7,7 @@
 
 #include "mcode/tools/errors.hxx"
 #include "mcode/tools/truncate.hxx"
+#include "mcode/perm/permission.hxx"
 #include "mcode/fs/workspace.hxx"
 #include "mcode/platform/seams.hxx"
 #include "mcode/support/json.hxx"
@@ -83,6 +84,49 @@ namespace mcode::tools {
 			return error_result( "refusing to write " + std::string{ path },
 				"paths under .mcode/ or .git/ are denied to tools; the harness writes its own "
 				"state there and a tool write there would forge evidence or escape the trust boundary",
+				false );
+		}
+
+		// The outside-workspace write decision, shared by write and edit. The
+		// engine resolves it: a deny rule denies, the default set prompts (or
+		// denies headless), and an answer is honoured. Protected paths (.git/,
+		// .mcode/) are denied by the floor before any rule runs.
+		[[nodiscard]] auto check_write_permission( tool_context& context,
+			const std::string_view path ) -> std::optional< std::string > {
+			auto& space = *context.space;
+			auto resolved = space.resolve( path );
+
+			if ( resolved && !space.is_protected( *resolved ) ) {
+				return std::nullopt;
+			}
+
+			auto candidate = std::filesystem::path{ space.root( ) } /
+				std::filesystem::path{ path };
+			auto canonical = platform::canonicalize( candidate );
+
+			if ( !canonical ) {
+				return error_result( "cannot resolve " + std::string{ path } + ": " +
+						resolved.error( ).msg,
+					"check the path; paths are relative to the workspace root", false );
+			}
+
+			auto request = perm::permission_request{ };
+			request.tool_name = "write";
+			request.klass = tool_class::write;
+			request.resource = canonical->generic_string( );
+
+			if ( context.permissions->decide( request ) == perm::permission_decision::allow ) {
+				return std::nullopt;
+			}
+
+			const auto& verdict = context.permissions->last_verdict( );
+
+			return error_result(
+				"write denied by the permission engine: " + std::string{ path } +
+					( verdict.reason.empty( ) ? std::string{ } : " (" + verdict.reason + ")" ),
+				verdict.matched.scope == "floor"
+					? "this path is protected; no flag or config overrides it"
+					: "the path is outside the workspace; approve it interactively or add an allow rule",
 				false );
 		}
 
@@ -291,6 +335,10 @@ namespace mcode::tools {
 			return refuse_protected( *path );
 		}
 
+		if ( const auto denied = check_write_permission( context, *path ) ) {
+			return *denied;
+		}
+
 		auto error_code = std::error_code{ };
 		const auto exists = std::filesystem::exists( platform::to_extended_path( *resolved ),
 			error_code );
@@ -382,6 +430,10 @@ namespace mcode::tools {
 
 		if ( space.is_protected( *resolved ) ) {
 			return refuse_protected( *path );
+		}
+
+		if ( const auto denied = check_write_permission( context, *path ) ) {
+			return *denied;
 		}
 
 		auto error_code = std::error_code{ };

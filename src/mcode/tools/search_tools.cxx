@@ -9,6 +9,7 @@
 
 #include "mcode/tools/errors.hxx"
 #include "mcode/tools/truncate.hxx"
+#include "mcode/perm/permission.hxx"
 #include "mcode/fs/workspace.hxx"
 #include "mcode/platform/seams.hxx"
 #include "mcode/support/text.hxx"
@@ -322,6 +323,13 @@ namespace mcode::tools {
 		}
 
 		auto& space = *context.space;
+
+		if ( context.permissions == nullptr ) {
+			return error_result( "the permission engine is not attached",
+				"construct the engine and assign tool_context::permissions before registering tools",
+				false );
+		}
+
 		auto rules = ignore_rules{ };
 		rules.load( space.root( ) );
 
@@ -403,6 +411,13 @@ namespace mcode::tools {
 		}
 
 		auto& space = *context.space;
+
+		if ( context.permissions == nullptr ) {
+			return error_result( "the permission engine is not attached",
+				"construct the engine and assign tool_context::permissions before registering tools",
+				false );
+		}
+
 		auto rules = ignore_rules{ };
 		rules.load( space.root( ) );
 

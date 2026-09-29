@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <map>
+#include <utility>
 
 #include "mcode/support/json.hxx"
 
@@ -103,7 +104,14 @@ namespace mcode {
 		return out;
 	}
 
-	auto build_system_prompt( const tool_registry& registry ) -> std::string {
+	auto build_system_prompt( const tool_registry& registry,
+		const std::string_view instruction_chain, const std::string_view skill_index )
+		-> std::string {
+		// Sections 10-11 are the skills workstream's; the parameters are
+		// accepted and ignored until that body lands.
+		std::ignore = instruction_chain;
+		std::ignore = skill_index;
+
 		auto has_tool = [&]( const std::string_view name ) {
 			return registry.find( name ) != nullptr;
 		};

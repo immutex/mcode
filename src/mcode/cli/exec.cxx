@@ -95,6 +95,27 @@ namespace mcode::cli {
 				options.no_extensions = true;
 			} else if ( argument == "--yolo" ) {
 				options.yolo = true;
+			} else if ( argument == "--approval" ) {
+				auto value = next_value( argument );
+
+				if ( !value ) {
+					return std::unexpected( value.error( ) );
+				}
+
+				if ( *value != "never" && *value != "on-request" && *value != "always" ) {
+					return std::unexpected( fail( errc::config,
+						"--approval needs never, on-request or always, got '" + *value + "'" ) );
+				}
+
+				options.approval = *value;
+			} else if ( argument == "--add-dir" ) {
+				auto value = next_value( argument );
+
+				if ( !value ) {
+					return std::unexpected( value.error( ) );
+				}
+
+				options.add_dirs.push_back( *value );
 			} else if ( argument == "--model" ) {
 				auto value = next_value( argument );
 
@@ -242,8 +263,11 @@ namespace mcode::cli {
 		out += "  --cwd <path>           working directory\n";
 		out += "  --max-steps <n>        stop after n steps\n";
 		out += "  --max-budget-usd <n>   stop after spending n USD\n";
+		out += "  --approval <mode>      never | on-request | always (default on-request)\n";
+		out += "  --add-dir <path>       add an extra workspace root for this run\n";
 		out += "  --no-extensions        disable every extension\n";
-		out += "  --yolo                 skip approval prompts (still sandboxed)\n";
+		out += "  --yolo                 skip approval prompts; the hard-deny floor and\n";
+		out += "                         permissions.deny still apply (no OS sandbox exists yet)\n";
 		out += "  -v, --verbose          more diagnostics on stderr\n";
 		out += "\nexit codes:\n";
 		out += "  0 completed   1 verification failed   2 usage error\n";

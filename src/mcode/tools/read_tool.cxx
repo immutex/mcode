@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "mcode/tools/errors.hxx"
+#include "mcode/perm/permission.hxx"
 #include "mcode/fs/workspace.hxx"
 #include "mcode/platform/seams.hxx"
 #include "mcode/support/text.hxx"
@@ -314,6 +315,38 @@ namespace mcode::tools {
 
 		auto& space = *context.space;
 		auto resolved = space.resolve( *path );
+
+		if ( !resolved ) {
+			// Outside the workspace is a decision, not a hard refusal: a deny
+			// rule denies it, the default set prompts (or denies headless), and
+			// approval = always prompts even here. The resource is the canonical
+			// spelling of the path, resolved against the root.
+			auto candidate = std::filesystem::path{ space.root( ) } /
+				std::filesystem::path{ *path };
+			auto canonical = platform::canonicalize( candidate );
+
+			if ( !canonical ) {
+				return error_result( "cannot resolve " + *path + ": " + resolved.error( ).msg,
+					"check the path; paths are relative to the workspace root", false );
+			}
+
+			auto request = perm::permission_request{ };
+			request.tool_name = "read";
+			request.klass = tool_class::read;
+			request.resource = canonical->generic_string( );
+
+			if ( context.permissions->decide( request ) != perm::permission_decision::allow ) {
+				const auto& verdict = context.permissions->last_verdict( );
+
+				return error_result(
+					"read denied by the permission engine: " + *path +
+						( verdict.reason.empty( ) ? std::string{ } : " (" + verdict.reason + ")" ),
+					"the path is outside the workspace; add an allow rule for it or run interactively to approve",
+					false );
+			}
+
+			resolved = *canonical;
+		}
 
 		auto error_code = std::error_code{ };
 

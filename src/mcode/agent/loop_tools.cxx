@@ -5,9 +5,50 @@
 #include <string_view>
 #include <utility>
 
+#include "mcode/perm/argv.hxx"
+#include "mcode/perm/permission.hxx"
 #include "mcode/support/json.hxx"
 
 namespace mcode {
+
+	namespace {
+
+		// The resource the engine matches on, per tool. Exec tools match the
+		// canonical parsed argv; everything else matches its raw arguments
+		// blob, which the engine treats as an opaque subject for non-path,
+		// non-exec classes.
+		[[nodiscard]] auto permission_resource( const tool_call& call ) -> std::string {
+			if ( call.name != "bash" ) {
+				return call.args_json;
+			}
+
+			const auto parsed = json::document::parse(
+				call.args_json.empty( ) ? std::string_view{ "{}" } :
+				std::string_view{ call.args_json } );
+
+			if ( !parsed ) {
+				return { };
+			}
+
+			const auto command = parsed->pointer_string( "/command" );
+
+			if ( !command ) {
+				return { };
+			}
+
+			const auto tokens = perm::parse_command_line( *command );
+
+			if ( !tokens ) {
+				// Unparsable or compound: the engine never sees a string it
+				// could mistake for a single command. The empty resource makes
+				// the default set's exec rule an ask, never an allow.
+				return { };
+			}
+
+			return perm::canonical_argv( *tokens );
+		}
+
+	}
 
 	auto agent_loop::execute( const tool_call& call ) -> tool_outcome {
 		const auto started = std::chrono::steady_clock::now( );
@@ -72,6 +113,44 @@ namespace mcode {
 			return finish( );
 		}
 
+		// The permission check, ahead of every handler. One engine, one check
+		// point: built-in, extension and MCP tools all pass through here, and
+		// the class comes from the registry rather than the tool.
+		if ( permissions_ != nullptr ) {
+			auto request = perm::permission_request{ };
+			request.tool_name = call.name;
+			request.klass = definition->klass;
+			request.owner = definition->owner;
+			request.resource = permission_resource( call );
+
+			const auto decision = permissions_->decide( request );
+
+			if ( decision == perm::permission_decision::deny ) {
+				const auto& verdict = permissions_->last_verdict( );
+
+				outcome.ok = false;
+				outcome.code = errc::tool_failed;
+				outcome.error_message = "denied by the permission engine: " +
+					( verdict.reason.empty( ) ? std::string{ "policy" } : verdict.reason );
+				outcome.permission_denied = true;
+				permission_denied_ = true;
+
+				auto payload = std::string{ "{\"ok\":false,\"denied\":true,\"tool\":\"" };
+				json::append_escaped( payload, call.name );
+				payload += "\",\"rule\":\"";
+				json::append_escaped( payload, verdict.matched.scope + ": " +
+					verdict.matched.pattern );
+				payload += "\",\"reason\":\"";
+				json::append_escaped( payload, verdict.reason );
+				payload += "\"}";
+
+				log_->append( "tool.result", payload );
+				publish( events::kind::tool_result, std::move( payload ) );
+
+				return finish( );
+			}
+		}
+
 		auto produced = result< std::string >{ std::unexpected( fail( errc::tool_failed,
 			"tool handler threw" ) ) };
 
@@ -106,6 +185,10 @@ namespace mcode {
 
 		outcome.ok = true;
 		outcome.content = *produced;
+
+		// A success after a denial is the run recovering: the flag must not
+		// survive it, or a recovered run would still exit 5.
+		permission_denied_ = false;
 
 		{
 			auto payload = std::string{ "{\"ok\":true,\"tool\":\"" };

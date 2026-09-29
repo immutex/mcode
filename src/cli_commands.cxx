@@ -17,11 +17,14 @@
 #include "mcode/model/http_client.hxx"
 #include "mcode/model/provider.hxx"
 #include "mcode/net/http_client.hxx"
+#include "mcode/perm/approval_headless.hxx"
+#include "mcode/perm/approval_terminal.hxx"
+#include "mcode/perm/permission.hxx"
+#include "mcode/perm/store.hxx"
 #include "mcode/platform/seams.hxx"
 #include "mcode/support/config.hxx"
 #include "mcode/support/time.hxx"
 #include "mcode/tools/context.hxx"
-#include "mcode/tools/exec_policy.hxx"
 #include "mcode/tools/register.hxx"
 
 namespace {
@@ -251,15 +254,50 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	}
 
 	auto reads = mcode::tools::session_reads{ };
-	auto policy = mcode::tools::exec_policy{ };
-	policy.yolo = parsed->yolo;
+
+	// The permission engine, the approval source and the remember store.
+	// Terminal source when a TTY is attached and --json is absent; headless
+	// otherwise. Integration rewrites this block properly.
+	auto store_file = mcode::platform::app_data_path( mcode::platform::data_kind::config );
+	auto store = mcode::perm::remember_store{ store_file
+		? *store_file / "permissions.json"
+		: std::filesystem::path{ ".mcode/permissions.json" } };
+
+	auto engine = mcode::perm::permission_engine{ *space, &store };
+
+	auto headless_source = mcode::perm::headless_approval_source{ };
+	auto terminal_source = mcode::perm::terminal_approval_source{ };
+
+	{
+		auto engine_options = mcode::perm::permission_engine::options{ };
+		engine_options.yolo = parsed->yolo;
+		engine_options.headless = parsed->json;
+		engine_options.approval = parsed->approval.empty( )
+			? config->get_string( "sandbox.approval" ).value_or( std::string{ "on-request" } )
+			: parsed->approval;
+
+		if ( parsed->yolo ) {
+			engine_options.approval = "never";
+		}
+
+		engine.set_options( engine_options );
+		engine.set_approval_source( parsed->json
+			? static_cast< mcode::perm::approval_source* >( &headless_source )
+			: static_cast< mcode::perm::approval_source* >( &terminal_source ) );
+
+		std::ignore = engine.load_store( );
+
+		for ( const auto& dir : parsed->add_dirs ) {
+			engine.add_root( dir );
+		}
+	}
 
 	auto run_id = std::to_string( static_cast< long long >( mcode::support::epoch_milliseconds( ) ) );
 
 	auto tools_context = mcode::tools::tool_context{ };
 	tools_context.space = &*space;
 	tools_context.reads = &reads;
-	tools_context.policy = &policy;
+	tools_context.permissions = &engine;
 	tools_context.run_id = run_id;
 	tools_context.headless = parsed->json;
 
