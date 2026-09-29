@@ -400,15 +400,32 @@ TEST_CASE( "bash denies exec by default and allows with an argv pattern", "[tool
 	auto setup = fixture{ };
 
 	const auto denied = run_tool( handle_bash,
-		R"({"command":"echo hi"})", setup );
+#if defined( _WIN32 )
+		R"({"command":"findstr x missing.txt"})"
+#else
+		R"({"command":"grep x missing.txt"})"
+#endif
+		, setup );
 	CHECK( is_error_json( denied ) );
 	CHECK( denied.find( "denied by the approval policy" ) != std::string::npos );
 
-	setup.policy.allow_argv.push_back( "echo" );
+	setup.policy.allow_argv.push_back(
+#if defined( _WIN32 )
+		"findstr"
+#else
+		"grep"
+#endif
+	);
 
-	const auto allowed = run_tool( handle_bash, R"({"command":"echo hi"})", setup );
+	const auto allowed = run_tool( handle_bash,
+#if defined( _WIN32 )
+		R"({"command":"findstr x missing.txt"})"
+#else
+		R"({"command":"grep x missing.txt"})"
+#endif
+		, setup );
 	CHECK( allowed.find( "\"ok\":true" ) != std::string::npos );
-	CHECK( allowed.find( "\"exit_code\":0" ) != std::string::npos );
+	CHECK( allowed.find( "\"exit_code\":1" ) != std::string::npos );
 }
 
 TEST_CASE( "bash reports a non-zero exit as a success, never a tool error", "[tools][bash]" ) {
@@ -485,10 +502,15 @@ TEST_CASE( "an over-cap result spills to an artifact with an actionable notice",
 
 	const auto out = truncate_result( big, setup.context.run_id, setup.space, "test" );
 	CHECK( out.size( ) <= INLINE_RESULT_CHARS + 512 );
-	CHECK( out.find( ".mcode/artifacts/test-run/test.txt" ) != std::string::npos );
+	CHECK( out.find( ".mcode/artifacts/test-run/test-" ) != std::string::npos );
 	CHECK( out.find( "Full output written to" ) != std::string::npos );
 
-	const auto spilled = setup.space.read_file( ".mcode/artifacts/test-run/test.txt" );
+	const auto path_start = out.find( ".mcode/artifacts/" );
+	const auto path_end = out.find( ';', path_start );
+	REQUIRE( path_end != std::string::npos );
+	const auto spill_path = out.substr( path_start, path_end - path_start );
+
+	const auto spilled = setup.space.read_file( spill_path );
 	REQUIRE( spilled );
 	CHECK( *spilled == big );
 }
@@ -507,4 +529,125 @@ TEST_CASE( "every tool failure carries error, hint and retryable", "[tools][erro
 	for ( const auto& sample : samples ) {
 		CHECK( is_error_json( sample ) );
 	}
+}
+
+TEST_CASE( "a second edit in the same turn succeeds", "[tools][edit]" ) {
+	auto setup = fixture{ };
+
+	CHECK( run_tool( handle_read, R"({"path":"src/main.cxx"})", setup ).find( "int main" ) !=
+		std::string::npos );
+
+	const auto first = run_tool( handle_edit,
+		R"({"path":"src/main.cxx","old_string":"return 0;","new_string":"return 1;"})",
+		setup );
+	CHECK( first.find( "\"ok\":true" ) != std::string::npos );
+
+	const auto second = run_tool( handle_edit,
+		R"({"path":"src/main.cxx","old_string":"return 1;","new_string":"return 2;"})",
+		setup );
+	CHECK( second.find( "\"ok\":true" ) != std::string::npos );
+	CHECK( setup.read_raw( "src/main.cxx" ).find( "return 2;" ) != std::string::npos );
+}
+
+TEST_CASE( "edit refuses a file changed on disk after the read", "[tools][edit]" ) {
+	auto setup = fixture{ };
+
+	CHECK( run_tool( handle_read, R"({"path":"src/main.cxx"})", setup ).find( "int main" ) !=
+		std::string::npos );
+
+	setup.write_raw( "src/main.cxx", "int main( ) {\n\treturn 7;\n}\n" );
+
+	const auto out = run_tool( handle_edit,
+		R"({"path":"src/main.cxx","old_string":"return 0;","new_string":"return 1;"})",
+		setup );
+	CHECK( is_error_json( out ) );
+	CHECK( out.find( "changed since it was last read" ) != std::string::npos );
+}
+
+TEST_CASE( "read of a non-UTF-8 file does not make the first write stale", "[tools][read]" ) {
+	auto setup = fixture{ };
+	setup.write_raw( "latin.txt", std::string{ 'a', '\xE9', 'b', '\n' } );
+
+	CHECK( run_tool( handle_read, R"({"path":"latin.txt"})", setup ).find( "a" ) !=
+		std::string::npos );
+
+	const auto out = run_tool( handle_write,
+		R"({"path":"latin.txt","content":"replaced\n"})", setup );
+	CHECK( out.find( "\"ok\":true" ) != std::string::npos );
+	CHECK( out.find( "\"mode\":\"overwrite\"" ) != std::string::npos );
+}
+
+TEST_CASE( "deny beats allow regardless of list order", "[tools][exec_policy]" ) {
+	auto policy = exec_policy{ };
+	policy.allow_argv = { "git" };
+	policy.deny_argv = { "rm" };
+
+	CHECK( policy.decide( { "rm", "-rf", "x" } ) == exec_decision::deny );
+	CHECK( policy.decide( { "git", "status" } ) == exec_decision::allow );
+
+	auto swapped = exec_policy{ };
+	swapped.deny_argv = { "git" };
+	swapped.allow_argv = { "git" };
+
+	CHECK( swapped.decide( { "git", "push" } ) == exec_decision::deny );
+}
+
+TEST_CASE( "redirection and newline are refused as command shape", "[tools][exec_policy]" ) {
+	CHECK_FALSE( parse_command_line( "git log > .git/hooks/pre-commit" ).has_value( ) );
+	CHECK_FALSE( parse_command_line( "sort < input.txt" ).has_value( ) );
+	CHECK_FALSE( parse_command_line( std::string{ "echo a\nrm -rf /" } ).has_value( ) );
+	CHECK_FALSE( parse_command_line( std::string{ "echo a\rb" } ).has_value( ) );
+}
+
+TEST_CASE( "runner detection survives spelling differences", "[tools][exec_policy]" ) {
+	CHECK( is_exec_runner( "/bin/sh" ) );
+	CHECK( is_exec_runner( "C:\\Windows\\System32\\cmd.exe" ) );
+	CHECK( is_exec_runner( "CMD" ) );
+	CHECK( is_exec_runner( "Cmd.exe" ) );
+	CHECK( is_exec_runner( "pwsh" ) );
+	CHECK( is_exec_runner( "bash.exe" ) );
+	CHECK_FALSE( is_exec_runner( "git" ) );
+	CHECK_FALSE( is_exec_runner( "cmake" ) );
+}
+
+TEST_CASE( "variable expansion is refused", "[tools][exec_policy]" ) {
+	CHECK_FALSE( parse_command_line( "echo $HOME" ).has_value( ) );
+	CHECK_FALSE( parse_command_line( "echo ${PATH}" ).has_value( ) );
+	CHECK_FALSE( parse_command_line( "echo %APPDATA%" ).has_value( ) );
+}
+
+TEST_CASE( "bash executes the parsed argv, not the raw string", "[tools][bash]" ) {
+	auto setup = fixture{ };
+	setup.policy.yolo = true;
+
+	const auto out = run_tool( handle_bash,
+#if defined( _WIN32 )
+		R"({"command":"findstr x missing.txt"})"
+#else
+		R"({"command":"grep x missing.txt"})"
+#endif
+		, setup );
+	CHECK( out.find( "\"ok\":true" ) != std::string::npos );
+	CHECK( out.find( "\"exit_code\":1" ) != std::string::npos );
+}
+
+TEST_CASE( "two truncated results in one run spill to distinct artifacts",
+	"[tools][truncate]" ) {
+	auto setup = fixture{ };
+
+	auto big = std::string{ };
+
+	for ( auto index = 0; index < 1000; ++index ) {
+		big += "line of output that keeps going\n";
+	}
+
+	const auto first = truncate_result( big, setup.context.run_id, setup.space, "bash" );
+	const auto second = truncate_result( big, setup.context.run_id, setup.space, "bash" );
+
+	CHECK( first.find( "truncation failed" ) == std::string::npos );
+	CHECK( second.find( "truncation failed" ) == std::string::npos );
+
+	const auto first_path = first.substr( first.find( ".mcode/artifacts/" ) );
+	const auto second_path = second.substr( second.find( ".mcode/artifacts/" ) );
+	CHECK( first_path != second_path );
 }
