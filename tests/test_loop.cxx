@@ -136,12 +136,27 @@ namespace {
 
 			std::ignore = registry.add( definition );
 
+			auto shell = tool_def{ };
+			shell.name = "bash";
+			shell.description = "runs a command";
+			shell.schema_json = R"({"type":"object"})";
+
+			std::ignore = registry.add( shell );
+
 			loop = std::make_unique< agent_loop >( deps );
 		}
 
 		auto connect( ) -> void {
 			loop->register_handler( "echo", []( std::string_view args ) -> result< std::string > {
 				return std::string{ args };
+			} );
+
+			loop->register_handler( "bash", []( std::string_view args ) -> result< std::string > {
+				if ( std::string_view{ args }.find( "pass" ) != std::string_view::npos ) {
+					return std::string{ "passed" };
+				}
+
+				return std::unexpected( fail( errc::tool_failed, "command failed" ) );
 			} );
 		}
 	};
@@ -163,7 +178,7 @@ namespace {
 
 } // namespace
 
-TEST_CASE( "plain turn reaches done through verify and handoff-free path", "[loop]" ) {
+TEST_CASE( "a plain turn reaches handoff through verify", "[loop]" ) {
 	auto fx = fixture{ };
 	fx.connect( );
 
@@ -477,6 +492,62 @@ TEST_CASE( "compaction triggers at 80 percent of the usable window", "[loop]" ) 
 	}
 
 	CHECK( compacted );
+
+	const auto& history = tight.history( );
+
+	REQUIRE( !history.empty( ) );
+	CHECK( history.front( ).speaker == mcode::model::role::user );
+	CHECK( history.front( ).text( ).find( "compact me" ) != std::string::npos );
+}
+
+TEST_CASE( "verify with a passing command reaches done", "[loop]" ) {
+	auto fx = fixture{ };
+	fx.connect( );
+	fx.loop->set_verification_command( R"({"text":"pass"})" );
+
+	fx.client.queue( text_response( "planning" ) );
+	fx.client.queue( text_response( "work complete" ) );
+
+	const auto outcome = fx.loop->run( "finish with a check" );
+
+	REQUIRE( outcome.has_value( ) );
+	CHECK( state_names( outcome->visited ) == "plan,act,verify,done" );
+	CHECK( outcome->final_state == loop_state::done );
+}
+
+TEST_CASE( "verify with a failing command reflects then hands off", "[loop]" ) {
+	auto fx = fixture{ };
+	fx.connect( );
+	fx.loop->set_verification_command( R"({"text":"boom"})" );
+
+	fx.client.queue( text_response( "planning" ) );
+	fx.client.queue( text_response( "work complete" ) );
+	fx.client.queue( text_response( "diagnosis: the test is right, the code is wrong" ) );
+	fx.client.queue( text_response( "another attempt" ) );
+	fx.client.queue( text_response( "diagnosis: still failing" ) );
+	fx.client.queue( text_response( "final answer" ) );
+
+	const auto outcome = fx.loop->run( "finish with a failing check" );
+
+	REQUIRE( outcome.has_value( ) );
+	CHECK( state_names( outcome->visited ) ==
+		"plan,act,verify,reflect,act,verify,reflect,act,verify,reflect,replan,handoff" );
+}
+
+TEST_CASE( "a hard tool error routes to reflect", "[loop]" ) {
+	auto fx = fixture{ };
+	fx.connect( );
+
+	fx.client.queue( text_response( "planning" ) );
+	fx.client.queue( call_response( "missing_tool", R"({})" ) );
+	fx.client.queue( text_response( "diagnosis: the tool name was wrong" ) );
+	fx.client.queue( text_response( "final answer" ) );
+
+	const auto outcome = fx.loop->run( "call a missing tool" );
+
+	REQUIRE( outcome.has_value( ) );
+	CHECK( state_names( outcome->visited ) ==
+		"plan,act,observe,reflect,act,verify,handoff" );
 }
 
 TEST_CASE( "compaction keeps the first event and the task text", "[loop]" ) {

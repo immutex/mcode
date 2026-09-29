@@ -169,12 +169,21 @@ namespace mcode {
 		}
 
 		auto result = compaction_result{ };
+
+		// The first events and the user task are pinned verbatim; the task is
+		// also carried in pinned_facts so the next request restates it.
+		const auto pinned = std::min( COMPACTION_KEEP_FIRST_EVENTS, history_.size( ) );
+
+		for ( auto index = std::size_t{ 0 }; index < pinned; ++index ) {
+			result.kept.push_back( history_[ index ] );
+		}
+
 		result.pinned_facts.push_back( user_task_ );
 
-		auto keep_first = std::size_t{ 0 };
 		auto kept_tokens = std::int64_t{ 0 };
+		auto keep_from = history_.size( );
 
-		for ( auto index = history_.size( ); index > COMPACTION_KEEP_FIRST_EVENTS; --index ) {
+		for ( auto index = history_.size( ); index > pinned; --index ) {
 			const auto cost = loop_internal::message_tokens( history_[ index - 1 ] );
 
 			if ( kept_tokens + cost > COMPACTION_KEEP_LAST_TOKENS ||
@@ -183,10 +192,12 @@ namespace mcode {
 			}
 
 			kept_tokens += cost;
-			keep_first = index;
+			keep_from = index - 1;
 		}
 
-		for ( auto index = keep_first; index < history_.size( ); ++index ) {
+		const auto tail_start = std::max( keep_from, pinned );
+
+		for ( auto index = tail_start; index < history_.size( ); ++index ) {
 			result.kept.push_back( history_[ index ] );
 		}
 
@@ -232,6 +243,7 @@ namespace mcode {
 		user_task_ = std::string{ user_task };
 		visited_.clear( );
 		pending_calls_.clear( );
+		hard_error_ = false;
 		thrash_ = thrash_detector{ };
 		reflection_counts_.clear( );
 		total_reflections_ = 0;
@@ -304,7 +316,7 @@ namespace mcode {
 					if ( *acted ) {
 						const auto pending = pending_calls_;
 						pending_calls_.clear( );
-						dispatch_calls( pending );
+						hard_error_ = dispatch_calls( pending );
 
 						state_ = loop_state::observe;
 
@@ -323,6 +335,15 @@ namespace mcode {
 
 						break;
 					}
+
+					if ( hard_error_ && total_reflections_ < MAX_REFLECTIONS_PER_RUN ) {
+						hard_error_ = false;
+						state_ = loop_state::reflect;
+
+						break;
+					}
+
+					hard_error_ = false;
 
 					const auto repeats = thrash_.repeat_count( );
 
@@ -359,7 +380,29 @@ namespace mcode {
 				}
 
 				case loop_state::verify: {
-					state_ = loop_state::handoff;
+					if ( verification_command_.empty( ) ) {
+						state_ = loop_state::handoff;
+
+						break;
+					}
+
+					auto checked = execute( tool_call{ "bash", verification_command_ } );
+
+					if ( checked.ok ) {
+						state_ = loop_state::done;
+
+						break;
+					}
+
+					last_failure_ = checked.error_message;
+
+					if ( total_reflections_ >= MAX_REFLECTIONS_PER_RUN ) {
+						state_ = loop_state::handoff;
+
+						break;
+					}
+
+					state_ = loop_state::reflect;
 
 					break;
 				}

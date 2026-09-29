@@ -219,7 +219,7 @@ namespace mcode {
 				restored.step = static_cast< std::uint32_t >( *value );
 			}
 
-			if ( auto value = parsed->pointer_raw( "payload" ) ) {
+			if ( auto value = parsed->pointer_raw( "/payload" ) ) {
 				restored.payload_json = *value;
 			}
 

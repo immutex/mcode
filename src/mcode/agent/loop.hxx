@@ -322,6 +322,12 @@ namespace mcode {
 		[[nodiscard]] auto budget( ) noexcept -> session_budget& { return budget_; }
 		[[nodiscard]] auto log( ) const noexcept -> const event_log& { return *log_; }
 
+		// The command the Verify state runs; empty means none configured, which
+		// routes Verify to Handoff per the no-self-certification rule.
+		auto set_verification_command( std::string command ) -> void {
+			verification_command_ = std::move( command );
+		}
+
 		[[nodiscard]] auto state( ) const noexcept -> loop_state { return state_; }
 		[[nodiscard]] auto history( ) const noexcept -> const std::vector< model::message >& {
 			return history_;
@@ -364,6 +370,8 @@ namespace mcode {
 
 		thrash_detector thrash_;
 		std::string last_failure_;
+		bool hard_error_ = false;
+		std::string verification_command_;
 		std::vector< tool_call > pending_calls_;
 		std::map< std::string, std::size_t, std::less<> > reflection_counts_;
 		std::size_t total_reflections_ = 0;
