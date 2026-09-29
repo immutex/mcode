@@ -190,7 +190,11 @@ namespace mcode::tools {
 
 			const auto total_lines = lines.size( );
 
-			if ( offset > total_lines ) {
+			// An empty file has zero lines and is a legitimate state, not an offset
+			// past the end. Without this the default offset of 1 was rejected, so
+			// reading a file the agent had just created failed and the read was
+			// never recorded -- which then refused the write that followed.
+			if ( total_lines > 0 && offset > total_lines ) {
 				return error_result( "offset " + std::to_string( offset ) + " is past the end of " +
 						std::string{ relative } + " (" + std::to_string( total_lines ) + " lines)",
 					"re-read with offset " + std::to_string( total_lines > 0 ? total_lines : 1 ) +

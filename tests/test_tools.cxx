@@ -92,6 +92,22 @@ TEST_CASE( "read refuses binary with a stub, never emitting bytes", "[tools][rea
 	CHECK( out.find( "xxd" ) != std::string::npos );
 }
 
+TEST_CASE( "read of an empty file succeeds and records the read", "[tools][read]" ) {
+	// Zero lines is a legitimate state, not an offset past the end. Treating it as
+	// one rejected the default offset of 1, so reading a file the agent had just
+	// created failed and the read went unrecorded -- which then refused the write
+	// that followed, since write requires a prior read.
+	auto setup = fixture{ };
+	setup.write_raw( "empty.txt", "" );
+
+	const auto out = run_tool( handle_read, R"({"path":"empty.txt"})", setup );
+	CHECK_FALSE( is_error_json( out ) );
+
+	const auto absolute = setup.space.resolve( "empty.txt" );
+	REQUIRE( absolute );
+	CHECK( setup.reads.contains( *absolute ) );
+}
+
 TEST_CASE( "read on a missing file suggests the closest existing path", "[tools][read]" ) {
 	auto setup = fixture{ };
 
