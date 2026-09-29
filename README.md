@@ -489,6 +489,17 @@ code comments.
     destruction order tears the loop down first and no handler can outlive its
     target. Every early-return path has the same ordering.
 
+59. **A test whose name contains a comma cannot be run by name.** 45 of the 698
+    `TEST_CASE`s in this tree have a comma in their name — the repo's house style
+    is `"a thing does X, not Y"` — and Catch2 treats the argument as a
+    comma-separated filter list, so
+    `mcode_tests.exe "a pending call is failed, not replayed"` matches nothing
+    and exits 2, which reads as a failure. `ctest` is unaffected: it passes the
+    name it registered. To run one by hand, use a wildcard —
+    `mcode_tests.exe "*a pending call is failed*"`. This is not worth renaming
+    45 tests for, but it costs a confusing ten minutes every time someone hits
+    it, which is why it is here.
+
 ## Building
 
 ```bash
