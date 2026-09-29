@@ -386,15 +386,38 @@ namespace mcode {
 						break;
 					}
 
-					auto checked = execute( tool_call{ "bash", verification_command_ } );
+					auto arguments = std::string{ "{\"command\":" };
+					json::append_escaped( arguments, verification_command_ );
+					arguments += "}";
 
-					if ( checked.ok ) {
+					auto checked = execute( tool_call{ "bash", arguments } );
+
+					// A non-zero exit is a successful tool call: the result
+					// carries the exit code, and the gate reads it from there.
+					auto passed = checked.ok;
+
+					if ( passed ) {
+						auto parsed = json::document::parse( checked.content );
+
+						if ( parsed ) {
+							const auto code = parsed->pointer_int( "/exit_code" );
+							const auto timed_out = parsed->pointer_bool( "/timed_out" );
+
+							passed = code.has_value( ) && *code == 0 &&
+								( !timed_out.has_value( ) || !*timed_out );
+						} else {
+							passed = false;
+						}
+					}
+
+					if ( passed ) {
 						state_ = loop_state::done;
 
 						break;
 					}
 
-					last_failure_ = checked.error_message;
+					last_failure_ = checked.ok ? "verification command failed"
+												: checked.error_message;
 
 					if ( total_reflections_ >= MAX_REFLECTIONS_PER_RUN ) {
 						state_ = loop_state::handoff;

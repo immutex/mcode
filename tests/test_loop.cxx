@@ -152,11 +152,19 @@ namespace {
 			} );
 
 			loop->register_handler( "bash", []( std::string_view args ) -> result< std::string > {
-				if ( std::string_view{ args }.find( "pass" ) != std::string_view::npos ) {
-					return std::string{ "passed" };
+				auto command = std::string{ args };
+
+				if ( command.find( "crash" ) != std::string::npos ) {
+					return std::unexpected( fail( errc::tool_failed, "spawn failed" ) );
 				}
 
-				return std::unexpected( fail( errc::tool_failed, "command failed" ) );
+				const auto exit_code = command.find( "pass" ) != std::string::npos ? 0 : 1;
+
+				auto out = std::string{ "{\"ok\":true,\"exit_code\":" };
+				out += std::to_string( exit_code );
+				out += "}";
+
+				return out;
 			} );
 		}
 	};
@@ -503,7 +511,7 @@ TEST_CASE( "compaction triggers at 80 percent of the usable window", "[loop]" ) 
 TEST_CASE( "verify with a passing command reaches done", "[loop]" ) {
 	auto fx = fixture{ };
 	fx.connect( );
-	fx.loop->set_verification_command( R"({"text":"pass"})" );
+	fx.loop->set_verification_command( "pass" );
 
 	fx.client.queue( text_response( "planning" ) );
 	fx.client.queue( text_response( "work complete" ) );
@@ -518,7 +526,7 @@ TEST_CASE( "verify with a passing command reaches done", "[loop]" ) {
 TEST_CASE( "verify with a failing command reflects then hands off", "[loop]" ) {
 	auto fx = fixture{ };
 	fx.connect( );
-	fx.loop->set_verification_command( R"({"text":"boom"})" );
+	fx.loop->set_verification_command( "fail" );
 
 	fx.client.queue( text_response( "planning" ) );
 	fx.client.queue( text_response( "work complete" ) );
@@ -532,6 +540,23 @@ TEST_CASE( "verify with a failing command reflects then hands off", "[loop]" ) {
 	REQUIRE( outcome.has_value( ) );
 	CHECK( state_names( outcome->visited ) ==
 		"plan,act,verify,reflect,act,verify,reflect,act,verify,reflect,replan,handoff" );
+}
+
+TEST_CASE( "a failing exit code with a successful tool call does not reach done", "[loop]" ) {
+	auto fx = fixture{ };
+	fx.connect( );
+	fx.loop->set_verification_command( "fail" );
+
+	fx.client.queue( text_response( "planning" ) );
+	fx.client.queue( text_response( "work complete" ) );
+	fx.client.queue( text_response( "diagnosis: the command failed" ) );
+	fx.client.queue( text_response( "final answer" ) );
+
+	const auto outcome = fx.loop->run( "failing gate must not pass" );
+
+	REQUIRE( outcome.has_value( ) );
+	CHECK( outcome->final_state != loop_state::done );
+	CHECK( state_names( outcome->visited ).find( "done" ) == std::string::npos );
 }
 
 TEST_CASE( "a hard tool error routes to reflect", "[loop]" ) {
