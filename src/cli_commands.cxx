@@ -331,18 +331,11 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	if ( outcome->final_state == mcode::loop_state::failed ) {
 		code = mcode::cli::exit_code::provider_error;
 	} else if ( outcome->final_state == mcode::loop_state::handoff ) {
-		// The run's reason lives in the log's final run.end payload; a handoff that
-		// the budget caused exits differently from one that merely had no gate.
-		auto budget_caused = false;
-
-		for ( const auto& logged : log.events( ) ) {
-			if ( logged.kind == "run.end" ) {
-				budget_caused = logged.payload_json.find( "budget exhausted" )
-					!= std::string::npos;
-			}
-		}
-
-		if ( budget_caused ) {
+		// A handoff caused by the budget is resumable and exits differently from one
+		// that merely had no verification gate. Asked of the budget, not inferred
+		// from the log's wording: a reason string that changes would silently turn a
+		// budget exit into a success.
+		if ( loop.budget( ).exhausted( ) ) {
 			code = mcode::cli::exit_code::budget_exhausted;
 		}
 	}
@@ -365,6 +358,18 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		summary = "completed";
 	} else {
 		summary += to_string( outcome->final_state );
+
+		// The loop records why it stopped. Without it a provider failure reports a
+		// bare state name, which is the silent failure the exit codes exist to
+		// prevent: exit 4 tells the caller nothing about the cause.
+		if ( !outcome->summary_json.empty( ) ) {
+			summary += ": ";
+			summary += outcome->summary_json;
+		}
+	}
+
+	if ( code != mcode::cli::exit_code::success ) {
+		std::fprintf( stderr, "mcode: %s\n", summary.c_str( ) );
 	}
 
 	stream.emit_run_end( code, summary );
