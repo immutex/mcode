@@ -74,7 +74,7 @@ namespace mcode {
 	auto agent_loop::observe_result( const tool_call& call, const tool_outcome& outcome ) -> void {
 		auto message = model::message{ };
 		message.speaker = model::role::tool;
-		message.blocks.push_back( loop_internal::result_block( outcome ) );
+		message.blocks.push_back( loop_internal::result_block( outcome, call.id ) );
 
 		history_.push_back( std::move( message ) );
 

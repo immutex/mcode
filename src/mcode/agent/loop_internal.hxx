@@ -55,9 +55,14 @@ namespace mcode::loop_internal {
 		return combined;
 	}
 
-	inline auto result_block( const tool_outcome& outcome ) -> model::block {
+	// The call id is required, not optional: a tool message the model cannot
+	// correlate with the call it answers is a result it cannot use. Rendered with
+	// an empty id, the model reports the result as missing and re-issues the call.
+	inline auto result_block( const tool_outcome& outcome, const std::string_view tool_call_id )
+		-> model::block {
 		auto block = model::block{ };
 		block.kind = model::block_kind::tool_result;
+		block.tool_call_id = std::string{ tool_call_id };
 		block.is_error = !outcome.ok;
 		block.result_json = outcome.ok ? outcome.content : outcome.error_message;
 

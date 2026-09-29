@@ -268,12 +268,19 @@ TEST_CASE( "exec drives a real read tool call over a loopback provider", "[loop]
 	// disk by the real handler -- not a stub, not a schema, not a state list.
 	auto found_content = false;
 	auto found_call = false;
+	auto result_is_correlated = false;
 
 	for ( const auto& message : loop.history( ) ) {
 		for ( const auto& block : message.blocks ) {
 			if ( block.kind == model::block_kind::tool_result
 				&& block.result_json.find( marker ) != std::string::npos ) {
 				found_content = true;
+
+				// A tool result the model cannot correlate with the call it answers
+				// is a result it cannot use. Rendered with an empty id the model
+				// reports the result as missing and re-issues the call -- observed
+				// live, and invisible to a test that only checks the content.
+				result_is_correlated = block.tool_call_id == "call_1";
 			}
 
 			if ( block.kind == model::block_kind::tool_call
@@ -286,6 +293,8 @@ TEST_CASE( "exec drives a real read tool call over a loopback provider", "[loop]
 	CHECK( found_call );
 
 	CHECK( found_content );
+
+	CHECK( result_is_correlated );
 
 	auto error_code = std::error_code{ };
 	std::filesystem::remove_all( fixture_root, error_code );
