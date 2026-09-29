@@ -13,6 +13,7 @@
 #include "mcode/ext/manifest.hxx"
 #include "mcode/model/provider.hxx"
 #include "mcode/skills/discovery.hxx"
+#include "mcode/ext/api_mcp.hxx"
 
 namespace mcode::ext {
 
@@ -64,6 +65,10 @@ namespace mcode::ext {
 			// The discovered skills, for `mcode.skill.read` / `mcode.skill.list`.
 			// Null when discovery did not run; the entries then read as empty.
 			const mcode::skills::discovery_report* skills = nullptr;
+			// Where `mcode.mcp.register` puts a declared server. Null when the
+			// host built no store; the entry then reports so rather than dropping
+			// the declaration.
+			mcp_server_store* servers = nullptr;
 		};
 
 		auto install( const install_request& request ) -> status;
@@ -114,6 +119,11 @@ namespace mcode::ext {
 		[[nodiscard]] auto installed_skills( ) const noexcept
 			-> const mcode::skills::discovery_report* {
 			return skills_;
+		auto handle_mcp_register( lua_State* state ) -> int;
+
+		// The store extension-declared servers land in. Null before install.
+		[[nodiscard]] auto installed_servers( ) const noexcept -> mcp_server_store* {
+			return servers_;
 		}
 
 	private:
@@ -126,6 +136,9 @@ namespace mcode::ext {
 		// Borrowed, not owned: discovery happens once per session before the
 		// extensions load, and the report outlives every surface that reads it.
 		const mcode::skills::discovery_report* skills_ = nullptr;
+		// Borrowed, not owned: the host process owns the store, and every loaded
+		// surface writes declared servers into it.
+		mcp_server_store* servers_ = nullptr;
 
 		// A COPY, not a pointer. The loader builds a manifest per candidate and
 		// destroys it at the end of the iteration, so a pointer here dangles the

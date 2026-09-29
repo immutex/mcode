@@ -505,6 +505,8 @@ namespace mcode::ext {
 
 		auto lua_skill_list( lua_State* state ) -> int {
 			return surface_from( state )->handle_skill_list( state );
+		auto lua_mcp_register( lua_State* state ) -> int {
+			return surface_from( state )->handle_mcp_register( state );
 		}
 
 	}
@@ -518,6 +520,7 @@ namespace mcode::ext {
 		hooks_ = &request.hooks;
 		manifest_ = request.details;
 		skills_ = request.skills;
+		servers_ = request.servers;
 
 		// Identity first: `mcode.ext.name` is read by tools and by the log prefix,
 		// and the definition file declares it as a field rather than a call.
@@ -547,6 +550,7 @@ namespace mcode::ext {
 			{ "log.error", lua_log_error },
 			{ "skill.read", lua_skill_read },
 			{ "skill.list", lua_skill_list },
+			{ "mcp.register", lua_mcp_register },
 		};
 
 		for ( const auto& entry : ENTRIES ) {

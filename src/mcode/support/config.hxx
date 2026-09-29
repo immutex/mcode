@@ -49,6 +49,10 @@ namespace mcode::config {
 	// typo, and storing it silently means the user believes a setting took effect
 	// when it did not -- which is the failure the parser exists to prevent.
 	//
+	// A section name lands here in the same change as its reader, never before:
+	// a name without a reader is accepted and then ignored, which is exactly the
+	// silent no-op this list exists to prevent.
+	//
 	// Section granularity, not per-key: the nested keys are owned by the docs that
 	// define them, and a per-key list here would be a second copy that drifts.
 	inline constexpr auto CONFIG_SECTIONS = std::array{
@@ -59,6 +63,7 @@ namespace mcode::config {
 		std::string_view{ "ui" },
 		std::string_view{ "extensions" },
 		std::string_view{ "permissions" },
+		std::string_view{ "mcp" },
 	};
 
 	struct layer {

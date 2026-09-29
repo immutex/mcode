@@ -16,6 +16,7 @@ add_executable(mcode_tests
     test_render.cxx
     test_model_client.cxx
     test_config_and_platform.cxx
+    test_mcp_config.cxx
     test_event_log.cxx
     test_loop.cxx
     test_loop_e2e.cxx
