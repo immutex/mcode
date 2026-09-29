@@ -234,7 +234,10 @@ namespace mcode::tools {
 				rendered += "\n{" + notes + "}";
 			}
 
-			const auto hash = hash_bytes( safe );
+			// The recorded hash must match what content_hash computes over the RAW
+			// bytes, or a non-UTF-8 file reads as stale on the first write. The
+			// sanitised text is for display only.
+			const auto hash = hash_bytes( content );
 			context.reads->record( absolute, hash );
 
 			return rendered;

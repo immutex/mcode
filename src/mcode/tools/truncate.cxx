@@ -1,5 +1,6 @@
 #include "mcode/tools/truncate.hxx"
 
+#include <cstdint>
 #include <string>
 
 #include "mcode/fs/workspace.hxx"
@@ -9,12 +10,18 @@ namespace mcode::tools {
 
 	namespace {
 
+		// One process-wide spill sequence; the run-id directory already separates
+		// runs, so this only has to separate calls within one.
+		auto spill_sequence = std::atomic< std::uint64_t >{ 0 };
+
 		auto artifact_path( std::string_view run_id, std::string_view tool_name ) -> std::string {
+			const auto sequence = spill_sequence.fetch_add( 1, std::memory_order_relaxed );
+
 			auto path = std::string{ ".mcode/artifacts/" };
 			path.append( run_id );
 			path += '/';
 			path.append( tool_name );
-			path += ".txt";
+			path += "-" + std::to_string( sequence ) + ".txt";
 
 			return path;
 		}

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <string>
 #include <string_view>
 
@@ -26,7 +27,9 @@ namespace mcode::tools {
 	// the workspace. `.mcode/` is protected against the MODEL's tools; this is the
 	// harness writing, which is exactly the actor split the protection query
 	// exists to express. `run_id` scopes the directory so two runs cannot collide
-	// and a replayed session's references still resolve.
+	// and a replayed session's references still resolve. The file name carries a
+	// per-call sequence number, so two truncated results from the same tool in one
+	// run never collide.
 	//
 	// The returned text is always within INLINE_RESULT_CHARS and never a bare
 	// ellipsis: the notice names what was cut and the artifact path that holds

@@ -15,9 +15,37 @@ namespace mcode::tools {
 
 	namespace {
 
+		// Files up to the write cap are legitimate edit targets, so the verifier
+		// must hash raw bytes past read_file's 8 MiB whole-file cap — otherwise a
+		// 9 MiB file reads fine and then every write is refused.
+		inline constexpr std::uintmax_t VERIFY_READ_BYTES = MAX_WRITE_FILE_BYTES;
+
+		[[nodiscard]] auto raw_content_hash( const std::filesystem::path& absolute )
+			-> result< std::string > {
+			auto input = std::ifstream{ platform::to_extended_path( absolute ), std::ios::binary };
+
+			if ( !input ) {
+				return std::unexpected( fail( errc::io, "cannot open " + absolute.string( ) ) );
+			}
+
+			auto content = std::string{ };
+			content.resize( static_cast< std::size_t >( VERIFY_READ_BYTES ) + 1 );
+
+			input.read( content.data( ), static_cast< std::streamsize >( VERIFY_READ_BYTES + 1 ) );
+			content.resize( static_cast< std::size_t >( input.gcount( ) ) );
+
+			if ( content.size( ) > VERIFY_READ_BYTES ) {
+				return std::unexpected( fail( errc::io,
+					"file exceeds the " + std::to_string( VERIFY_READ_BYTES ) +
+						"-byte write cap" ) );
+			}
+
+			return hash_bytes( content );
+		}
+
 		// The invariant check shared by write-overwrite and edit: the file must have
 		// been read this session, and the hash recorded then must still match disk.
-		[[nodiscard]] auto check_readable_state( const workspace& space, session_reads& reads,
+		[[nodiscard]] auto check_readable_state( session_reads& reads,
 			const std::filesystem::path& absolute, const std::string_view path )
 			-> result< std::string > {
 			const auto recorded = reads.find( absolute );
@@ -31,7 +59,7 @@ namespace mcode::tools {
 						false ) ) );
 			}
 
-			auto current = space.content_hash( std::string{ path } );
+			auto current = raw_content_hash( absolute );
 
 			if ( !current ) {
 				return std::unexpected( fail( errc::tool_failed,
@@ -99,6 +127,78 @@ namespace mcode::tools {
 				}
 
 				start = end;
+			}
+
+			return out;
+		}
+
+		// Rebuilds the edited text so each line keeps the line ending its ORIGINAL
+		// had. Lines are matched by index between the normalised before/after; a
+		// line outside the replaced span is byte-identical, so copying its original
+		// bytes (ending included) is exact, and a replaced line inherits the ending
+		// of the original line at the same index. A mixed-ending file keeps its
+		// mixture, and untouched lines are never rewritten.
+		[[nodiscard]] auto splice_with_original_endings( const std::string_view original,
+			const std::string_view normalised_after )
+			-> std::string {
+			const auto old_lines = split_keepings_endings( original );
+			auto new_lines = split_keepings_endings( normalised_after );
+
+			auto out = std::string{ };
+			out.reserve( normalised_after.size( ) + new_lines.lines.size( ) );
+
+			// Walk both line lists; where they agree in normalised content, emit
+			// the ORIGINAL bytes verbatim, otherwise emit the new line with the
+			// original's ending at that index (or LF when past the original's end).
+			auto old_index = std::size_t{ 0 };
+			auto new_index = std::size_t{ 0 };
+
+			while ( new_index < new_lines.lines.size( ) ) {
+				auto new_line = std::string_view{ new_lines.lines[ new_index ] };
+				auto new_body = new_line;
+				auto new_ending = std::string_view{ };
+
+				if ( new_body.size( ) >= 2 && new_body.substr( new_body.size( ) - 2 ) == "\r\n" ) {
+					new_ending = new_body.substr( new_body.size( ) - 2 );
+					new_body.remove_suffix( 2 );
+				} else if ( !new_body.empty( ) && new_body.back( ) == '\n' ) {
+					new_ending = new_body.substr( new_body.size( ) - 1 );
+					new_body.remove_suffix( 1 );
+				}
+
+				if ( old_index < old_lines.lines.size( ) ) {
+					const auto& original_line = old_lines.lines[ old_index ];
+					auto original_body = std::string_view{ original_line };
+					auto original_ending = std::string_view{ };
+
+					if ( original_body.size( ) >= 2 &&
+						original_body.substr( original_body.size( ) - 2 ) == "\r\n" ) {
+						original_ending = original_body.substr( original_body.size( ) - 2 );
+						original_body.remove_suffix( 2 );
+					} else if ( !original_body.empty( ) && original_body.back( ) == '\n' ) {
+						original_ending = original_body.substr( original_body.size( ) - 1 );
+						original_body.remove_suffix( 1 );
+					}
+
+					if ( original_body == new_body ) {
+						out.append( original_line );
+						++old_index;
+						++new_index;
+
+						continue;
+					}
+
+					out.append( new_body );
+					out.append( original_ending );
+					++old_index;
+					++new_index;
+
+					continue;
+				}
+
+				out.append( new_body );
+				out.append( new_ending );
+				++new_index;
 			}
 
 			return out;
@@ -213,7 +313,7 @@ namespace mcode::tools {
 
 			receipt = *created;
 		} else {
-			const auto invariant = check_readable_state( space, *context.reads, *resolved, *path );
+			const auto invariant = check_readable_state( *context.reads, *resolved, *path );
 
 			if ( !invariant ) {
 				return std::unexpected( invariant.error( ) );
@@ -292,7 +392,7 @@ namespace mcode::tools {
 				"read the file first; edit works on files that exist", false );
 		}
 
-		const auto invariant = check_readable_state( space, *context.reads, *resolved, *path );
+		const auto invariant = check_readable_state( *context.reads, *resolved, *path );
 
 		if ( !invariant ) {
 			return std::unexpected( invariant.error( ) );
@@ -306,7 +406,7 @@ namespace mcode::tools {
 		}
 
 		// Compare on a normalised copy so a CRLF file edited with an LF anchor
-		// still matches; the file's own endings are preserved on write.
+		// still matches; the file's own endings are preserved per line on write.
 		const auto normalised = normalise( *original );
 		const auto anchor = normalise( *old_string );
 		const auto replacement = normalise( *new_string );
@@ -334,6 +434,10 @@ namespace mcode::tools {
 				false );
 		}
 
+		// Build the replacement as normalised text, then splice it back into the
+		// ORIGINAL byte stream at line granularity: each replaced line takes the
+		// ending its original had, and lines outside the replaced span are never
+		// touched. A mixed-ending file keeps its mixture.
 		auto updated = std::string{ };
 
 		if ( occurrences == 1 ) {
@@ -351,24 +455,7 @@ namespace mcode::tools {
 			updated += normalised.substr( cursor );
 		}
 
-		// Restore the file's own line endings: every LF that a CRLF file carried
-		// comes back with its CR.
-		const auto was_crlf = original->find( "\r\n" ) != std::string::npos;
-
-		if ( was_crlf ) {
-			auto restored = std::string{ };
-			restored.reserve( updated.size( ) + positions.size( ) );
-
-			for ( const auto character : updated ) {
-				if ( character == '\n' ) {
-					restored += "\r\n";
-				} else {
-					restored += character;
-				}
-			}
-
-			updated = std::move( restored );
-		}
+		updated = splice_with_original_endings( *original, updated );
 
 		auto written = space.write_file( *path, updated, write_mode::overwrite );
 
@@ -381,9 +468,9 @@ namespace mcode::tools {
 		// stale.
 		context.reads->record( *resolved, written->content_hash );
 
-		// The diff compares the pre-restore normalised text; `updated` has already
-		// had the file's CRLF endings put back at this point.
-		const auto diff_after = was_crlf ? normalise( updated ) : updated;
+		// The diff compares normalised text on both sides; `updated` carries the
+		// file's original endings after the splice.
+		const auto diff_after = normalise( updated );
 
 		auto out = std::string{ "{\"ok\":true,\"path\":\"" };
 		json::append_escaped( out, *path );

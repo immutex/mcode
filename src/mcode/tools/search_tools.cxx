@@ -412,7 +412,15 @@ namespace mcode::tools {
 			name_filter = *requested;
 		}
 
-		auto candidates = collect_paths( space, rules, DEFAULT_GLOB_LIMIT );
+		// The walk budget bounds how many candidate files the ignore-aware walk
+		// collects. When it is reached the scan is PARTIAL, and "not found" would
+		// be a lie about files never examined, so the result says so.
+		auto candidates = collect_paths( space, rules, DEFAULT_GLOB_LIMIT + 1 );
+		auto partial_coverage = candidates.size( ) > DEFAULT_GLOB_LIMIT;
+
+		if ( partial_coverage ) {
+			candidates.resize( DEFAULT_GLOB_LIMIT );
+		}
 
 		if ( scope != "." ) {
 			auto scoped = std::vector< std::string >{ };
@@ -529,6 +537,12 @@ namespace mcode::tools {
 
 		if ( files_skipped > 0 ) {
 			out += ",\"files_skipped\":" + std::to_string( files_skipped );
+		}
+
+		if ( partial_coverage ) {
+			out += ",\"partial_coverage\":true,\"hint\":\"the workspace has more than " +
+				std::to_string( DEFAULT_GLOB_LIMIT ) +
+				" candidate files and the scan stopped there; a zero count above is NOT proof of absence -- narrow with path or glob and search again\"";
 		}
 
 		out += "}";
