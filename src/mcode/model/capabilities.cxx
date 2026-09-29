@@ -58,6 +58,21 @@ namespace mcode::model {
 		"price_output": 75.0
 	},
 	{
+		"model": "ali/deepseek-v4.1-flash",
+		"caching": "implicit",
+		"supports_tool_calls": true,
+		"supports_strict_schema": false,
+		"supports_response_schema": false,
+		"supports_thinking": true,
+		"supports_effort": false,
+		"context_window": 1000000,
+		"max_output_tokens": 393216,
+		"price_input": 0.15,
+		"price_cached_read": 0.015,
+		"price_cache_write": 0.15,
+		"price_output": 0.6
+	},
+	{
 		"model": "gpt-5",
 		"caching": "implicit",
 		"supports_tool_calls": true,
