@@ -29,6 +29,7 @@ namespace mcode {
 			payload += "}";
 
 			log_->append( "tool.call", std::move( payload ) );
+			publish( events::kind::tool_call, std::move( payload ) );
 		}
 
 		if ( budget_.exhausted( ) ) {
@@ -36,6 +37,7 @@ namespace mcode {
 			outcome.code = errc::budget_exhausted;
 			outcome.error_message = "session budget exhausted";
 			log_->append( "tool.result", "{\"ok\":false,\"error\":\"budget_exhausted\"}" );
+			publish( events::kind::tool_result, "{\"ok\":false,\"error\":\"budget_exhausted\"}" );
 
 			return finish( );
 		}
@@ -51,7 +53,8 @@ namespace mcode {
 			json::append_escaped( payload, call.name );
 			payload += "\"}";
 
-			log_->append( "tool.result", std::move( payload ) );
+			log_->append( "tool.result", payload );
+			publish( events::kind::tool_result, std::move( payload ) );
 
 			return finish( );
 		}
@@ -64,6 +67,7 @@ namespace mcode {
 			outcome.code = errc::tool_failed;
 			outcome.error_message = "tool has no handler registered: " + call.name;
 			log_->append( "tool.result", "{\"ok\":false,\"error\":\"no_handler\"}" );
+			publish( events::kind::tool_result, "{\"ok\":false,\"error\":\"no_handler\"}" );
 
 			return finish( );
 		}
@@ -94,7 +98,8 @@ namespace mcode {
 			json::append_escaped( payload, produced.error( ).msg );
 			payload += "\"}";
 
-			log_->append( "tool.result", std::move( payload ) );
+			log_->append( "tool.result", payload );
+			publish( events::kind::tool_result, std::move( payload ) );
 
 			return finish( );
 		}
@@ -109,7 +114,8 @@ namespace mcode {
 			payload += to_string( definition->source );
 			payload += "\"}";
 
-			log_->append( "tool.result", std::move( payload ) );
+			log_->append( "tool.result", payload );
+			publish( events::kind::tool_result, std::move( payload ) );
 		}
 
 		return finish( );

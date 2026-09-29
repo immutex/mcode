@@ -232,7 +232,8 @@ namespace mcode {
 		payload += std::to_string( kept_tokens );
 		payload += "}";
 
-		log_->append( "context.compaction", std::move( payload ) );
+		log_->append( "context.compaction", payload );
+		publish( events::kind::compaction, std::move( payload ) );
 
 		return status{ };
 	}
@@ -262,6 +263,12 @@ namespace mcode {
 		summary += "\"}";
 
 		log_->append( "run.end", summary );
+
+		// A run that ended in failure is the one case a consumer most needs to
+		// hear about, and the bus has a kind for it that nothing published.
+		if ( terminal == loop_state::failed ) {
+			publish( events::kind::error, std::move( summary ) );
+		}
 	}
 
 	auto agent_loop::run( const std::string_view user_task ) -> result< turn_outcome > {
