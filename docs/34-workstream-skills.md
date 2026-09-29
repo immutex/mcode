@@ -210,7 +210,9 @@ realistic chain plus 15 skills.
 | `src/mcode/skills/index.{hxx,cxx}` | B | index text, description truncation, budget measurement |
 | `src/mcode/instruct/chain.{hxx,cxx}` | B | `AGENTS.md` walk, concatenation, closest-wins, byte caps |
 | `src/mcode/agent/loop_context.cxx` | B | sections 10 and 11, conditional on the tool |
-| `src/mcode/ext/api_skill.{hxx,cxx}` | B | the bodies for `skill.read` / `skill.list`; the rows and stubs are Phase 0's |
+| `src/mcode/ext/api_skill.{hxx,cxx}` | B | **creates** these: the handlers for `skill.read` / `skill.list` |
+| `src/mcode/ext/api.hxx` | B | the two method declarations |
+| `src/mcode/ext/api.cxx` | B | the two `ENTRIES` rows. C adds its own row to the same table — a one-line conflict integration resolves |
 | `src/mcode/cli/skill_command.{hxx,cxx}` | B | `mcode skill list\|validate`. **Not** `cli/exec.*`, which is A's |
 | `src/main.cxx` | B | one dispatch branch for the `skill` subcommand |
 | `extensions/skills/{ext.toml,init.luau}` | B | the `skill_read` tool |

@@ -62,91 +62,58 @@ Everything else follows a doc that already exists.
 
 | | Slice | Owns | New files | Depends on |
 |---|---|---|---|---|
-| **A** | Permissions, approvals, remember store | `perm/`, `tools/exec_policy` (folded in), the loop's check | 12 | Phase 0 (P4) |
-| **B** | Skills and instruction chain | `skills/`, `instruct/`, prompt sections 10–11, `extensions/skills/` | 11 | Phase 0 (P2) |
-| **C** | MCP stdio client | `mcp/`, `proc/session`, `[mcp]` config | 13 | Phase 0 (P1, P3, P5) |
+| **A** | Permissions, approvals, remember store | `perm/`, `tools/exec_policy` (folded in), the loop's check | 12 | — |
+| **B** | Skills and instruction chain | `skills/`, `instruct/`, prompt sections 10–11, `extensions/skills/` | 13 | — |
+| **C** | MCP stdio client | `mcp/`, `proc/session`, `[mcp]` config | 15 | Phase 0 (P1) |
 
-**They do not overlap.** No file appears in two slices. A owns the decision
-path, B owns the prompt's data sections, C owns a new subsystem. They meet only
-in `src/cli_commands.cxx`, which integration owns, and in Phase 0 below.
+**They overlap in exactly two files.** A owns the decision path, B owns the
+prompt's data sections, C owns a new subsystem; no file is shared between A and
+either of the others. B and C both touch `ext/api.cxx` (one `ENTRIES` row each)
+and `ext/api.hxx` (one declaration each) — **four lines in total**, which
+integration resolves. Everything else they need is their own file, which is why
+each creates `api_skill.*` / `api_mcp.*` rather than editing one shared file.
+
+`src/cli_commands.cxx` is shared by all three and is integration's.
 
 **New files** counts rows in each slice's `## Files` table — headers and sources
 together, so a `.hxx`/`.cxx` pair is two. A few rows are edits to existing files
 rather than additions; the number is the size of the slice, not of the diff.
 
-## Phase 0 — the shared-interface changes, landed before any branch
+## Phase 0 — the one change that must land before any branch
 
-Same discipline as the first batch: each slice needs something that does not
-exist, and an interface invented twice is a rewrite at merge. Each is small.
-**These land on `master` before `feat/*` is cut**, one commit each with its test.
+Same discipline as the first batch: an interface invented twice is a rewrite at
+merge. Here the genuinely shared surface is smaller than the first batch's, and
+it is one item.
 
 | # | Change | Why shared | Blocks |
 |---|---|---|---|
-| **P1** | `tool_class::mcp` added to `core/registry.hxx` and `to_string` | Slice C registers MCP tools and needs a class to declare them. A reads `klass` as an opaque value and needs no new enumerator — but its default rule set must classify `mcp` as `ask`, which is a rule entry, not a code change | C |
-| **P2** | `mcode.skill.read( name )` / `mcode.skill.list()` registered, with bodies in `ext/api_skill.{hxx,cxx}` | Slice B's `skill_read` is a Lua extension and must fetch a body. `mcode.fs.read` cannot do it — it is **not implemented**, and a user-scope skill is outside the workspace anyway | B |
-| **P3** | `mcode.mcp.register( def )` registered, with its body in `ext/api_mcp.{hxx,cxx}` | Slice C's extension-declared servers | C |
-| **P4** | `tool_context` gains `permission_engine*` and `approval_source*` | The tool handlers need to ask; integration constructs them. **Phase 0 owns the edit** — A consumes the fields | A |
-| **P5** | `[mcp]` added to `CONFIG_SECTIONS` | Slice C's config section. Today an `[mcp]` section is **rejected as unknown**. **Phase 0 owns the edit** — C consumes the section | C |
-| **P6** | `docs/18` records the new row count, and `docs/22` gains the `[mcp]` section | Both docs own what these changes alter, and `AGENTS.md` requires docs and code to move together. **Phase 0 owns both edits** | — |
+| **P1** | `tool_class::mcp` added to `core/registry.hxx` and `to_string` | C registers MCP tools and needs a class to declare them. A's default rule set sends that class to `ask`, so A references it too. Without it, both branches add the same enumerator and one of them loses | A, C |
 
-**Where a slice's `## Files` table names a file above, it means "this slice
-edits that file after Phase 0 has landed the interface"** — except P4, P5 and P6,
-which Phase 0 completes outright so no branch reopens them. The distinction is
-the whole point of the phase: a frozen interface is one nobody has to touch
-again.
+**P4, P2/P3 and P5 are deliberately *not* Phase 0.** An earlier draft put them
+here and it was wrong for a reason worth recording, because the mistake is
+attractive:
 
-**P2 and P3 split the file so no two branches touch it.** `ext/api.cxx` holds one
-`ENTRIES` table and one registration function; three writers in it is a
-guaranteed conflict. Phase 0 therefore creates `ext/api_skill.{hxx,cxx}` and
-`ext/api_mcp.{hxx,cxx}` with **stub bodies that return "not implemented"**, adds
-the three rows to the table pointing at them, and stops. `api.cxx` is then owned
-by Phase 0 alone: B fills in `api_skill.cxx`, C fills in `api_mcp.cxx`, and
-neither opens the table.
+- **`tool_context` gains `permission_engine*` / `approval_source*` (P4)** cannot
+  precede slice A — those types are A's. A owns the edit; the other two slices
+  never touch it.
+- **The API rows for `skill.read`/`skill.list` and `mcp.register`** cannot land
+  early either. A row in `ENTRIES` names a function; landing the row without the
+  body is a link error, and landing a stub that returns "not implemented"
+  advertises a capability the surface does not have — the freeze exists precisely
+  to stop the surface and the implementation drifting apart. So **each slice adds
+  its own row and its own handler file**: B creates `ext/api_skill.{hxx,cxx}`, C
+  creates `ext/api_mcp.{hxx,cxx}`, and the only shared edit is one or two lines
+  in the `ENTRIES` table, which integration resolves.
+- **`[mcp]` in `CONFIG_SECTIONS`** looks like harmless data, and it is not.
+  Adding the section before anything reads it means a user can write `[mcp]`,
+  have it accepted, and have it silently ignored — which is exactly the failure
+  the section allowlist exists to prevent (`22`: *"storing it silently means the
+  user believes a setting took effect when it did not"*). C adds the section and
+  its reader in the same commit.
 
-**P2 and P3 amend the frozen API surface.** `docs/18` freezes it at 23 rows
-and treats additions as the thing to resist. Two additions at once needs the
-justification stated rather than assumed:
-
-- The precedent is in the doc itself. `mcode.model.register` was added after the
-  initial freeze, and `18`'s own conclusion is *"a freeze declared before the
-  feature that needs it is premature… freezing after `D2` would have produced 23
-  the first time."* That is exactly this situation: the surface was closed before
-  the skill and MCP seams were built, and both now need an entry.
-- **`api_version = 1` has never shipped.** Nothing published depends on the row
-  count, which is the condition `18` sets for an amendment being legitimate
-  rather than a loosening.
-- Both **complete an existing namespace**: `mcode.skill.*` and `mcode.mcp.*`
-  already have rows in the table. Neither widens the root.
-
-After this batch the surface is **29 callable names plus 3 fields** — 26 today,
-plus `skill.read`, `skill.list` and `mcp.register` — and the freeze is real: any
-further addition needs a shipped-version argument that does not currently exist.
-
-**A finding that reshapes this batch: the documented surface is 10 of 26
-implemented.** `docs/18` lists 26 callable names; `api.cxx`'s `ENTRIES` table
-registers ten (`tool.register`, `tool.unregister`, `model.register`, `on`, `off`,
-`emit`, `log.*`). Absent: `cmd.register`, `defer`, `timer.*`, `notify`,
-`cfg.get`, `session.snapshot`, `session.fork`, `spawn`, `net.*`, `fs.*`,
-`skill.register`, `mcp.register`, `context.add_instructions`.
-
-Two consequences the slices must respect:
-
-- **A Lua extension can register and unregister a tool, subscribe to events,
-  log, and register a provider. That is all.** So a first-party extension cannot
-  read config (`cfg.get`), spawn a process, or touch the filesystem. Slice B's `skills`
-  extension therefore depends on P2 — there is no alternative route to a skill
-  body — and it must not assume `cfg.get` for its own configuration.
-- **The manifest permission table gates functions that mostly do not exist.**
-  `fs_read`, `fs_write` and `spawn` gate nothing, because `mcode.fs.*` and
-  `mcode.spawn` are not implemented. `net` **is** enforced, but only where it
-  already applies: `api.cxx` refuses `mcode.model.register` without it. So the
-  boundary is load-bearing for `tool.register` and `model.register`, and
-  decorative for the rest. Recorded here so the claim is not repeated as though
-  the whole surface were live.
-
-Completing the surface is **not** in scope. It is M5 work, and pulling it in
-would triple this batch. The two additions above are the minimum the slices
-need.
+The lesson, recorded because it generalises: **a Phase 0 item must be complete in
+itself.** An enumerator is; a row pointing at a missing function is not; a config
+section nothing reads is not.
 
 ## File ownership, and the two files that would otherwise collide
 
