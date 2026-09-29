@@ -50,6 +50,7 @@ add_library(mcode_core STATIC
     mcode/perm/permission.cxx
     mcode/perm/store.cxx
     mcode/perm/argv.cxx
+    mcode/perm/floor.cxx
     mcode/perm/approval_terminal.cxx
     mcode/perm/approval_headless.cxx
 

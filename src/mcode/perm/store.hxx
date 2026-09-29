@@ -9,6 +9,8 @@
 #include <vector>
 
 #include "mcode/core/error.hxx"
+#include "mcode/core/registry.hxx"
+#include "mcode/fs/workspace.hxx"
 
 namespace mcode::perm {
 
@@ -80,6 +82,52 @@ namespace mcode::perm {
 	private:
 		std::filesystem::path file_;
 	};
+
+	// Which section a request belongs to, and the key within it. One function
+	// for both the write and the read: when the two disagreed, a remembered
+	// answer was written to a section nothing ever looked in.
+	//
+	// Exec keys on the canonical argv, never a prefix -- a remembered
+	// `git push` must not authorize `git push --force`. Everything else keys on
+	// the tool name, because its resource is an opaque argument blob rather
+	// than a stable identity.
+	enum class store_section {
+		exec,
+		paths,
+		tools,
+	};
+
+	struct store_key {
+		store_section section = store_section::tools;
+		std::string key;
+	};
+
+	using store_map = std::map< std::string, store_decision, std::less<> >;
+
+	[[nodiscard]] auto section_of( store_layer& layer, store_section section ) -> store_map&;
+	[[nodiscard]] auto section_of( const store_layer& layer, store_section section )
+		-> const store_map&;
+
+	// The three fields the key depends on. A separate struct rather than
+	// `permission_request`, which lives in permission.hxx and already includes
+	// this header -- taking it here would be a cycle.
+	struct request_identity {
+		tool_class klass = tool_class::exec;
+		std::string tool_name;
+		std::string resource;
+	};
+
+	// Loads the store and drops every project-scope allow with a warning: a
+	// cloned repository must not be able to grant itself permissions. The
+	// store's origin decides -- a file under the workspace root is the
+	// project's. Denies survive.
+	[[nodiscard]] auto load_store_into( remember_store* store, const mcode::workspace& space,
+		store_layer& into, std::vector< std::string >& warnings ) -> status;
+
+	// Nothing to key on: an unparsable command has no canonical form, and a
+	// path is never auto-persisted, so the user's own `paths` globs stay theirs.
+	[[nodiscard]] auto store_key_for( const request_identity& request )
+		-> std::optional< store_key >;
 
 }
 

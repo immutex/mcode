@@ -27,7 +27,7 @@ namespace mcode::perm {
 			section_spec{ "tools" },
 		};
 
-		[[nodiscard]] auto section_of( store_layer& layer, const std::string_view key )
+		[[nodiscard]] auto find_section( store_layer& layer, const std::string_view key )
 			-> std::map< std::string, store_decision, std::less<> >* {
 			if ( key == "exec" ) {
 				return &layer.exec;
@@ -104,7 +104,7 @@ namespace mcode::perm {
 			out += std::to_string( STORE_VERSION );
 
 			for ( const auto& spec : SECTIONS ) {
-				const auto* entries = section_of( const_cast< store_layer& >( layer ), spec.key );
+				const auto* entries = find_section( const_cast< store_layer& >( layer ), spec.key );
 
 				if ( entries == nullptr || entries->empty( ) ) {
 					continue;
@@ -211,7 +211,7 @@ namespace mcode::perm {
 					"' must be an object of decision strings" ) );
 			}
 
-			auto* entries = section_of( layer, spec.key );
+			auto* entries = find_section( layer, spec.key );
 
 			for ( const auto& [ key, value ] : section->members ) {
 				if ( value.type != json::node::kind::string ) {
@@ -252,13 +252,13 @@ namespace mcode::perm {
 		}
 
 		for ( const auto& spec : SECTIONS ) {
-			const auto* source = section_of( const_cast< store_layer& >( additions ), spec.key );
+			const auto* source = find_section( const_cast< store_layer& >( additions ), spec.key );
 
 			if ( source == nullptr ) {
 				continue;
 			}
 
-			auto* target = section_of( merged, spec.key );
+			auto* target = find_section( merged, spec.key );
 
 			for ( const auto& [ key, decision ] : *source ) {
 				target->insert_or_assign( key, decision );
@@ -326,5 +326,108 @@ namespace mcode::perm {
 		return { };
 	}
 
-}
+	[[nodiscard]] auto store_key_for( const request_identity& request )
+		-> std::optional< store_key > {
+		if ( request.resource.empty( ) && request.klass == tool_class::exec ) {
+			// An unparsable command has no canonical form to remember.
+			return std::nullopt;
+		}
 
+		if ( request.klass == tool_class::exec ) {
+			return store_key{ store_section::exec, request.resource };
+		}
+
+		if ( request.klass == tool_class::read || request.klass == tool_class::write ) {
+			// The user's own `paths` entries are hand-written globs; we
+			// never auto-persist one, so there is nothing to key here.
+			return std::nullopt;
+		}
+
+		if ( request.tool_name.empty( ) ) {
+			return std::nullopt;
+		}
+
+		return store_key{ store_section::tools, request.tool_name };
+	}
+
+	[[nodiscard]] auto section_of( store_layer& layer, const store_section section )
+		-> store_map& {
+		switch ( section ) {
+			case store_section::exec: return layer.exec;
+			case store_section::paths: return layer.paths;
+			case store_section::tools: return layer.tools;
+		}
+
+		return layer.tools;
+	}
+
+	[[nodiscard]] auto section_of( const store_layer& layer, const store_section section )
+		-> const store_map& {
+		switch ( section ) {
+			case store_section::exec: return layer.exec;
+			case store_section::paths: return layer.paths;
+			case store_section::tools: return layer.tools;
+		}
+
+		return layer.tools;
+	}
+
+	auto load_store_into( remember_store* store, const mcode::workspace& space,
+		store_layer& into, std::vector< std::string >& warnings ) -> status {
+		if ( store == nullptr ) {
+			return { };
+		}
+
+		const auto loaded = store->load( );
+
+		if ( !loaded ) {
+			return std::unexpected( loaded.error( ) );
+		}
+
+		if ( !loaded->has_value( ) ) {
+			return { };
+		}
+
+		into = **loaded;
+
+		// A project-scoped store cannot widen: drop every allow it carries,
+		// with a warning, because a cloned repo must not be able to grant
+		// itself permissions. Denies survive. The store's origin decides: a
+		// file under the workspace root is the project's.
+		const auto store_text = store->file( ).generic_string( );
+		const auto root_text = space.root( ).generic_string( );
+
+		if ( !store_text.starts_with( root_text + "/" ) &&
+			!store_text.starts_with( root_text + "\\" ) ) {
+			return { };
+		}
+
+		auto dropped = std::size_t{ 0 };
+
+		const auto filter = [ &dropped ]( auto& entries ) {
+			for ( auto entry = entries.begin( ); entry != entries.end( ); ) {
+				if ( entry->second == store_decision::allow ) {
+					entry = entries.erase( entry );
+					++dropped;
+
+					continue;
+				}
+
+				++entry;
+			}
+		};
+
+		filter( into.exec );
+		filter( into.paths );
+		filter( into.tools );
+
+		if ( dropped > 0 ) {
+			warnings.push_back( "project store " + store_text +
+				" cannot widen; dropped " + std::to_string( dropped ) +
+				" allow entries" );
+		}
+
+		return { };
+	}
+
+}
