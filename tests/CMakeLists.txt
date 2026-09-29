@@ -24,6 +24,8 @@ add_executable(mcode_tests
     test_loader_failures.cxx
     test_manifest.cxx
     test_hooks.cxx
+    test_skills.cxx
+    test_instruct_chain.cxx
 )
 
 target_link_libraries(mcode_tests

@@ -271,7 +271,11 @@ namespace mcode {
 
 	// The core system prompt, sections 1-8 in the cache-stable order. Byte-stable
 	// for the session; the environment block and recitation live in the tail.
-	[[nodiscard]] auto build_system_prompt( const tool_registry& registry ) -> std::string;
+	// The instruction chain and skill index are sections 10-11; empty means the
+	// section is absent.
+	[[nodiscard]] auto build_system_prompt( const tool_registry& registry,
+		const std::string_view instruction_chain = { },
+		const std::string_view skill_index = { } ) -> std::string;
 
 	// Thrash detection over a rolling window of canonicalized tool-call hashes.
 	class thrash_detector {
@@ -318,6 +322,11 @@ namespace mcode {
 			std::string api_key;
 			std::string workspace_root;
 			std::string platform_name;
+
+			// Prompt sections 10 and 11, assembled once at session start.
+			// Empty means the section is absent.
+			std::string instruction_chain;
+			std::string skill_index;
 		};
 
 		agent_loop( tool_registry& registry, event_log& log, session_budget budget = { } )
@@ -386,6 +395,8 @@ namespace mcode {
 		std::string api_key_;
 		std::string workspace_root_;
 		std::string platform_name_;
+		std::string instruction_chain_;
+		std::string skill_index_;
 
 		thrash_detector thrash_;
 		std::string last_failure_;

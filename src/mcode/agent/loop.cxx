@@ -40,7 +40,9 @@ namespace mcode {
 		model_name_( deps.model_name ), caps_( deps.caps ),
 		provider_( deps.provider ), api_key_( deps.api_key ),
 		workspace_root_( deps.workspace_root ),
-		platform_name_( deps.platform_name ) {
+		platform_name_( deps.platform_name ),
+		instruction_chain_( deps.instruction_chain ),
+		skill_index_( deps.skill_index ) {
 		if ( registry_ == nullptr ) {
 			registry_ = &owned_registry_;
 		}
@@ -90,7 +92,8 @@ namespace mcode {
 	auto agent_loop::request_and_fold( const model::effort effort ) -> result< bool > {
 		const auto near_budget = budget_.nearly_exhausted( );
 		const auto assembled = assemble_request( *registry_,
-			{ .system_prompt = build_system_prompt( *registry_ ),
+			{ .system_prompt = build_system_prompt( *registry_, instruction_chain_,
+				  skill_index_ ),
 				.history = history_,
 				.model_name = model_name_,
 				.mode = caps_.caching,

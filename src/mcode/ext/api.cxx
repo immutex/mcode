@@ -499,6 +499,14 @@ namespace mcode::ext {
 			return surface_from( state )->handle_emit( state );
 		}
 
+		auto lua_skill_read( lua_State* state ) -> int {
+			return surface_from( state )->handle_skill_read( state );
+		}
+
+		auto lua_skill_list( lua_State* state ) -> int {
+			return surface_from( state )->handle_skill_list( state );
+		}
+
 	}
 
 	auto api_surface::install( const install_request& request ) -> status {
@@ -509,6 +517,7 @@ namespace mcode::ext {
 		providers_ = &request.providers;
 		hooks_ = &request.hooks;
 		manifest_ = request.details;
+		skills_ = request.skills;
 
 		// Identity first: `mcode.ext.name` is read by tools and by the log prefix,
 		// and the definition file declares it as a field rather than a call.
@@ -536,6 +545,8 @@ namespace mcode::ext {
 			{ "log.info", lua_log_info },
 			{ "log.warn", lua_log_warn },
 			{ "log.error", lua_log_error },
+			{ "skill.read", lua_skill_read },
+			{ "skill.list", lua_skill_list },
 		};
 
 		for ( const auto& entry : ENTRIES ) {

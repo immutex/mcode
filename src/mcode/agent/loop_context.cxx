@@ -103,7 +103,9 @@ namespace mcode {
 		return out;
 	}
 
-	auto build_system_prompt( const tool_registry& registry ) -> std::string {
+	auto build_system_prompt( const tool_registry& registry,
+		const std::string_view instruction_chain,
+		const std::string_view skill_index ) -> std::string {
 		auto has_tool = [&]( const std::string_view name ) {
 			return registry.find( name ) != nullptr;
 		};
@@ -146,6 +148,34 @@ namespace mcode {
 		out += "# Output format\n";
 		out += "Keep chat terse; keep code at full verbosity. Cite changes as";
 		out += " path:line.\n";
+
+		// Sections 10 and 11 are session-start only: both arrive fully rendered
+		// from the caller, and nothing here recomputes per turn, so the cached
+		// prefix stays byte-stable.
+		if ( !instruction_chain.empty( ) ) {
+			out += "\n# Project instructions\n";
+			out += "The instructions below come from the repository's AGENTS.md";
+			out += " chain, broadest first. When instructions contradict, the";
+			out += " CLOSEST one to your current work wins; later text overrides";
+			out += " earlier text.\n\n";
+			out += instruction_chain;
+
+			if ( !instruction_chain.ends_with( '\n' ) ) {
+				out += '\n';
+			}
+		}
+
+		if ( !skill_index.empty( ) && has_tool( "skill_read" ) ) {
+			out += "\n# Skills\n";
+			out += "Procedures available as skills. When one matches the task,";
+			out += " read its full instructions with the skill_read tool before";
+			out += " acting on it.\n\n";
+			out += skill_index;
+
+			if ( !skill_index.ends_with( '\n' ) ) {
+				out += '\n';
+			}
+		}
 
 		return out;
 	}

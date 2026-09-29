@@ -180,6 +180,21 @@ declare mcode: {
 			body: string,
 			path: string?,
 		}) -> number,
+
+		-- Reads a discovered skill's body by NAME. Never a path: the host
+		-- resolves the name against the discovered set, so this cannot be turned
+		-- into an arbitrary-file read. Unknown names return `nil, err`.
+		read: (name: string) -> (string?, string?),
+
+		-- Lists the discovered skills: the same rows the prompt index is built
+		-- from, including skills hidden from the model by
+		-- `disable-model-invocation` (their `hidden` field is true).
+		list: () -> { {
+			name: string,
+			description: string,
+			hidden: boolean,
+			origin: string,
+		} },
 	},
 
 	mcp: {
