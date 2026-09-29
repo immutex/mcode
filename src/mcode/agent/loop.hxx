@@ -14,6 +14,9 @@
 
 #include "mcode/core/error.hxx"
 #include "mcode/core/registry.hxx"
+#include "mcode/events/bus.hxx"
+#include "mcode/model/client.hxx"
+#include "mcode/model/types.hxx"
 
 namespace mcode {
 
@@ -21,6 +24,41 @@ namespace mcode {
 	inline constexpr std::uint64_t DEFAULT_MAX_TOKENS = 2'000'000;
 	inline constexpr double DEFAULT_MAX_USD = 5.0;
 	inline constexpr double NEARLY_EXHAUSTED_FRACTION = 0.20;
+
+	// Thrash calibration, not law: the mechanism is fixed, these two numbers are
+	// tuned against the eval suite.
+	inline constexpr std::size_t THRASH_WINDOW = 12;
+	inline constexpr std::size_t THRASH_REPEAT_LIMIT = 3;
+
+	// Reflection caps from the reflection policy.
+	inline constexpr std::size_t MAX_REFLECTIONS_PER_FAILURE_CLASS = 2;
+	inline constexpr std::size_t MAX_REFLECTIONS_PER_RUN = 4;
+
+	// Compaction and clearing triggers, fractions of the usable window.
+	inline constexpr double COMPACTION_TRIGGER_FRACTION = 0.80;
+	inline constexpr double TOOL_CLEAR_TRIGGER_FRACTION = 0.60;
+	inline constexpr double CLEAR_AT_LEAST_FRACTION = 0.20;
+	inline constexpr double SAFETY_MARGIN_FRACTION = 0.05;
+	inline constexpr std::int64_t RESERVED_OUTPUT_TOKENS = 16'000;
+
+	// Post-compaction re-read limits from the numeric guidance table.
+	inline constexpr std::size_t MAX_POST_COMPACT_REREADS = 5;
+	inline constexpr std::int64_t POST_COMPACT_REREAD_TOKENS = 5'000;
+
+	// Session-start context budget, the single source of truth in the north-star doc.
+	inline constexpr std::int64_t SYSTEM_PROMPT_TOKEN_BUDGET = 1'500;
+	inline constexpr std::int64_t TOOLS_TOKEN_BUDGET = 3'500;
+	inline constexpr std::int64_t INSTRUCTION_CHAIN_TOKEN_BUDGET = 2'000;
+	inline constexpr std::int64_t SKILL_INDEX_TOKEN_BUDGET = 1'500;
+	inline constexpr std::int64_t SESSION_START_TOKEN_BUDGET = 8'500;
+
+	// Rough pre-send estimate for budgeting; settle accounts from usage only.
+	inline constexpr std::size_t CHARS_PER_TOKEN_ESTIMATE = 4;
+
+	// History kept verbatim across a compaction.
+	inline constexpr std::size_t COMPACTION_KEEP_FIRST_EVENTS = 4;
+	inline constexpr std::size_t COMPACTION_KEEP_LAST_TURNS = 3;
+	inline constexpr std::int64_t COMPACTION_KEEP_LAST_TOKENS = 20'000;
 
 	struct session_budget {
 		std::uint32_t max_steps = DEFAULT_MAX_STEPS;
@@ -83,7 +121,7 @@ namespace mcode {
 		auto operator=( event_log&& other ) noexcept -> event_log&;
 
 		event_log( const event_log& ) = delete;
-		auto operator=( const event_log& ) -> event_log&;
+		auto operator=( const event_log& ) -> event_log& = delete;
 
 		// Opens (or creates) a log file and appends every subsequent event to it.
 		// Existing content is preserved and its sequence numbers are adopted, so a
@@ -167,30 +205,180 @@ namespace mcode {
 		std::chrono::milliseconds elapsed{ 0 };
 	};
 
+	// The loop's states. Failed is reachable only from Plan; budget exhaustion
+	// anywhere else lands in Handoff.
+	enum class loop_state {
+		idle,
+		plan,
+		act,
+		observe,
+		verify,
+		reflect,
+		replan,
+		handoff,
+		done,
+		failed,
+	};
+
+	[[nodiscard]] auto to_string( const loop_state value ) noexcept -> std::string_view;
+
+	// One scripted model turn's outcome, recorded by the loop.
+	struct turn_outcome {
+		loop_state final_state = loop_state::idle;
+
+		// The states visited this run, in order, including the terminal one.
+		std::vector< loop_state > visited;
+
+		std::string summary_json;
+		std::size_t model_calls = 0;
+	};
+
+	// One assembled request, recorded for tests.
+	struct assembled_request {
+		model::chat_request request;
+
+		// Byte offset where the frozen prefix (tools + system) ends.
+		std::size_t prefix_bytes = 0;
+
+		// The near-budget note, present in the volatile tail only.
+		bool near_budget_note = false;
+	};
+
+	// Assembles one request from the registry and the history.
+	//
+	// The prefix order is tools → system → messages and is byte-stable for the
+	// session: sorted tool schemas, no timestamps, no cwd, no session id. The
+	// near-budget note and everything mutable live in the volatile tail.
+	[[nodiscard]] auto assemble_request( const tool_registry& registry, std::string_view system_prompt,
+		const std::vector< model::message >& history, std::string_view model_name,
+		const model::capabilities& caps, model::cache_mode mode, bool near_budget,
+		std::string_view recitation ) -> assembled_request;
+
+	// The core system prompt, sections 1-8 in the cache-stable order. Byte-stable
+	// for the session; the environment block and recitation live in the tail.
+	[[nodiscard]] auto build_system_prompt( const tool_registry& registry ) -> std::string;
+
+	// Thrash detection over a rolling window of canonicalized tool-call hashes.
+	class thrash_detector {
+	public:
+		// Records one call. Returns the repeat count of this exact hash within the
+		// window, so the caller can escalate monotonically.
+		auto record( std::string_view tool_name, std::string_view args_json ) -> std::size_t;
+
+		[[nodiscard]] auto repeat_count( ) const noexcept -> std::size_t { return current_repeats_; }
+
+	private:
+		std::vector< std::string > window_;
+		std::size_t current_repeats_ = 0;
+	};
+
+	// One compaction result, in the structured output shape.
+	struct compaction_result {
+		std::string summary;
+		std::vector< std::string > pinned_facts;
+		std::vector< std::string > decisions;
+		std::vector< std::string > open_questions;
+
+		// The history that survived verbatim, ready to append to.
+		std::vector< model::message > kept;
+	};
+
 	class agent_loop {
 	public:
 		using tool_handler = std::function< result< std::string >( std::string_view args_json ) >;
 
+		// Construction inputs. A struct rather than nine positional parameters,
+		// and the loop owns nothing it is handed: the registry, client, log and
+		// bus all outlive it.
+		struct dependencies {
+			tool_registry* registry = nullptr;
+			model::model_client* client = nullptr;
+			event_log* log = nullptr;
+			events::bus* bus = nullptr;
+			session_budget budget = { };
+			std::string model_name;
+			model::capabilities caps = { };
+			std::string provider_name;
+			model::provider_descriptor provider;
+			std::string api_key;
+			std::string workspace_root;
+			std::string platform_name;
+		};
+
 		agent_loop( tool_registry& registry, event_log& log, session_budget budget = { } )
-			: registry_( registry ), log_( log ), budget_( budget ) { }
+			: registry_( &registry ), log_( &log ), budget_( budget ) { }
+
+		explicit agent_loop( dependencies dependencies );
 
 		[[nodiscard]] auto execute( const tool_call& call ) -> tool_outcome;
 
 		auto register_handler( std::string name, tool_handler handler ) -> void;
 
+		// Runs the ReAct state machine over one user task until a terminal state.
+		// The scripted client in tests, the HTTP client in production.
+		[[nodiscard]] auto run( std::string_view user_task ) -> result< turn_outcome >;
+
 		[[nodiscard]] auto budget( ) const noexcept -> const session_budget& { return budget_; }
 		[[nodiscard]] auto budget( ) noexcept -> session_budget& { return budget_; }
-		[[nodiscard]] auto log( ) const noexcept -> const event_log& { return log_; }
+		[[nodiscard]] auto log( ) const noexcept -> const event_log& { return *log_; }
+
+		// The command the Verify state runs; empty means none configured, which
+		// routes Verify to Handoff per the no-self-certification rule.
+		auto set_verification_command( std::string command ) -> void {
+			verification_command_ = std::move( command );
+		}
+
+		[[nodiscard]] auto state( ) const noexcept -> loop_state { return state_; }
+		[[nodiscard]] auto history( ) const noexcept -> const std::vector< model::message >& {
+			return history_;
+		}
+
+		// Injects a tool result into the history and returns to Act. Used by the
+		// Observe state and by tests that need to drive the machine directly.
+		auto observe_result( const tool_call& call, const tool_outcome& outcome ) -> void;
+
+		// Marks a run's terminal state and emits the structured summary.
+		auto finish_run( loop_state terminal, std::string_view reason ) -> void;
 
 	private:
-		tool_registry& registry_;
-		event_log& log_;
-		session_budget budget_;
+		auto run_state_machine( ) -> turn_outcome;
+		auto request_and_fold( model::effort effort ) -> result< bool >;
+		auto dispatch_calls( const std::vector< tool_call >& calls ) -> bool;
+		auto maybe_compact( ) -> status;
 
-		// Keyed by tool name with heterogeneous lookup, matching tool_registry. A
-		// vector here meant every dispatch paid a linear scan for a name the
-		// registry had already resolved through a hash.
+		tool_registry* registry_ = nullptr;
+		model::model_client* client_ = nullptr;
+		event_log* log_ = nullptr;
+		events::bus* bus_ = nullptr;
+
+		tool_registry owned_registry_;
+		event_log owned_log_;
+		events::bus owned_bus_;
+
+		session_budget budget_;
+		loop_state state_ = loop_state::idle;
+
+		std::vector< model::message > history_;
+		std::vector< loop_state > visited_;
+		std::string user_task_;
+		std::string model_name_;
+		model::capabilities caps_;
+		model::provider_descriptor provider_;
+		std::string api_key_;
+		std::string workspace_root_;
+		std::string platform_name_;
+
+		thrash_detector thrash_;
+		std::string last_failure_;
+		bool hard_error_ = false;
+		std::string verification_command_;
+		std::vector< tool_call > pending_calls_;
+		std::map< std::string, std::size_t, std::less<> > reflection_counts_;
+		std::size_t total_reflections_ = 0;
+		std::size_t replan_count_ = 0;
+		std::size_t last_failure_repeats_ = 0;
+
 		std::map< std::string, tool_handler, std::less<> > handlers_;
 	};
 
-}
+} // namespace mcode

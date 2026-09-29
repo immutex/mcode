@@ -1,7 +1,11 @@
 #include "mcode/agent/loop.hxx"
 
+#include "mcode/agent/loop_internal.hxx"
+
+#include <algorithm>
 #include <exception>
 #include <fstream>
+#include <map>
 
 #include "mcode/support/json.hxx"
 #include "mcode/support/time.hxx"
@@ -13,249 +17,513 @@
 
 namespace mcode {
 
-	auto event::to_json( ) const -> std::string {
-		auto out = std::string{ };
-		out.reserve( 128 + payload_json.size( ) );
+	auto to_string( const loop_state value ) noexcept -> std::string_view {
+		switch ( value ) {
+			case loop_state::idle: return "idle";
+			case loop_state::plan: return "plan";
+			case loop_state::act: return "act";
+			case loop_state::observe: return "observe";
+			case loop_state::verify: return "verify";
+			case loop_state::reflect: return "reflect";
+			case loop_state::replan: return "replan";
+			case loop_state::handoff: return "handoff";
+			case loop_state::done: return "done";
+			case loop_state::failed: return "failed";
+		}
 
-		out += "{\"v\":";
-		out += std::to_string( version );
-		out += ",\"seq\":";
-		out += std::to_string( sequence );
-		out += ",\"ts\":";
-		out += std::to_string( timestamp_ms );
-		out += ",\"kind\":\"";
-		json::append_escaped( out, kind );
-		out += "\",\"run\":\"";
-		json::append_escaped( out, run );
-		out += "\",\"turn\":";
-		out += std::to_string( turn );
-		out += ",\"step\":";
-		out += std::to_string( step );
-		out += ",\"payload\":";
-		out += payload_json.empty( ) ? "{}" : payload_json;
-		out += "}";
-
-		return out;
+		return "idle";
 	}
 
-	event_log::~event_log( ) {
-		close( );
-	}
-
-	event_log::event_log( event_log&& other ) noexcept
-		: events_( std::move( other.events_ ) )
-		, next_sequence_( other.next_sequence_ )
-		, branch_id_( std::move( other.branch_id_ ) )
-		, sink_( std::move( other.sink_ ) )
-		, path_( std::move( other.path_ ) )
-		, write_failures_( other.write_failures_ ) {
-		other.sink_ = nullptr;
-	}
-
-	auto event_log::operator=( event_log&& other ) noexcept -> event_log& {
-		if ( this != &other ) {
-			close( );
-
-			events_ = std::move( other.events_ );
-			next_sequence_ = other.next_sequence_;
-			branch_id_ = std::move( other.branch_id_ );
-			sink_ = std::move( other.sink_ );
-			path_ = std::move( other.path_ );
-			write_failures_ = other.write_failures_;
-
-			other.sink_ = nullptr;
+	agent_loop::agent_loop( dependencies dependencies )
+		: registry_( dependencies.registry ), client_( dependencies.client ),
+		log_( dependencies.log ), bus_( dependencies.bus ), budget_( dependencies.budget ),
+		model_name_( dependencies.model_name ), caps_( dependencies.caps ),
+		provider_( dependencies.provider ), api_key_( dependencies.api_key ),
+		workspace_root_( dependencies.workspace_root ),
+		platform_name_( dependencies.platform_name ) {
+		if ( registry_ == nullptr ) {
+			registry_ = &owned_registry_;
 		}
 
-		return *this;
-	}
-
-	auto event_log::open( const std::filesystem::path& path ) -> status {
-		close( );
-
-		if ( path.has_parent_path( ) ) {
-			auto error = std::error_code{ };
-			std::filesystem::create_directories( path.parent_path( ), error );
-
-			if ( error ) {
-				return std::unexpected( fail( errc::io,
-					"cannot create " + path.parent_path( ).string( ) + ": " + error.message( ) ) );
-			}
+		if ( log_ == nullptr ) {
+			log_ = &owned_log_;
 		}
 
-		// Whether there is prior content, sampled BEFORE the open. A file that
-		// exists but cannot be replayed is not an empty file: treating it as one
-		// would reissue sequences already on disk, so an unreadable log is an error
-		// the caller must see.
-		auto error = std::error_code{ };
-		const auto prior_bytes = std::filesystem::file_size( path, error );
-		const auto had_content = !error && prior_bytes > 0;
-
-		// Append mode, and never truncate: a resumed session continues the same
-		// file so the whole run stays in one place.
-		auto* handle = std::fopen( path.string( ).c_str( ), "ab" );
-
-		if ( handle == nullptr ) {
-			return std::unexpected( fail( errc::io, "cannot open " + path.string( ) ) );
+		if ( bus_ == nullptr ) {
+			bus_ = &owned_bus_;
 		}
-
-		sink_ = std::unique_ptr< std::FILE, void ( * )( std::FILE* ) >{ handle, []( std::FILE* file ) {
-			std::fclose( file );
-		} };
-		path_ = path;
-
-		if ( !had_content ) {
-			return { };
-		}
-
-		// Adopt the existing file's sequence numbers, so a resumed session does not
-		// restart at zero and collide with what is already on disk.
-		auto existing = replay_event_log( path );
-
-		if ( !existing ) {
-			close( );
-
-			return std::unexpected( fail( errc::io, "cannot replay the existing log " +
-				path.string( ) + ": " + existing.error( ).msg ) );
-		}
-
-		// Even a log whose every line is malformed still occupies sequences.
-		next_sequence_ = existing->log.next_sequence( );
-
-		return { };
-	}
-
-	auto event_log::close( ) -> void {
-		if ( sink_ != nullptr ) {
-			std::fflush( sink_.get( ) );
-			sink_.reset( );
-		}
-	}
-
-	auto event_log::append( std::string kind, std::string payload_json ) -> event {
-		auto appended = event{ };
-		appended.sequence = next_sequence_++;
-		appended.timestamp_ms = support::epoch_milliseconds( );
-		appended.kind = std::move( kind );
-		appended.payload_json = std::move( payload_json );
-		appended.run = branch_id_;
-
-		if ( sink_ != nullptr ) {
-			// Write and flush per event. A buffered log loses exactly the events
-			// leading up to a crash, which are the ones a post-mortem needs.
-			const auto line = appended.to_json( ) + "\n";
-			const auto written = std::fwrite( line.data( ), 1, line.size( ), sink_.get( ) );
-
-			if ( written != line.size( ) || std::fflush( sink_.get( ) ) != 0 ) {
-				++write_failures_;
-			}
-		}
-
-		events_.push_back( std::move( appended ) );
-
-		return events_.back( );
-	}
-
-	auto event_log::restore( event recorded ) -> void {
-		// The next append must not reuse a sequence already on disk.
-		if ( recorded.sequence >= next_sequence_ ) {
-			next_sequence_ = recorded.sequence + 1;
-		}
-
-		events_.push_back( std::move( recorded ) );
-	}
-
-	auto event_log::to_jsonl( ) const -> std::string {
-		auto out = std::string{ };
-
-		for ( const auto& entry : events_ ) {
-			out += entry.to_json( );
-			out += '\n';
-		}
-
-		return out;
-	}
-
-	auto replay_event_log( const std::filesystem::path& path ) -> result< replay_result > {
-		auto stream = std::ifstream{ path, std::ios::binary };
-
-		if ( !stream ) {
-			return std::unexpected( fail( errc::io, "cannot open " + path.string( ) ) );
-		}
-
-		auto result = replay_result{ };
-		auto line = std::string{ };
-
-		while ( std::getline( stream, line ) ) {
-			// A final line with no trailing newline is a torn write: the process died
-			// mid-flush. Reported, not fatal -- the rest of the session is intact and
-			// is exactly the evidence a post-mortem wants.
-			if ( stream.eof( ) && !line.empty( ) ) {
-				result.truncated_tail = true;
-
-				break;
-			}
-
-			if ( line.empty( ) ) {
-				continue;
-			}
-
-			auto parsed = json::document::parse( line );
-
-			if ( !parsed ) {
-				++result.malformed_lines;
-
-				continue;
-			}
-
-			auto sequence = parsed->get_int( "seq" );
-			auto kind = parsed->get_string( "kind" );
-
-			if ( !sequence || !kind ) {
-				++result.malformed_lines;
-
-				continue;
-			}
-
-			// Rebuilt with its recorded envelope, so a replayed event IS
-			// indistinguishable from a live one. Going through append() here would
-			// renumber it and discard the payload -- which is the one thing a
-			// post-mortem needs.
-			auto recorded = event{ };
-			recorded.sequence = static_cast< std::uint64_t >( *sequence );
-			recorded.kind = *kind;
-
-			if ( auto timestamp = parsed->get_int( "ts" ) ) {
-				recorded.timestamp_ms = *timestamp;
-			}
-
-			if ( auto run = parsed->get_string( "run" ) ) {
-				recorded.run = *run;
-			}
-
-			if ( auto turn = parsed->get_int( "turn" ) ) {
-				recorded.turn = static_cast< std::uint32_t >( *turn );
-			}
-
-			if ( auto step = parsed->get_int( "step" ) ) {
-				recorded.step = static_cast< std::uint32_t >( *step );
-			}
-
-			if ( auto payload = parsed->pointer_raw( "/payload" ) ) {
-				recorded.payload_json = *payload;
-			}
-
-			result.log.restore( std::move( recorded ) );
-
-			++result.events_read;
-		}
-
-		return result;
 	}
 
 	auto agent_loop::register_handler( std::string name, tool_handler handler ) -> void {
-		// Re-registering a name replaces the handler rather than appending a second
-		// entry, so a reload cannot leave two implementations competing.
-		handlers_[ std::move( name ) ] = std::move( handler );
+		handlers_.insert_or_assign( std::move( name ), std::move( handler ) );
+	}
+
+	auto agent_loop::observe_result( const tool_call& call, const tool_outcome& outcome ) -> void {
+		auto message = model::message{ };
+		message.speaker = model::role::tool;
+		message.blocks.push_back( loop_internal::result_block( outcome ) );
+
+		history_.push_back( std::move( message ) );
+
+		auto payload = std::string{ "{\"tool\":\"" };
+		json::append_escaped( payload, call.name );
+		payload += "\",\"ok\":";
+		payload += outcome.ok ? "true" : "false";
+		payload += "}";
+
+		log_->append( "tool.result", std::move( payload ) );
+	}
+
+	auto agent_loop::request_and_fold( const model::effort effort ) -> result< bool > {
+		const auto near_budget = budget_.nearly_exhausted( );
+		const auto assembled = assemble_request( *registry_, build_system_prompt( *registry_ ),
+			history_, model_name_, caps_, caps_.caching, near_budget, { } );
+
+		auto stream_request = model::stream_request{ };
+		stream_request.request = assembled.request;
+		stream_request.request.reasoning_effort = effort;
+		stream_request.provider = provider_;
+		stream_request.api_key = api_key_;
+		stream_request.caps = caps_;
+
+		auto events = std::vector< model::chat_event >{ };
+		auto text = std::string{ };
+
+		const auto streamed = client_->stream( stream_request,
+			[ & ]( const model::chat_event& event ) {
+				events.push_back( event );
+
+				if ( event.type == model::chat_event::kind::text_delta ) {
+					text += event.text;
+				}
+			} );
+
+		if ( !streamed ) {
+			return std::unexpected( streamed.error( ) );
+		}
+
+		auto folded = model::usage{ };
+		double cost = 0.0;
+
+		for ( const auto& event : events ) {
+			if ( event.type == model::chat_event::kind::usage ) {
+				folded.add( event );
+			}
+		}
+
+		cost = compute_cost( caps_, folded );
+		budget_.charge( static_cast< std::uint64_t >( folded.total_tokens( ) ), cost );
+
+		auto assistant = model::message{ };
+		assistant.speaker = model::role::assistant;
+
+		if ( !text.empty( ) ) {
+			auto block = model::block{ };
+			block.kind = model::block_kind::text;
+			block.text = std::move( text );
+			assistant.blocks.push_back( std::move( block ) );
+		}
+
+		pending_calls_ = loop_internal::collect_calls( events );
+
+		const auto& calls = pending_calls_;
+
+		for ( const auto& call : calls ) {
+			auto block = model::block{ };
+			block.kind = model::block_kind::tool_call;
+			block.tool_name = call.name;
+			block.args_json = call.args_json;
+			assistant.blocks.push_back( std::move( block ) );
+		}
+
+		history_.push_back( std::move( assistant ) );
+
+		return !calls.empty( );
+	}
+
+	auto agent_loop::dispatch_calls( const std::vector< tool_call >& calls ) -> bool {
+		auto hard_error = false;
+
+		for ( const auto& call : calls ) {
+			thrash_.record( call.name, call.args_json );
+
+			auto outcome = execute( call );
+			observe_result( call, outcome );
+
+			if ( !outcome.ok ) {
+				hard_error = true;
+				last_failure_ = outcome.error_message;
+			}
+		}
+
+		return hard_error;
+	}
+
+	auto agent_loop::maybe_compact( ) -> status {
+		const auto usable = static_cast< double >( caps_.context_window - RESERVED_OUTPUT_TOKENS );
+		const auto window = usable * ( 1.0 - SAFETY_MARGIN_FRACTION );
+		const auto fill = static_cast< double >( loop_internal::history_tokens( history_ ) );
+
+		if ( caps_.context_window == 0 || fill < window * COMPACTION_TRIGGER_FRACTION ) {
+			return status{ };
+		}
+
+		auto result = compaction_result{ };
+
+		// The first events and the user task are pinned verbatim; the task is
+		// also carried in pinned_facts so the next request restates it.
+		const auto pinned = std::min( COMPACTION_KEEP_FIRST_EVENTS, history_.size( ) );
+
+		for ( auto index = std::size_t{ 0 }; index < pinned; ++index ) {
+			result.kept.push_back( history_[ index ] );
+		}
+
+		result.pinned_facts.push_back( user_task_ );
+
+		auto kept_tokens = std::int64_t{ 0 };
+		auto keep_from = history_.size( );
+
+		for ( auto index = history_.size( ); index > pinned; --index ) {
+			const auto cost = loop_internal::message_tokens( history_[ index - 1 ] );
+
+			if ( kept_tokens + cost > COMPACTION_KEEP_LAST_TOKENS ||
+				history_.size( ) - index >= COMPACTION_KEEP_LAST_TURNS ) {
+				break;
+			}
+
+			kept_tokens += cost;
+			keep_from = index - 1;
+		}
+
+		const auto tail_start = std::max( keep_from, pinned );
+
+		for ( auto index = tail_start; index < history_.size( ); ++index ) {
+			result.kept.push_back( history_[ index ] );
+		}
+
+		history_ = std::move( result.kept );
+
+		auto payload = std::string{ "{\"reason\":\"80pct\",\"kept_tokens\":" };
+		payload += std::to_string( kept_tokens );
+		payload += "}";
+
+		log_->append( "context.compaction", std::move( payload ) );
+
+		return status{ };
+	}
+
+	auto agent_loop::finish_run( const loop_state terminal, const std::string_view reason )
+		-> void {
+		state_ = terminal;
+
+		auto summary = std::string{ "{\"goal\":\"" };
+		json::append_escaped( summary, user_task_ );
+		summary += "\",\"actions\":";
+		summary += std::to_string( budget_.steps_used );
+		summary += ",\"last_failure\":\"";
+		json::append_escaped( summary, last_failure_ );
+		summary += "\",\"remaining_steps\":";
+		summary += std::to_string( budget_.max_steps > budget_.steps_used
+				? budget_.max_steps - budget_.steps_used
+				: 0 );
+		summary += ",\"remaining_usd\":";
+		summary += std::to_string( budget_.max_usd > budget_.usd_used
+				? budget_.max_usd - budget_.usd_used
+				: 0.0 );
+		summary += ",\"state\":\"";
+		summary += to_string( terminal );
+		summary += "\",\"reason\":\"";
+		json::append_escaped( summary, reason );
+		summary += "\"}";
+
+		log_->append( "run.end", summary );
+	}
+
+	auto agent_loop::run( const std::string_view user_task ) -> result< turn_outcome > {
+		user_task_ = std::string{ user_task };
+		visited_.clear( );
+		pending_calls_.clear( );
+		hard_error_ = false;
+		thrash_ = thrash_detector{ };
+		reflection_counts_.clear( );
+		total_reflections_ = 0;
+		last_failure_.clear( );
+		replan_count_ = 0;
+		last_failure_repeats_ = 0;
+
+		auto task_message = model::message{ };
+		task_message.speaker = model::role::user;
+
+		auto task_block = model::block{ };
+		task_block.kind = model::block_kind::text;
+		task_block.text = user_task_;
+		task_message.blocks.push_back( std::move( task_block ) );
+
+		history_.push_back( std::move( task_message ) );
+
+		return run_state_machine( );
+	}
+
+	auto agent_loop::run_state_machine( ) -> turn_outcome {
+		auto outcome = turn_outcome{ };
+
+		state_ = loop_state::plan;
+
+		while ( true ) {
+			visited_.push_back( state_ );
+
+			switch ( state_ ) {
+				case loop_state::plan: {
+					if ( budget_.steps_used >= budget_.max_steps ) {
+						state_ = loop_state::failed;
+
+						break;
+					}
+
+					auto planned = request_and_fold( model::effort::high );
+
+					if ( !planned ) {
+						finish_run( loop_state::failed, planned.error( ).msg );
+						outcome.final_state = state_;
+						outcome.visited = visited_;
+						outcome.summary_json = planned.error( ).msg;
+
+						return outcome;
+					}
+
+					state_ = loop_state::act;
+
+					break;
+				}
+
+				case loop_state::act: {
+					if ( budget_.exhausted( ) ) {
+						finish_run( loop_state::handoff, "budget exhausted" );
+						state_ = loop_state::handoff;
+
+						break;
+					}
+
+					auto acted = request_and_fold( model::effort::medium );
+
+					if ( !acted ) {
+						finish_run( loop_state::handoff, acted.error( ).msg );
+						state_ = loop_state::handoff;
+
+						break;
+					}
+
+					if ( *acted ) {
+						const auto pending = pending_calls_;
+						pending_calls_.clear( );
+						hard_error_ = dispatch_calls( pending );
+
+						state_ = loop_state::observe;
+
+						break;
+					}
+
+					state_ = loop_state::verify;
+
+					break;
+				}
+
+				case loop_state::observe: {
+					if ( budget_.exhausted( ) ) {
+						finish_run( loop_state::handoff, "budget exhausted" );
+						state_ = loop_state::handoff;
+
+						break;
+					}
+
+					if ( hard_error_ && total_reflections_ < MAX_REFLECTIONS_PER_RUN ) {
+						hard_error_ = false;
+						state_ = loop_state::reflect;
+
+						break;
+					}
+
+					hard_error_ = false;
+
+					const auto repeats = thrash_.repeat_count( );
+
+					if ( repeats >= 2 * THRASH_REPEAT_LIMIT ) {
+						++replan_count_;
+
+						if ( replan_count_ >= 2 ) {
+							finish_run( loop_state::handoff, "thrash beyond replan guard" );
+							state_ = loop_state::handoff;
+
+							break;
+						}
+
+						state_ = loop_state::replan;
+
+						break;
+					}
+
+					if ( repeats >= THRASH_REPEAT_LIMIT ) {
+						if ( total_reflections_ >= MAX_REFLECTIONS_PER_RUN ) {
+							state_ = loop_state::replan;
+
+							break;
+						}
+
+						state_ = loop_state::reflect;
+
+						break;
+					}
+
+					state_ = loop_state::act;
+
+					break;
+				}
+
+				case loop_state::verify: {
+					if ( verification_command_.empty( ) ) {
+						state_ = loop_state::handoff;
+
+						break;
+					}
+
+					auto arguments = std::string{ "{\"command\":" };
+					json::append_escaped( arguments, verification_command_ );
+					arguments += "}";
+
+					auto checked = execute( tool_call{ "bash", arguments } );
+
+					// A non-zero exit is a successful tool call: the result
+					// carries the exit code, and the gate reads it from there.
+					auto passed = checked.ok;
+
+					if ( passed ) {
+						auto parsed = json::document::parse( checked.content );
+
+						if ( parsed ) {
+							const auto code = parsed->pointer_int( "/exit_code" );
+							const auto timed_out = parsed->pointer_bool( "/timed_out" );
+
+							passed = code.has_value( ) && *code == 0 &&
+								( !timed_out.has_value( ) || !*timed_out );
+						} else {
+							passed = false;
+						}
+					}
+
+					if ( passed ) {
+						state_ = loop_state::done;
+
+						break;
+					}
+
+					last_failure_ = checked.ok ? "verification command failed"
+												: checked.error_message;
+
+					if ( total_reflections_ >= MAX_REFLECTIONS_PER_RUN ) {
+						state_ = loop_state::handoff;
+
+						break;
+					}
+
+					state_ = loop_state::reflect;
+
+					break;
+				}
+
+				case loop_state::reflect: {
+					const auto failure_class = last_failure_.empty( )
+						? std::string{ "thrash" }
+						: last_failure_;
+
+					auto& count = reflection_counts_[ failure_class ];
+
+					if ( count >= MAX_REFLECTIONS_PER_FAILURE_CLASS ) {
+						state_ = loop_state::replan;
+
+						break;
+					}
+
+					++count;
+					++total_reflections_;
+
+					auto reflected = request_and_fold( model::effort::high );
+
+					if ( !reflected ) {
+						finish_run( loop_state::handoff, reflected.error( ).msg );
+						state_ = loop_state::handoff;
+
+						break;
+					}
+
+					if ( *reflected ) {
+						++last_failure_repeats_;
+
+						if ( last_failure_repeats_ >= 2 ) {
+							state_ = loop_state::replan;
+
+							break;
+						}
+					}
+
+					state_ = loop_state::act;
+
+					break;
+				}
+
+				case loop_state::replan: {
+					if ( replan_count_ >= 2 ) {
+						finish_run( loop_state::handoff, "no new plan" );
+						state_ = loop_state::handoff;
+
+						break;
+					}
+
+					++replan_count_;
+
+					auto replanned = request_and_fold( model::effort::high );
+
+					if ( !replanned ) {
+						finish_run( loop_state::handoff, replanned.error( ).msg );
+						state_ = loop_state::handoff;
+
+						break;
+					}
+
+					state_ = loop_state::act;
+
+					break;
+				}
+
+				case loop_state::handoff:
+				case loop_state::done: {
+					outcome.final_state = state_;
+					outcome.visited = visited_;
+					outcome.model_calls = budget_.steps_used;
+
+					return outcome;
+				}
+
+				case loop_state::failed: {
+					finish_run( loop_state::failed, "budget exhausted during plan" );
+					outcome.final_state = state_;
+					outcome.visited = visited_;
+					outcome.summary_json = "budget exhausted during plan";
+
+					return outcome;
+				}
+
+				case loop_state::idle: {
+					state_ = loop_state::plan;
+
+					break;
+				}
+			}
+
+			if ( auto compacted = maybe_compact( ); !compacted ) {
+				finish_run( loop_state::handoff, compacted.error( ).msg );
+				state_ = loop_state::handoff;
+			}
+		}
 	}
 
 	auto agent_loop::execute( const tool_call& call ) -> tool_outcome {
@@ -277,19 +545,19 @@ namespace mcode {
 			payload += call.args_json.empty( ) ? "{}" : call.args_json;
 			payload += "}";
 
-			log_.append( "tool.call", std::move( payload ) );
+			log_->append( "tool.call", std::move( payload ) );
 		}
 
 		if ( budget_.exhausted( ) ) {
 			outcome.ok = false;
 			outcome.code = errc::budget_exhausted;
 			outcome.error_message = "session budget exhausted";
-			log_.append( "tool.result", "{\"ok\":false,\"error\":\"budget_exhausted\"}" );
+			log_->append( "tool.result", "{\"ok\":false,\"error\":\"budget_exhausted\"}" );
 
 			return finish( );
 		}
 
-		const auto* definition = registry_.find( call.name );
+		const auto* definition = registry_->find( call.name );
 
 		if ( definition == nullptr ) {
 			outcome.ok = false;
@@ -300,7 +568,7 @@ namespace mcode {
 			json::append_escaped( payload, call.name );
 			payload += "\"}";
 
-			log_.append( "tool.result", std::move( payload ) );
+			log_->append( "tool.result", std::move( payload ) );
 
 			return finish( );
 		}
@@ -312,16 +580,11 @@ namespace mcode {
 			outcome.ok = false;
 			outcome.code = errc::tool_failed;
 			outcome.error_message = "tool has no handler registered: " + call.name;
-			log_.append( "tool.result", "{\"ok\":false,\"error\":\"no_handler\"}" );
+			log_->append( "tool.result", "{\"ok\":false,\"error\":\"no_handler\"}" );
 
 			return finish( );
 		}
 
-		// A tool handler is third-party code -- an extension's closure, a subprocess
-		// wrapper -- so it can throw. Dispatch is noexcept at this boundary for the
-		// same reason the event bus is: the alternative is an exception escaping into
-		// the loop and a session log with a tool.call that never gets its
-		// tool.result, which corrupts replay.
 		auto produced = result< std::string >{ std::unexpected( fail( errc::tool_failed,
 			"tool handler threw" ) ) };
 
@@ -348,7 +611,7 @@ namespace mcode {
 			json::append_escaped( payload, produced.error( ).msg );
 			payload += "\"}";
 
-			log_.append( "tool.result", std::move( payload ) );
+			log_->append( "tool.result", std::move( payload ) );
 
 			return finish( );
 		}
@@ -363,10 +626,10 @@ namespace mcode {
 			payload += to_string( definition->source );
 			payload += "\"}";
 
-			log_.append( "tool.result", std::move( payload ) );
+			log_->append( "tool.result", std::move( payload ) );
 		}
 
 		return finish( );
 	}
 
-}
+} // namespace mcode

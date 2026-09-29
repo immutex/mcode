@@ -166,4 +166,10 @@ namespace mcode::json {
 	// re-sorts on dump.
 	[[nodiscard]] auto node_at( const document& source, std::string_view path ) -> result< node >;
 
+	// Re-serializes `text` with object keys in sorted order.
+	//
+	// Thrash detection hashes tool arguments; two calls that differ only in key
+	// order are the same call, and hashing the raw text would miss that.
+	[[nodiscard]] auto canonicalize( std::string_view text ) -> result< std::string >;
+
 }

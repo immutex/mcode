@@ -107,6 +107,25 @@ TEST_CASE( "a torn final line is reported, not fatal", "[eventlog]" ) {
 	std::filesystem::remove_all( directory );
 }
 
+TEST_CASE( "replay restores event payloads", "[eventlog]" ) {
+	const auto directory = scratch_dir( );
+	const auto path = directory / "payloads.jsonl";
+
+	{
+		auto out = std::ofstream{ path, std::ios::binary };
+		out << R"({"v":1,"seq":0,"kind":"session.start","payload":{"headless":true}})" << "\n";
+		out << R"({"v":1,"seq":1,"kind":"tool.call","payload":{"tool":"read"}})" << "\n";
+	}
+
+	auto replayed = replay_event_log( path );
+	REQUIRE( static_cast< bool >( replayed ) );
+	REQUIRE( replayed->events_read == 2 );
+	REQUIRE( replayed->log.events( ).front( ).payload_json == R"({"headless":true})" );
+	REQUIRE( replayed->log.events( ).back( ).payload_json == R"({"tool":"read"})" );
+
+	std::filesystem::remove_all( directory );
+}
+
 TEST_CASE( "a corrupt line is counted separately from a torn tail", "[eventlog]" ) {
 	// These are different problems: a torn tail is an interrupted write, a
 	// malformed interior line means the file is not what it claims to be.
