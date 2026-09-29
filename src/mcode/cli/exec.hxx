@@ -40,6 +40,14 @@ namespace mcode::cli {
 		bool no_extensions = false;
 		bool yolo = false;
 
+		// `never` | `on-request` | `always`, from --approval or the merged
+		// config's sandbox.approval. Empty means "not set", so the config
+		// value can win.
+		std::string approval;
+
+		// Extra workspace roots from --add-dir, canonicalized by the caller.
+		std::vector< std::string > add_dirs;
+
 		// Remaining argv after flag extraction. Non-empty means the caller passed
 		// something we did not recognise, which is a usage error -- unknown flags
 		// are never ignored silently (AGENTS.md §Correctness).

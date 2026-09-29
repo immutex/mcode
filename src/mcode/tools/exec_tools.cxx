@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "mcode/perm/argv.hxx"
 #include "mcode/proc/process.hxx"
 #include "mcode/tools/errors.hxx"
 #include "mcode/tools/truncate.hxx"
@@ -156,7 +157,7 @@ namespace mcode::tools {
 			timeout_ms = std::min( *requested, MAX_BASH_TIMEOUT_MS );
 		}
 
-		const auto tokens = parse_command_line( *command );
+		const auto tokens = perm::parse_command_line( *command );
 
 		if ( !tokens ) {
 			return error_result(
@@ -165,15 +166,27 @@ namespace mcode::tools {
 				false );
 		}
 
-		const auto decision = context.policy->decide( *tokens );
+		auto request = perm::permission_request{ };
+		request.tool_name = "bash";
+		request.klass = tool_class::exec;
+		request.resource = perm::canonical_argv( *tokens );
 
-		if ( decision != exec_decision::allow ) {
+		const auto decision = context.permissions->decide( request );
+
+		if ( decision != perm::permission_decision::allow ) {
+			const auto& verdict = context.permissions->last_verdict( );
 			const auto& program = tokens->front( );
 
-			return error_result( "exec denied by the approval policy: " + program,
-				is_exec_runner( program )
-					? "commands through " + program + " are never allowlisted; run the program directly"
-					: "add the program to the session's exec allowlist, or run with --yolo to skip approval prompts",
+			auto message = std::string{ "exec denied by the permission engine: " + program };
+
+			if ( !verdict.reason.empty( ) ) {
+				message += " (" + verdict.reason + ")";
+			}
+
+			return error_result( message,
+				verdict.matched.scope == "floor"
+					? "this action is on the hard-deny floor; no flag or config overrides it"
+					: "the command prompts or is denied; run it interactively to approve it, or add an allow rule",
 				false );
 		}
 

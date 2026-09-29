@@ -1,8 +1,8 @@
-#include "mcode/tools/exec_policy.hxx"
+#include "mcode/perm/argv.hxx"
 
 #include <array>
 
-namespace mcode::tools {
+namespace mcode::perm {
 
 	namespace {
 
@@ -36,45 +36,6 @@ namespace mcode::tools {
 				token.find( '%' ) != std::string_view::npos;
 		}
 
-		[[nodiscard]] auto list_contains( const std::vector< std::string >& list,
-			const std::string_view token ) noexcept -> bool {
-			for ( const auto& entry : list ) {
-				if ( entry == token ) {
-					return true;
-				}
-			}
-
-			return false;
-		}
-
-	}
-
-	auto exec_policy::decide( const std::vector< std::string >& argv ) const -> exec_decision {
-		if ( argv.empty( ) ) {
-			return exec_decision::deny;
-		}
-
-		if ( is_exec_runner( argv.front( ) ) ) {
-			return exec_decision::deny;
-		}
-
-		const auto& program = argv.front( );
-
-		// Deny is checked before allow regardless of list order; the two ifs are
-		// the precedence, not an accident of it.
-		if ( list_contains( deny_argv, program ) ) {
-			return exec_decision::deny;
-		}
-
-		if ( yolo ) {
-			return exec_decision::allow;
-		}
-
-		if ( list_contains( allow_argv, program ) ) {
-			return exec_decision::allow;
-		}
-
-		return exec_decision::deny;
 	}
 
 	auto parse_command_line( const std::string_view command )
@@ -167,3 +128,4 @@ namespace mcode::tools {
 	}
 
 }
+

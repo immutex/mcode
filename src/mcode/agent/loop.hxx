@@ -18,6 +18,10 @@
 #include "mcode/model/client.hxx"
 #include "mcode/model/types.hxx"
 
+namespace mcode::perm {
+	class permission_engine;
+}
+
 namespace mcode {
 
 	inline constexpr std::uint32_t DEFAULT_MAX_STEPS = 100;
@@ -209,6 +213,12 @@ namespace mcode {
 		errc code = errc::ok;
 		std::string error_message;
 		std::chrono::milliseconds elapsed{ 0 };
+
+		// Set when the permission engine denied the call. One denied call is a
+		// failed tool call, not the end of the run; the flag exists so the run
+		// can report exit 5 when a denial leaves the loop unable to progress.
+		// Cleared by any subsequent successful call.
+		bool permission_denied = false;
 	};
 
 	// The loop's states. Failed is reachable only from Plan; budget exhaustion
@@ -271,7 +281,11 @@ namespace mcode {
 
 	// The core system prompt, sections 1-8 in the cache-stable order. Byte-stable
 	// for the session; the environment block and recitation live in the tail.
-	[[nodiscard]] auto build_system_prompt( const tool_registry& registry ) -> std::string;
+	// The instruction chain and skill index are the skills workstream's
+	// sections 10-11; empty means the section is absent.
+	[[nodiscard]] auto build_system_prompt( const tool_registry& registry,
+		const std::string_view instruction_chain = { },
+		const std::string_view skill_index = { } ) -> std::string;
 
 	// Thrash detection over a rolling window of canonicalized tool-call hashes.
 	class thrash_detector {
@@ -318,6 +332,16 @@ namespace mcode {
 			std::string api_key;
 			std::string workspace_root;
 			std::string platform_name;
+
+			// The permission engine, consulted before every tool handler runs.
+			// Non-const on purpose: approval resolution mutates it (session
+			// rules, remember-store writes).
+			perm::permission_engine* permissions = nullptr;
+
+			// Prompt sections owned by the skills workstream. Empty means the
+			// section is absent.
+			std::string instruction_chain;
+			std::string skill_index;
 		};
 
 		agent_loop( tool_registry& registry, event_log& log, session_budget budget = { } )
@@ -349,6 +373,13 @@ namespace mcode {
 		[[nodiscard]] auto state( ) const noexcept -> loop_state { return state_; }
 		[[nodiscard]] auto history( ) const noexcept -> const std::vector< model::message >& {
 			return history_;
+		}
+
+		// True when the most recent dispatch ended in a permission denial and
+		// no call has succeeded since. The run-level exit-5 signal: a denial
+		// that leaves the loop unable to make progress.
+		[[nodiscard]] auto permission_denied( ) const noexcept -> bool {
+			return permission_denied_;
 		}
 
 		// Injects a tool result into the history and returns to Act. Used by the
@@ -390,7 +421,11 @@ namespace mcode {
 		thrash_detector thrash_;
 		std::string last_failure_;
 		bool hard_error_ = false;
+		bool permission_denied_ = false;
 		std::string verification_command_;
+		perm::permission_engine* permissions_ = nullptr;
+		std::string instruction_chain_;
+		std::string skill_index_;
 		std::vector< tool_call > pending_calls_;
 		std::map< std::string, std::size_t, std::less<> > reflection_counts_;
 		std::size_t total_reflections_ = 0;

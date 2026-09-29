@@ -8,7 +8,8 @@
 #include "mcode/core/registry.hxx"
 #include "mcode/fs/workspace.hxx"
 #include "mcode/tools/errors.hxx"
-#include "mcode/tools/exec_policy.hxx"
+#include "mcode/perm/argv.hxx"
+#include "mcode/perm/permission.hxx"
 #include "mcode/tools/exec_tools.hxx"
 #include "mcode/tools/file_tools.hxx"
 #include "mcode/tools/register.hxx"
@@ -310,20 +311,15 @@ TEST_CASE( "grep reports a bad regex actionably", "[tools][grep]" ) {
 	CHECK( out.find( "invalid regex" ) != std::string::npos );
 }
 
-TEST_CASE( "bash denies exec by default and allows with an argv pattern", "[tools][bash]" ) {
+TEST_CASE( "bash prompts by default and honours a scripted allow", "[tools][bash]" ) {
 	auto setup = fixture{ };
 
 	const auto denied = run_tool( handle_bash, NO_MATCH_COMMAND, setup );
 	CHECK( is_error_json( denied ) );
-	CHECK( denied.find( "denied by the approval policy" ) != std::string::npos );
+	CHECK( denied.find( "denied by the permission engine" ) != std::string::npos );
+	CHECK( setup.approval.asks( ) == 1 );
 
-	setup.policy.allow_argv.push_back(
-#if defined( _WIN32 )
-		"findstr"
-#else
-		"grep"
-#endif
-	);
+	setup.approval.queue( perm::approval_outcome::allow_once );
 
 	const auto allowed = run_tool( handle_bash, NO_MATCH_COMMAND, setup );
 	CHECK( allowed.find( "\"ok\":true" ) != std::string::npos );
@@ -331,8 +327,7 @@ TEST_CASE( "bash denies exec by default and allows with an argv pattern", "[tool
 }
 
 TEST_CASE( "bash reports a non-zero exit as a success, never a tool error", "[tools][bash]" ) {
-	auto setup = fixture{ };
-	setup.policy.yolo = true;
+	auto setup = fixture{ true };
 
 	const auto out = run_tool( handle_bash,
 #if defined( _WIN32 )
@@ -347,8 +342,7 @@ TEST_CASE( "bash reports a non-zero exit as a success, never a tool error", "[to
 }
 
 TEST_CASE( "bash refuses compound commands and exec runners", "[tools][bash]" ) {
-	auto setup = fixture{ };
-	setup.policy.yolo = true;
+	auto setup = fixture{ true };
 
 	const auto compound = run_tool( handle_bash,
 		R"({"command":"echo a && echo b"})", setup );
@@ -356,7 +350,7 @@ TEST_CASE( "bash refuses compound commands and exec runners", "[tools][bash]" ) 
 
 	const auto runner = run_tool( handle_bash, R"({"command":"sh -c echo hi"})", setup );
 	CHECK( is_error_json( runner ) );
-	CHECK( runner.find( "never allowlisted" ) != std::string::npos );
+	CHECK( runner.find( "denied by the permission engine" ) != std::string::npos );
 }
 
 TEST_CASE( "ask_user fails clearly when headless", "[tools][ask_user]" ) {
@@ -479,48 +473,76 @@ TEST_CASE( "read of a non-UTF-8 file does not make the first write stale", "[too
 	CHECK( out.find( "\"mode\":\"overwrite\"" ) != std::string::npos );
 }
 
-TEST_CASE( "deny beats allow regardless of list order", "[tools][exec_policy]" ) {
-	auto policy = exec_policy{ };
-	policy.allow_argv = { "git" };
-	policy.deny_argv = { "rm" };
+TEST_CASE( "deny beats allow regardless of scope order", "[perm][engine]" ) {
+	auto setup = fixture{ };
 
-	CHECK( policy.decide( { "rm", "-rf", "x" } ) == exec_decision::deny );
-	CHECK( policy.decide( { "git", "status" } ) == exec_decision::allow );
+	// A user-scope allow and a session-scope deny for the same argv: the deny
+	// wins no matter which was added first.
+	setup.engine.add_config_rules( perm::rule_scope::user, { }, { "git status" } );
+	setup.engine.add_config_rules( perm::rule_scope::session, { "git status" }, { } );
 
-	auto swapped = exec_policy{ };
-	swapped.deny_argv = { "git" };
-	swapped.allow_argv = { "git" };
+	auto request = perm::permission_request{ };
+	request.tool_name = "bash";
+	request.klass = tool_class::exec;
+	request.resource = "git status";
 
-	CHECK( swapped.decide( { "git", "push" } ) == exec_decision::deny );
+	CHECK( setup.engine.decide( request ) == perm::permission_decision::deny );
+
+	auto swapped = fixture{ };
+	swapped.engine.add_config_rules( perm::rule_scope::user, { "git status" }, { } );
+	swapped.engine.add_config_rules( perm::rule_scope::session, { }, { "git status" } );
+
+	CHECK( swapped.engine.decide( request ) == perm::permission_decision::deny );
 }
 
-TEST_CASE( "redirection and newline are refused as command shape", "[tools][exec_policy]" ) {
-	CHECK_FALSE( parse_command_line( "git log > .git/hooks/pre-commit" ).has_value( ) );
-	CHECK_FALSE( parse_command_line( "sort < input.txt" ).has_value( ) );
-	CHECK_FALSE( parse_command_line( std::string{ "echo a\nrm -rf /" } ).has_value( ) );
-	CHECK_FALSE( parse_command_line( std::string{ "echo a\rb" } ).has_value( ) );
+TEST_CASE( "a remembered allow is argv-exact", "[perm][engine]" ) {
+	auto setup = fixture{ };
+
+	setup.approval.queue( perm::approval_outcome::allow_remember );
+
+	auto status = perm::permission_request{ };
+	status.tool_name = "bash";
+	status.klass = tool_class::exec;
+	status.resource = "git status";
+
+	CHECK( setup.engine.decide( status ) == perm::permission_decision::allow );
+
+	// The store now holds `git status`; a different argv is still an ask.
+	auto push = perm::permission_request{ };
+	push.tool_name = "bash";
+	push.klass = tool_class::exec;
+	push.resource = "git push";
+
+	setup.approval.queue( perm::approval_outcome::deny_once );
+	CHECK( setup.engine.decide( push ) == perm::permission_decision::deny );
 }
 
-TEST_CASE( "runner detection survives spelling differences", "[tools][exec_policy]" ) {
-	CHECK( is_exec_runner( "/bin/sh" ) );
-	CHECK( is_exec_runner( "C:\\Windows\\System32\\cmd.exe" ) );
-	CHECK( is_exec_runner( "CMD" ) );
-	CHECK( is_exec_runner( "Cmd.exe" ) );
-	CHECK( is_exec_runner( "pwsh" ) );
-	CHECK( is_exec_runner( "bash.exe" ) );
-	CHECK_FALSE( is_exec_runner( "git" ) );
-	CHECK_FALSE( is_exec_runner( "cmake" ) );
+TEST_CASE( "redirection and newline are refused as command shape", "[perm][argv]" ) {
+	CHECK_FALSE( perm::parse_command_line( "git log > .git/hooks/pre-commit" ).has_value( ) );
+	CHECK_FALSE( perm::parse_command_line( "sort < input.txt" ).has_value( ) );
+	CHECK_FALSE( perm::parse_command_line( std::string{ "echo a\nrm -rf /" } ).has_value( ) );
+	CHECK_FALSE( perm::parse_command_line( std::string{ "echo a\rb" } ).has_value( ) );
 }
 
-TEST_CASE( "variable expansion is refused", "[tools][exec_policy]" ) {
-	CHECK_FALSE( parse_command_line( "echo $HOME" ).has_value( ) );
-	CHECK_FALSE( parse_command_line( "echo ${PATH}" ).has_value( ) );
-	CHECK_FALSE( parse_command_line( "echo %APPDATA%" ).has_value( ) );
+TEST_CASE( "runner detection survives spelling differences", "[perm][argv]" ) {
+	CHECK( perm::is_exec_runner( "/bin/sh" ) );
+	CHECK( perm::is_exec_runner( "C:\\Windows\\System32\\cmd.exe" ) );
+	CHECK( perm::is_exec_runner( "CMD" ) );
+	CHECK( perm::is_exec_runner( "Cmd.exe" ) );
+	CHECK( perm::is_exec_runner( "pwsh" ) );
+	CHECK( perm::is_exec_runner( "bash.exe" ) );
+	CHECK_FALSE( perm::is_exec_runner( "git" ) );
+	CHECK_FALSE( perm::is_exec_runner( "cmake" ) );
+}
+
+TEST_CASE( "variable expansion is refused", "[perm][argv]" ) {
+	CHECK_FALSE( perm::parse_command_line( "echo $HOME" ).has_value( ) );
+	CHECK_FALSE( perm::parse_command_line( "echo ${PATH}" ).has_value( ) );
+	CHECK_FALSE( perm::parse_command_line( "echo %APPDATA%" ).has_value( ) );
 }
 
 TEST_CASE( "bash executes the parsed argv, not the raw string", "[tools][bash]" ) {
-	auto setup = fixture{ };
-	setup.policy.yolo = true;
+	auto setup = fixture{ true };
 
 	const auto out = run_tool( handle_bash, NO_MATCH_COMMAND, setup );
 	CHECK( out.find( "\"ok\":true" ) != std::string::npos );

@@ -7,10 +7,10 @@
 #include <utility>
 #include <vector>
 
-#include "mcode/core/registry.hxx"
 #include "mcode/core/error.hxx"
+#include "mcode/core/registry.hxx"
 #include "mcode/fs/workspace.hxx"
-#include "mcode/tools/exec_policy.hxx"
+#include "mcode/perm/permission.hxx"
 #include "mcode/tools/session_reads.hxx"
 
 namespace mcode::tools {
@@ -21,13 +21,14 @@ namespace mcode::tools {
 	struct tool_context {
 		workspace* space = nullptr;
 		session_reads* reads = nullptr;
-		const exec_policy* policy = nullptr;
+		perm::permission_engine* permissions = nullptr;
 
 		// Run-scoped artifact directory name under `.mcode/artifacts/`, taken from
 		// the event log so two runs cannot collide.
 		std::string run_id;
 
-		// The approval policy's yolo decision, made once at startup.
+		// True under --json: no terminal is attached, so prompts are impossible
+		// and every ask resolves to deny.
 		bool headless = false;
 	};
 
@@ -66,3 +67,4 @@ namespace mcode::tools {
 	};
 
 }
+
