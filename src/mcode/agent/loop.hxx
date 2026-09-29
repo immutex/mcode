@@ -426,8 +426,6 @@ namespace mcode {
 		bool permission_denied_ = false;
 		std::string verification_command_;
 		perm::permission_engine* permissions_ = nullptr;
-		std::string instruction_chain_;
-		std::string skill_index_;
 		std::vector< tool_call > pending_calls_;
 		std::map< std::string, std::size_t, std::less<> > reflection_counts_;
 		std::size_t total_reflections_ = 0;
