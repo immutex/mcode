@@ -406,6 +406,60 @@ code comments.
     comments should still be one line unless the alternative is a reader getting
     the code wrong.
 
+48. **An in-workspace write does not prompt, which is a deliberate deviation from
+    `docs/12`'s table.** That table says `ask`; taken literally the agent prompts
+    on every file edit, which is the "bothering the user" failure and enough on
+    its own to make the tool unusable. An in-workspace write is already bounded by
+    three things a prompt would not improve: the canonical-path boundary check,
+    the read-before-write hash invariant, and the `.git/` / `.mcode/` deny. The
+    prompt adds a keystroke, not a guarantee, and git is the real undo.
+    `[permissions] ask = ["write"]` restores the strict reading verbatim — one
+    config line, no code change, and both paths are tested.
+
+49. **`--yolo` skips questions; it does not remove the floor.** A small hard-deny
+    floor survives it: recursive delete of a filesystem root or the user's home,
+    privilege escalation, `mkfs`, `dd` to a device, and partition tools, matched
+    on the *canonical* target so `rm -rf /` and `rm -rf //` are one command. Every
+    rule is tested against its legitimate near-miss (`rm -rf ./build`,
+    `~/scratch/project-a`, `.gitignore`), because a false positive blocks real
+    work and trains the user to disable the check. The floor is a separate check
+    ahead of the rule merge, not a rule in the list: a rule can be overridden by a
+    later scope and the floor must not be.
+
+50. **`--yolo` is not "still sandboxed", and the help text used to say it was.**
+    `apply_sandbox` returns `unsupported` on all three platforms; OS enforcement
+    is deferred. The floor above is a policy check on parsed argv and canonical
+    paths, not isolation — a command that reaches outside those two inputs is not
+    caught. Claiming otherwise was a false security claim in shipped output.
+
+51. **The remember store is `permissions.json`, not `config.toml`.** There is no
+    TOML writer in the tree, and appending to a file the user hand-edits risks
+    clobbering their comments and formatting. JSON is written by us, for us, with
+    a sorted-key writer that already exists and is tested, and it is trivially
+    inspectable and deletable. The user store and the project store are separate
+    files: the repository's own `.mcode/permissions.json` is loaded read-only with
+    every allow dropped, so a cloned repository can neither grant itself
+    permissions nor rewrite the user's answers.
+
+52. **A project-scope store cannot widen.** Enforced at load, with a warning, not
+    at use — the same rule `config.cxx` already applies to project TOML. An
+    `allow` from the project layer is dropped rather than honoured, because a
+    one-clone compromise is the failure mode the rule exists to prevent.
+
+53. **An extension tool needs a handler routed back into its VM.** A definition in
+    the registry is not enough: the closure that runs it lives in the extension's
+    VM, so `cli_commands.cxx` registers a handler per entry in
+    `load_result::tool_owners`. Without it the model sees the tool in its schemas
+    and every call returns "tool has no handler registered" — which is what
+    happened the first time a bundled extension registered a *tool* rather than a
+    provider.
+
+54. **`docs/01` has no session-start budget row.** `AGENTS.md` points at `docs/01`
+    for the budgets and lists a session-start row of ≤8.5K, but that row does not
+    exist there; the figure and its breakdown live at `docs/05:71`, which marks
+    itself the authority. This batch cites `docs/05:71` directly. The underlying
+    inconsistency predates this batch and is not resolved here.
+
 ## Building
 
 ```bash
