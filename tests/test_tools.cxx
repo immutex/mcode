@@ -103,6 +103,10 @@ TEST_CASE( "read of an empty file succeeds and records the read", "[tools][read]
 	const auto out = run_tool( handle_read, R"({"path":"empty.txt"})", setup );
 	CHECK_FALSE( is_error_json( out ) );
 
+	// An empty render is indistinguishable from a tool that produced nothing, so
+	// the result says which it is.
+	CHECK( out.find( "\"empty\":true" ) != std::string::npos );
+
 	const auto absolute = setup.space.resolve( "empty.txt" );
 	REQUIRE( absolute );
 	CHECK( setup.reads.contains( *absolute ) );

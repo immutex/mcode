@@ -234,6 +234,14 @@ namespace mcode::tools {
 			auto notes = std::string{ };
 			auto truncated_window = last < total_lines;
 
+			// An empty file renders as an empty string, which the model cannot tell
+			// apart from a tool that returned nothing -- observed live as "let me
+			// check the file content properly" followed by a redundant re-read. Say
+			// so explicitly.
+			if ( total_lines == 0 ) {
+				notes += "\"empty\":true,";
+			}
+
 			if ( truncated_window ) {
 				notes += "\"truncated\":true,\"next_offset\":" + std::to_string( last + 1 ) + ",";
 			}
