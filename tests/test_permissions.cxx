@@ -117,6 +117,18 @@ namespace {
 
 			return engine.decide( request );
 		}
+
+		// An MCP tool: its resource is an opaque arguments blob, so the store
+		// must key it by name rather than by what it was called with.
+		auto mcp( const std::string& tool, const std::string& arguments ) {
+			auto request = perm::permission_request{ };
+			request.tool_name = tool;
+			request.klass = tool_class::mcp;
+			request.owner = "mcp:echo";
+			request.resource = arguments;
+
+			return engine.decide( request );
+		}
 	};
 
 	// Builds a store file with the given JSON body, for the project-store tests.
@@ -636,3 +648,130 @@ TEST_CASE( "command parsing refusals still hold after the fold", "[perm][argv]" 
 	CHECK_FALSE( perm::is_exec_runner( "cmake" ) );
 }
 
+
+TEST_CASE( "an mcp call remembers per tool, not per arguments blob", "[perm][store][mcp]" ) {
+	// The store's `tools` section is keyed by tool name. The resource for an
+	// MCP call is its arguments JSON, so a lookup keyed on the resource could
+	// never match an entry keyed by name -- and `allow_remember` did not write
+	// one at all, so "always" persisted nothing and the next identical call
+	// prompted again.
+	auto setup = rig{ };
+
+	setup.approval.queue( perm::approval_outcome::allow_remember );
+	CHECK( setup.mcp( "mcp__echo__read", R"({"path":"a.txt"})" )
+		== perm::permission_decision::allow );
+	CHECK( setup.approval.asks( ) == 1 );
+
+	// Same tool, different arguments: still no prompt, because the key is the
+	// tool name and not the arguments.
+	CHECK( setup.mcp( "mcp__echo__read", R"({"path":"b.txt"})" )
+		== perm::permission_decision::allow );
+	CHECK( setup.approval.asks( ) == 1 );
+
+	// A different tool is a different question.
+	CHECK( setup.mcp( "mcp__echo__write", R"({"path":"a.txt"})" )
+		== perm::permission_decision::deny );
+	CHECK( setup.approval.asks( ) == 2 );
+}
+
+TEST_CASE( "a remembered mcp tool survives into a fresh engine", "[perm][store][mcp]" ) {
+	auto setup = rig{ };
+
+	setup.approval.queue( perm::approval_outcome::allow_remember );
+	CHECK( setup.mcp( "mcp__echo__read", "{}" ) == perm::permission_decision::allow );
+
+	// A second engine over the same store file: the answer was written, so the
+	// question is not asked again. This is the "zero prompts on a repeat run"
+	// half of the acceptance criterion.
+	auto second = perm::permission_engine{ setup.space, &setup.store };
+	second.set_approval_source( &setup.approval );
+	CHECK( second.load_store( ).has_value( ) );
+
+	auto request = perm::permission_request{ };
+	request.tool_name = "mcp__echo__read";
+	request.klass = tool_class::mcp;
+	request.resource = "{}";
+
+	CHECK( second.decide( request ) == perm::permission_decision::allow );
+	CHECK( setup.approval.asks( ) == 1 );
+}
+
+TEST_CASE( "the exec and tools sections never borrow each other's key",
+	"[perm][store][near-miss]" ) {
+	// If the two ever collapse into one key space, a remembered command would
+	// authorize a tool call with the same name, or the reverse. Both halves.
+	auto setup = rig{ };
+
+	setup.approval.queue( perm::approval_outcome::allow_remember );
+	CHECK( setup.exec( "mcp__echo__read" ) == perm::permission_decision::allow );
+	CHECK( setup.approval.asks( ) == 1 );
+
+	// The same string as a tool name is a different subject and must prompt.
+	CHECK( setup.mcp( "mcp__echo__read", "{}" ) == perm::permission_decision::deny );
+	CHECK( setup.approval.asks( ) == 2 );
+}
+
+TEST_CASE( "a hand-written tools entry is honoured", "[perm][store][mcp]" ) {
+	// The section is readable and hand-editable, which is the point of a
+	// separate JSON file rather than a TOML table.
+	auto setup = rig{ };
+
+	write_store_file( setup.store.file( ),
+		R"({"version":1,"tools":{"mcp__echo__read":"allow"}})" );
+
+	REQUIRE( setup.engine.load_store( ).has_value( ) );
+	CHECK( setup.mcp( "mcp__echo__read", "{}" ) == perm::permission_decision::allow );
+	CHECK( setup.approval.asks( ) == 0 );
+}
+
+TEST_CASE( "the protected-path floor denies .git internals and not .gitignore",
+	"[perm][floor][near-miss]" ) {
+	// The near-miss that matters: `is_protected` matches the `.git/` directory,
+	// and `.gitignore` merely starts with the same characters. A prefix match
+	// would refuse every `.gitignore` edit, a file the agent edits constantly.
+	//
+	// The fail-closed branch for a path that cannot be canonicalized is not
+	// asserted here: on this platform `weakly_canonical` resolves every input
+	// reachable from a test, so there is no input that reaches it. It is
+	// defensive, and it is recorded as uncovered rather than tested with an
+	// assertion that cannot fail.
+	auto setup = rig{ };
+
+	auto protected_path = perm::permission_request{ };
+	protected_path.tool_name = "write";
+	protected_path.klass = tool_class::write;
+	protected_path.resource = ".git/config";
+
+	CHECK( setup.engine.on_floor( protected_path ).has_value( ) );
+	CHECK( setup.engine.decide( protected_path ) == perm::permission_decision::deny );
+
+	auto ordinary = perm::permission_request{ };
+	ordinary.tool_name = "write";
+	ordinary.klass = tool_class::write;
+	ordinary.resource = ".gitignore";
+
+	CHECK_FALSE( setup.engine.on_floor( ordinary ).has_value( ) );
+	CHECK( setup.engine.decide( ordinary ) == perm::permission_decision::allow );
+}
+
+TEST_CASE( "a quoted token with a space is not re-split by the floor",
+	"[perm][floor][near-miss]" ) {
+	// `on_floor` used to re-split the canonical argv on spaces, so one token
+	// containing a space became two and the target resolved to a path nobody
+	// named. The near-miss is that a genuine root delete still fires.
+	auto setup = rig{ };
+
+	auto ordinary = perm::permission_request{ };
+	ordinary.tool_name = "bash";
+	ordinary.klass = tool_class::exec;
+	ordinary.resource = R"(rm -rf "my dir")";
+
+	CHECK_FALSE( setup.engine.on_floor( ordinary ).has_value( ) );
+
+	auto root_delete = perm::permission_request{ };
+	root_delete.tool_name = "bash";
+	root_delete.klass = tool_class::exec;
+	root_delete.resource = "rm -rf /";
+
+	CHECK( setup.engine.on_floor( root_delete ).has_value( ) );
+}
