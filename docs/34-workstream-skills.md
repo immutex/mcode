@@ -97,7 +97,10 @@ Two caps, and the difference matters:
   success rate and costs >20% more inference; `05` owns the 2K number itself.
   But silently dropping a user's instructions to hit a token figure is worse
   than telling them the chain is fat. `mcode skill validate`
-  and `config check` report it.
+  and `mcode skill validate` report it. **`config check` was named here and was
+  never built**; the chain warning surfaces through `mcode skill validate` and
+  through `--verbose` on a run. Either build the command or drop the name — this
+  doc no longer claims it exists.
 
 ### Skill discovery
 
@@ -121,7 +124,7 @@ Read the first 4 KiB of each `SKILL.md` and parse only the frontmatter. Validate
 |---|---|---|
 | `name` | `^[a-z0-9]+(-[a-z0-9]+)*$`, ≤64, **equals the directory name** | skip + log |
 | `description` | present, ≤1024 | skip + log |
-| `disable-model-invocation` | optional bool | honoured: `/name` only, absent from the index |
+| `disable-model-invocation` | optional bool | honoured: absent from the index, still listed by `mcode skill list` and marked `[hidden from the model]` |
 
 **Invalid never crashes startup.** A bad skill is a skipped skill with a log
 line and a `mcode skill list` entry, exactly as a bad extension manifest is a
@@ -254,9 +257,17 @@ realistic chain plus 15 skills.
 - **A 40 KiB `AGENTS.md` does not hang startup** and is truncated broadest-first
   with a pointer.
 
-- **`disable-model-invocation` hides a skill from the index but keeps `/name`
-  working.** Asserted in both directions: absent from the prompt, reachable by
-  the command.
+- **`disable-model-invocation` hides a skill from the index but keeps it
+  discoverable.** Asserted in both directions: absent from the prompt, and
+  listed by `mcode skill list` with the hidden marker.
+
+  **The original wording said "keeps `/name` working", and there is no `/name`.**
+  The harness has no slash-command surface at all — the CLI is `mcode exec`
+  plus the subcommands in `main.cxx`, with no interactive command input loop.
+  `/name` was an assumption about a surface that does not exist yet, so this
+  acceptance item was unfalsifiable as written: it could never be tested and
+  could never fail. It now asserts the surface that does exist. When a
+  slash-command loop ships, the original item is the one to re-instate.
 - **Collision precedence is project > user > extension.** Three skills with the
   same name in three roots: the project one is the one that loads, and the other
   two do not produce a second index line.

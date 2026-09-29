@@ -152,7 +152,7 @@ endif()
 
 set(MCODE_BUNDLED_EXT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../extensions")
 
-add_executable(mcode main.cxx cli_commands.cxx smoke_cli_extensions.cxx)
+add_executable(mcode main.cxx cli_commands.cxx smoke_cli_extensions.cxx smoke_luau.cxx)
 target_link_libraries(mcode PRIVATE mcode_core)
 
 # The binary cannot live at `src/mcode`: that path is the SOURCE DIRECTORY, and on

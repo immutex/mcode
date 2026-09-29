@@ -16,9 +16,16 @@ namespace mcode::skills {
 		bool hidden = false;
 	};
 
-	// One index line per model-visible skill, `name — description`, sorted by
-	// name. `disable-model-invocation` skills are listed with `hidden` set: the
-	// index skips them, the CLI and `/name` do not.
+	// True when `disable-model-invocation` keeps the skill out of the prompt.
+	// The skill is still discoverable and still readable by name -- only the
+	// index omits it.
+	[[nodiscard]] auto hidden_from_model( const skill_entry& entry ) noexcept -> bool;
+
+	// One index line per discovered skill, `name — description`, sorted by name,
+	// with the description sanitized. `disable-model-invocation` skills are
+	// listed with `hidden` set rather than dropped, because the CLI lists every
+	// skill while the prompt lists only the visible ones -- one implementation
+	// of the rows, two consumers with different filters.
 	[[nodiscard]] auto index_lines( const std::vector< skill_entry >& entries )
 		-> std::vector< index_line >;
 

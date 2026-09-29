@@ -1,6 +1,7 @@
 #include "mcode/cli/skill_command.hxx"
 
 #include <cstdio>
+#include <map>
 #include <filesystem>
 
 #include "mcode/cli/exec.hxx"
@@ -43,11 +44,28 @@ namespace mcode::cli {
 				return to_int( exit_code::success );
 			}
 
-			for ( const auto& entry : report.entries ) {
-				const auto origin = std::string{ skills::to_string( entry.origin ) };
+			// Through `index_lines`, the same rows the prompt is built from, so
+			// what the user sees here is what the model sees. The origin comes
+			// from the report: the index line does not carry it, because the
+			// prompt has no use for it.
+			auto origins = std::map< std::string, std::string >{ };
 
-				std::printf( "%-24s %-9s %s\n", entry.name.c_str( ),
-					origin.c_str( ), entry.description.c_str( ) );
+			for ( const auto& entry : report.entries ) {
+				origins.insert_or_assign( entry.name,
+					std::string{ skills::to_string( entry.origin ) } );
+			}
+
+			for ( const auto& line : skills::index_lines( report.entries ) ) {
+				const auto found = origins.find( line.name );
+				const auto origin = found != origins.end( ) ? found->second : std::string{ };
+
+				// A hidden skill is listed, not omitted: `disable-model-invocation`
+				// keeps it out of the prompt, not out of the repository. Marking it
+				// is how a user sees that the skill exists and why the model has
+				// not heard of it.
+				std::printf( "%-24s %-9s %s%s\n", line.name.c_str( ),
+					origin.c_str( ), line.description.c_str( ),
+					line.hidden ? "  [hidden from the model]" : "" );
 			}
 
 			for ( const auto& reason : report.rejected ) {
@@ -65,6 +83,15 @@ namespace mcode::cli {
 
 				std::printf( "ok       %s (%s)\n", entry.name.c_str( ),
 					origin.c_str( ) );
+			}
+
+			for ( const auto& entry : report.entries ) {
+				if ( !skills::hidden_from_model( entry ) ) {
+					continue;
+				}
+
+				std::printf( "hidden   %s (disable-model-invocation)\n",
+					entry.name.c_str( ) );
 			}
 
 			for ( const auto& reason : report.rejected ) {

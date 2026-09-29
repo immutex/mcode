@@ -54,13 +54,17 @@ namespace mcode::skills {
 		return out;
 	}
 
+	auto hidden_from_model( const skill_entry& entry ) noexcept -> bool {
+		return !visible( entry );
+	}
+
 	auto index_lines( const std::vector< skill_entry >& entries ) -> std::vector< index_line > {
 		auto lines = std::vector< index_line >{ };
 
 		for ( const auto& entry : entries ) {
 			lines.push_back( { .name = entry.name,
 				.description = sanitize_description( entry.description ),
-				.hidden = !visible( entry ) } );
+				.hidden = hidden_from_model( entry ) } );
 		}
 
 		std::sort( lines.begin( ), lines.end( ),
@@ -74,16 +78,17 @@ namespace mcode::skills {
 	auto render_index( const std::vector< skill_entry >& entries ) -> std::string {
 		auto out = std::string{ };
 
-		for ( const auto& entry : entries ) {
-			if ( !visible( entry ) ) {
+		// Through `index_lines`, so the prompt and the CLI agree on the rows,
+		// their order and their sanitization. Two loops over the same data was
+		// how the CLI ended up printing unsanitized, unsorted descriptions.
+		for ( const auto& line : index_lines( entries ) ) {
+			if ( line.hidden ) {
 				continue;
 			}
 
-			out += entry.name;
+			out += line.name;
 			out += " — ";
-
-			const auto description = sanitize_description( entry.description );
-			out += text::truncate( description, ROUTING_DESCRIPTION_LENGTH );
+			out += text::truncate( line.description, ROUTING_DESCRIPTION_LENGTH );
 			out += '\n';
 		}
 

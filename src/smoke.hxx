@@ -45,3 +45,6 @@ namespace smoke {
 // Defined in smoke_cli_extensions.cxx. Split so no single smoke file exceeds the
 // project's file-length limit.
 auto smoke_cli_and_extensions( ) -> void;
+
+// Defined in smoke_luau.cxx: the extension-layer checks and the boundary probes.
+auto smoke_luau( ) -> void;

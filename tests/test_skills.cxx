@@ -427,5 +427,14 @@ TEST_CASE( "the session-start budget holds with a realistic chain and 15 skills"
 	CHECK( prompt_tokens <= SYSTEM_PROMPT_TOKEN_BUDGET );
 	CHECK( chain_tokens <= INSTRUCTION_CHAIN_TOKEN_BUDGET );
 	CHECK( index_tokens <= SKILL_INDEX_TOKEN_BUDGET );
-	CHECK( prompt_tokens + chain_tokens + index_tokens <= SESSION_START_TOKEN_BUDGET );
+
+	// The whole session-start row, not three of its four parts. Asserting only
+	// prompt + chain + index sums to 5K against an 8.5K budget and would pass
+	// with the tools slice 70% over -- the test would not notice the one thing
+	// it exists to bound. The tools figure is the budgeted 3.5K; `test_tools`
+	// asserts the real schemas against that same number.
+	const auto session_start_tokens = prompt_tokens + chain_tokens + index_tokens
+		+ TOOLS_TOKEN_BUDGET;
+
+	CHECK( session_start_tokens <= SESSION_START_TOKEN_BUDGET );
 }
