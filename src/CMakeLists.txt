@@ -75,6 +75,8 @@ add_library(mcode_core STATIC
     mcode/tools/tool_args.cxx
     mcode/tools/read_tool.cxx
     mcode/tools/write_tools.cxx
+    mcode/tools/write_tools_common.cxx
+    mcode/tools/write_tools_edit.cxx
     mcode/tools/search_tools.cxx
     mcode/tools/exec_tools.cxx
     mcode/tools/register.cxx

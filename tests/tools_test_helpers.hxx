@@ -162,7 +162,7 @@ namespace tools_test {
 		}
 	};
 
-	[[nodiscard]] auto run_tool(
+	[[nodiscard]] inline auto run_tool(
 		const std::function< result< std::string >( const tool_args&, tool_context& ) >& handler,
 		const std::string& json, fixture& setup ) -> std::string {
 		auto parsed = tool_args::parse( json );
@@ -178,7 +178,7 @@ namespace tools_test {
 		return result.error( ).msg;
 	}
 
-	[[nodiscard]] auto is_error_json( const std::string& text ) -> bool {
+	[[nodiscard]] inline auto is_error_json( const std::string& text ) -> bool {
 		return text.find( "\"ok\":false" ) != std::string::npos &&
 			text.find( "\"error\":" ) != std::string::npos &&
 			text.find( "\"hint\":" ) != std::string::npos &&
