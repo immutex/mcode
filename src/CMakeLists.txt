@@ -63,6 +63,15 @@ add_library(mcode_core STATIC
 
     mcode/net/http_internal.cxx
     mcode/proc/process.cxx
+    mcode/proc/session.cxx
+
+    mcode/mcp/jsonrpc.cxx
+    mcode/mcp/transport_stdio.cxx
+    mcode/mcp/client.cxx
+    mcode/mcp/supervisor.cxx
+    mcode/mcp/source.cxx
+    mcode/mcp/constants.cxx
+    mcode/support/mcp_config.cxx
 
     mcode/agent/event_log.cxx
     mcode/agent/loop.cxx
