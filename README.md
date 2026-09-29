@@ -377,6 +377,35 @@ code comments.
     are byte-identical. An unsorted report makes a duplicate-name or load-order
     failure unreproducible.
 
+45. **A streaming provider answers with `Transfer-Encoding: chunked`, and the
+    framing must be removed before the event parser sees it.** The SSE body is
+    read straight off the socket, so chunk-size lines and CRLFs reach the
+    parser. A chunk-size line has no colon and is harmlessly discarded, but a
+    chunk boundary landing inside an event splits its JSON across two lines —
+    the continuation is discarded the same way and the truncated payload is
+    rejected. Cloudflare fronts the gateway and always chunks, so this is the
+    normal case. `net/http_internal.hxx` owns the decoder. A de-chunking
+    loopback proxy hides the defect completely, which is how it shipped.
+
+46. **OpenSSL on Windows has no CA file, and the trust store is loaded once.**
+    `SSL_CTX_set_default_verify_paths` resolves to the *build machine's*
+    OPENSSLDIR, which does not exist on a user's, so every handshake failed with
+    `certificate verify failed`. The roots are read from the OS store
+    (`CertOpenSystemStoreW(L"ROOT")` + `d2i_X509`). The resulting
+    `ssl::context` is built once per process and deliberately never destroyed:
+    a function-local static is torn down during static destruction, where its
+    ordering against OpenSSL's own cleanup is unspecified, and the process
+    aborted at exit whenever a TLS connection had been made.
+
+47. **Multi-line explanatory comments are the established practice, against
+    `AGENTS.md`'s "max one line".** The rule is worth keeping as the default —
+    most comments should be one line or absent — but the tree already carries
+    several hundred blocks that explain a non-obvious decision, and the merge
+    batch added more. They are left in place deliberately: rewriting them to one
+    line would delete the reasoning, which is the part a reader needs. New
+    comments should still be one line unless the alternative is a reader getting
+    the code wrong.
+
 ## Building
 
 ```bash

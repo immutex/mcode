@@ -375,6 +375,33 @@ If that test is green, the three slices compose. If it is not, the failure is in
 the wiring, and the wiring was never any single branch's acceptance criterion.
 Budget it as its own task rather than assuming the merge is free.
 
+### Integration — landed
+
+The merge is on `trial/integration`. The acceptance test above is green
+(`tests/test_loop_e2e.cxx`, tag `[e2e]`), and the first real turn against a
+live provider works: `mcode exec` drives the loop, the model calls the real
+`read` tool, and the file's content comes back.
+
+**Every defect the suite missed was found by pointing it at a real endpoint**,
+not by review. That is the finding worth carrying forward: the loopback stub
+was written by the same hand as the client, so it agreed with every mistake.
+
+| Defect | Why the suite could not see it | Fix |
+|---|---|---|
+| The SSE body was never de-chunked | The stub wrote an unchunked body; the local proxy de-chunked on the way through. Cloudflare, which fronts the gateway, always chunks. A chunk boundary inside an event truncated its JSON. | `net/http_internal.hxx` — `chunked_decoder`, applied to both transports |
+| An exception out of the event callback reached `std::terminate` | Only reachable once a payload was rejected, which needed the defect above | `stream_sse` converts it into a protocol failure |
+| TLS verification could not succeed off the build machine | No test made a TLS connection at all | Roots read from the OS store; one `ssl::context` per process, deliberately never destroyed |
+| `read` refused an empty file | No fixture was empty | A zero-line file is not an offset past the end |
+| A stream event after the terminal was still processed | The stub never sent one | The applier consults the terminal flag it was already recording |
+
+The last two are the interesting ones: both are reachable from a *correct*
+provider, so neither is exotic. `read` on an empty file also refused the
+`write` that followed, because the failed read is never recorded.
+
+Verification at the merge: 258 tests, smoke 140 checks / 0 failures, `eval`
+10/10, clang gate clean, bench 13/13 within budget. Live HTTPS: 5 of 5 runs
+exit 0 with the expected output, after 0 of 5 before the fixes.
+
 ## Exit criterion for the batch
 
 The batch is done when: the VM decision is recorded with per-platform numbers; the API is frozen at v1 with a capability model and an author-facing definition file; a provider, a tool, and a hook are each implemented **in the extension language, not C++**; and `B1`–`B5` report every budget in `01` as a measured number with CI gates enforcing them. Per-milestone done rules from `16` §"Definition of done" apply on top.
