@@ -41,7 +41,7 @@ namespace mcode::model {
 	// Classifies a non-2xx response. The body is the only place the 429 split
 	// lives: `rate_limit_exceeded` is transient, `insufficient_quota` and the
 	// spend-cap and credit codes are billing and never succeed on retry.
-	[[nodiscard]] auto classify_failure( int status, std::string_view body ) -> failure_class;
+	[[nodiscard]] auto classify_failure( const int status, const std::string_view body ) -> failure_class;
 
 	// Backoff delay for one attempt, full jitter: a uniform draw from
 	// [0, min(cap, base * 2^attempt)]. The RNG is injectable so a test is

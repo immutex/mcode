@@ -23,6 +23,9 @@ namespace mcode::model {
 		inline constexpr unsigned MAX_ATTEMPTS = 5;
 		inline constexpr std::chrono::milliseconds BACKOFF_BASE{ 500 };
 		inline constexpr std::chrono::milliseconds BACKOFF_CAP{ 30'000 };
+		inline constexpr int RATE_LIMIT_STATUS = 429;
+		inline constexpr unsigned MAX_BACKOFF_SHIFT = 16;
+		inline constexpr std::int64_t MILLISECONDS_PER_SECOND = 1000;
 
 		// Status codes that are fatal regardless of the body. 413 is fatal, not
 		// context overflow: the doc is explicit that an oversized request is a
@@ -42,7 +45,7 @@ namespace mcode::model {
 
 		[[nodiscard]] auto is_transient_status( const int status ) noexcept -> bool {
 			switch ( status ) {
-				case 429:
+				case RATE_LIMIT_STATUS:
 				case 500:
 				case 502:
 				case 503:
@@ -203,7 +206,7 @@ namespace mcode::model {
 			return failure_class::fatal;
 		}
 
-		if ( status == 429 ) {
+		if ( status == RATE_LIMIT_STATUS ) {
 			return body_names_quota( body ) ? failure_class::fatal : failure_class::transient;
 		}
 
@@ -219,7 +222,7 @@ namespace mcode::model {
 	}
 
 	auto backoff_delay( const unsigned attempt, std::mt19937_64& rng ) -> std::chrono::milliseconds {
-		const auto shift = std::min< unsigned >( attempt, 16 );
+		const auto shift = std::min< unsigned >( attempt, MAX_BACKOFF_SHIFT );
 		const auto exponential = std::chrono::milliseconds{
 			BACKOFF_BASE * ( 1ull << shift ) };
 		const auto bounded = std::min( exponential, BACKOFF_CAP );
@@ -379,7 +382,7 @@ namespace mcode::model {
 
 			if ( failure.status != 0 ) {
 				if ( const auto seconds = retry_after_seconds( failure ) ) {
-					delay = std::chrono::milliseconds{ *seconds * 1000 };
+					delay = std::chrono::milliseconds{ *seconds * MILLISECONDS_PER_SECOND };
 				}
 			}
 
