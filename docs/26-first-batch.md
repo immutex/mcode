@@ -402,16 +402,31 @@ was written by the same hand as the client, so it agreed with every mistake.
 | The SSE body was never de-chunked | The stub wrote an unchunked body; the local proxy de-chunked on the way through. Cloudflare, which fronts the gateway, always chunks. A chunk boundary inside an event truncated its JSON. | `net/http_internal.hxx` — `chunked_decoder`, applied to both transports |
 | An exception out of the event callback reached `std::terminate` | Only reachable once a payload was rejected, which needed the defect above | `stream_sse` converts it into a protocol failure |
 | TLS verification could not succeed off the build machine | No test made a TLS connection at all | Roots read from the OS store; one `ssl::context` per process, deliberately never destroyed |
+| A tool result carried no `tool_call_id` | The end-to-end test asserted on the result's *content* and on the tool *call*'s id, never on the result's id | `result_block` takes the call id it was already being handed |
 | `read` refused an empty file | No fixture was empty | A zero-line file is not an offset past the end |
+| An empty read rendered as an empty string | Same | The result carries `"empty":true` |
 | A stream event after the terminal was still processed | The stub never sent one | The applier consults the terminal flag it was already recording |
+| A provider's mid-stream error event was dropped | No descriptor mapped one | The descriptor's `error` block, surfaced as a protocol failure |
 
-The last two are the interesting ones: both are reachable from a *correct*
-provider, so neither is exotic. `read` on an empty file also refused the
-`write` that followed, because the failed read is never recorded.
+The correlation defect is the one that matters most, and it is the one no unit
+test was ever going to catch. The loop's own test proved the file's text reached
+the history; the render test proved a tool result renders with a
+`tool_call_id`; nothing proved the id on the *real* result was non-empty. So
+every live turn read the file successfully and then told the user it could not
+see the contents — "the tool result came back empty" — and re-read it, or
+refused to answer. A model that cannot correlate a result with its call is a
+model with no tools at all, and the harness looked healthy the whole time.
 
-Verification at the merge: 258 tests, smoke 140 checks / 0 failures, `eval`
+The empty-file pair and the post-terminal event are the other interesting ones:
+both are reachable from a *correct* provider, so neither is exotic. `read` on an
+empty file also refused the `write` that followed, because the failed read is
+never recorded.
+
+Verification at the merge: 259 tests, smoke 140 checks / 0 failures, `eval`
 10/10, clang gate clean, bench 13/13 within budget. Live HTTPS: 5 of 5 runs
-exit 0 with the expected output, after 0 of 5 before the fixes.
+exit 0 with the expected output, after 0 of 5 before the fixes. A live
+tool-using turn returned the file's marker on 4 of 4 runs after the correlation
+fix, against 0 of 4 runs that used the result cleanly before it.
 
 ## Exit criterion for the batch
 
