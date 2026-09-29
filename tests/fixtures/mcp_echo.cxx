@@ -16,8 +16,6 @@
 
 namespace {
 
-	constexpr std::uint64_t INITIALIZE_ID = 1;
-
 	auto read_line( std::string& line ) -> bool {
 		line.clear( );
 
@@ -172,7 +170,6 @@ namespace {
 	}
 
 	auto run_normal( ) -> int {
-		auto initialized = false;
 		auto list_calls = std::uint64_t{ 0 };
 
 		auto line = std::string{ };
@@ -189,8 +186,6 @@ namespace {
 					R"({"protocolVersion":"2025-06-18",)"
 					R"("capabilities":{"tools":{"listChanged":false}},)"
 					R"("serverInfo":{"name":"mcp-echo","version":"1.0.0"}})" );
-
-				initialized = true;
 
 				continue;
 			}
@@ -358,8 +353,6 @@ namespace {
 					R"({"protocolVersion":"2025-06-18",)"
 					R"("capabilities":{"tools":{}},)"
 					R"("serverInfo":{"name":"mcp-echo","version":"1.0.0"}})" );
-
-				initialized = true;
 
 				continue;
 			}

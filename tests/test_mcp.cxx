@@ -103,7 +103,7 @@ TEST_CASE( "jsonrpc renders and parses frames", "[mcp]" ) {
 }
 
 TEST_CASE( "a session keeps stdin open and reports EOF", "[mcp][session]" ) {
-	auto spawned = proc::session::spawn( proc::session_options{ .executable = ECHO } );
+	auto spawned = proc::session::spawn( proc::session_options{ .executable = ECHO, .args = { }, .working_directory = { } } );
 	REQUIRE( spawned );
 
 	CHECK( spawned->running( ) );

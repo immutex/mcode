@@ -38,12 +38,6 @@ namespace mcode::mcp {
 			new stdio_transport( std::move( *spawned ) ) );
 		client_ = std::make_unique< client >( *transport_ );
 
-		client_->set_notify_handler( [ this ]( const jsonrpc::message& ) {
-			// No server-initiated surface is advertised, so notifications carry
-			// nothing this slice acts on. They are received and dropped here,
-			// which is one place rather than scattered across the client.
-		} );
-
 		client_->attach( );
 
 		auto caps = client_->initialize( );
