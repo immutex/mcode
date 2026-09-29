@@ -12,6 +12,7 @@
 #include <boost/beast/ssl.hpp>
 
 #include <openssl/err.h>
+#include <openssl/ssl.h>
 #include <openssl/x509.h>
 
 #include <algorithm>
@@ -119,6 +120,15 @@ namespace mcode::net {
 		}
 
 	#endif
+
+		// OpenSSL spells SNI as a macro whose body casts to `void *` with a C-style
+		// cast. GCC attributes that cast to the call site and -Wold-style-cast is an
+		// error here; clang blames the system header and stays quiet, so the local
+		// build never saw it. This is the same call with the cast written out.
+		[[nodiscard]] auto set_sni_host_name( SSL* const handle, const std::string& host ) -> bool {
+			return SSL_ctrl( handle, SSL_CTRL_SET_TLSEXT_HOSTNAME, TLSEXT_NAMETYPE_host_name,
+				const_cast< char* >( host.c_str( ) ) ) == 1;
+		}
 
 		// Verification stays ON: a verify-disabled build is a security bug, not a
 		// convenience. `false` means no trust anchor was found, which is reported
@@ -363,7 +373,7 @@ namespace mcode::net {
 
 				// Shared hosts route by SNI; without it the handshake picks the
 				// wrong certificate and verification fails confusingly.
-				if ( !SSL_set_tlsext_host_name( stream.native_handle( ), parsed->host.c_str( ) ) ) {
+				if ( !set_sni_host_name( stream.native_handle( ), parsed->host ) ) {
 					return std::unexpected( fail( errc::protocol, "failed to set the SNI host name" ) );
 				}
 
@@ -466,7 +476,7 @@ namespace mcode::net {
 
 				auto stream = ssl_stream{ context, *ssl_context };
 
-				if ( !SSL_set_tlsext_host_name( stream.native_handle( ), parsed->host.c_str( ) ) ) {
+				if ( !set_sni_host_name( stream.native_handle( ), parsed->host ) ) {
 					return std::unexpected( fail( errc::protocol, "failed to set the SNI host name" ) );
 				}
 

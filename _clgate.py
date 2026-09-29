@@ -243,6 +243,19 @@ DARWIN_MACRO_FUNCTIONS = (
     "bswap_16", "bswap_32", "bswap_64",
 )
 
+# A macro defined in a system header whose body contains a C-style cast. GCC
+# attributes that cast to the call site and rejects it under -Wold-style-cast;
+# clang attributes it to the system header and stays quiet. The call is fine on
+# clang and a hard error on GCC, so it is a Linux-only failure by construction.
+THIRD_PARTY_MACRO_TRAPS = {
+    "SSL_set_tlsext_host_name": (
+        "OpenSSL's SNI macro casts to `void *` with a C-style cast. Call "
+        "SSL_ctrl(handle, SSL_CTRL_SET_TLSEXT_HOSTNAME, TLSEXT_NAMETYPE_host_name, "
+        "const_cast< char* >( host.c_str( ) )) instead."
+    ),
+}
+
+
 def check_posix_call_syntax( files: list[ pathlib.Path ] ) -> list[ str ]:
     """`::name(` where `name` is a macro on some platform, and Win32 calls.
 
@@ -286,6 +299,10 @@ def check_posix_call_syntax( files: list[ pathlib.Path ] ) -> list[ str ]:
                         f"{path}:{number} calls `::{name}(`, which does not compile on macOS "
                         f"({name} is a cast-like macro in <sys/_endian.h>, so it cannot follow `::`)"
                     )
+
+            for name, advice in THIRD_PARTY_MACRO_TRAPS.items():
+                if re.search(r"\b" + re.escape(name) + r"\s*\(", code):
+                    problems.append(f"{path}:{number} uses `{name}`. {advice}")
 
             # A `static_cast< int >` on a length passed to send/recv is a
             # -Wsign-conversion error on POSIX under -Werror.
