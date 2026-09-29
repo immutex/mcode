@@ -17,6 +17,8 @@
 #include "mcode/tools/tool_args.hxx"
 #include "mcode/tools/truncate.hxx"
 
+#include "test_scratch.hxx"
+
 using namespace mcode;
 using namespace mcode::tools;
 
@@ -34,9 +36,7 @@ namespace {
 
 		explicit fixture( bool yolo = false )
 			: space( make_space( ) ), policy( make_policy( yolo ) ) {
-			path = std::filesystem::temp_directory_path( ) /
-				( "mcode-tools-test-" + std::to_string( ::rand( ) ) );
-			std::filesystem::create_directories( path / "src" );
+			path = test::scratch_directory( "mcode-tools-test" );
 
 			write_raw( "src/main.cxx", "int main( ) {\n\treturn 0;\n}\n" );
 			write_raw( "src/util.cxx", "int helper( ) {\n\treturn 1;\n}\n" );

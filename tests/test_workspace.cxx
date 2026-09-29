@@ -11,6 +11,8 @@
 #endif
 
 #include "mcode/fs/workspace.hxx"
+
+#include "test_scratch.hxx"
 #include "mcode/platform/seams.hxx"
 
 using mcode::workspace;
@@ -21,8 +23,7 @@ namespace {
 		std::filesystem::path path;
 
 		temp_directory( ) {
-			path = std::filesystem::temp_directory_path( ) / ( "mcode-test-" + std::to_string( ::rand( ) ) );
-			std::filesystem::create_directories( path );
+			path = test::scratch_directory( "mcode-workspace-test" );
 		}
 
 		~temp_directory( ) {
@@ -334,8 +335,7 @@ TEST_CASE( "a directory symlink loop does not hang the glob", "[workspace]" ) {
 	// is_directory FOLLOWS a symlink -- so a clone containing a -> b -> a made the
 	// walk recurse until the stack ran out. The result cap did not help: it counts
 	// matches, not visits, so a tree with few matching files never hit it.
-	auto root = std::filesystem::temp_directory_path( ) / "mcode-glob-loop-test";
-	std::filesystem::remove_all( root );
+	auto root = test::scratch_directory( "mcode-glob-loop-test" );
 	std::filesystem::create_directories( root / "a" / "b" );
 
 	auto opened = workspace::open( root );
@@ -379,11 +379,8 @@ TEST_CASE( "a path past MAX_PATH is read, not refused", "[workspace]" ) {
 	// the machine sets LongPathsEnabled -- and that value defaults to 0. A deep
 	// cloned repository therefore failed to resolve on a stock machine, which the
 	// platform seam exists to prevent.
-	const auto root = std::filesystem::temp_directory_path( ) / "mcode-longpath-test";
+	const auto root = test::scratch_directory( "mcode-longpath-test" );
 
-	// remove_all needs the extended form too, or the cleanup fails for the very
-	// reason this test is about and the failure looks like the test's own bug.
-	std::filesystem::remove_all( mcode::platform::to_extended_path( root ) );
 	std::filesystem::create_directories( root );
 
 	auto deep = root;

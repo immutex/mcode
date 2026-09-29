@@ -27,6 +27,8 @@
 #include "mcode/tools/context.hxx"
 #include "mcode/tools/register.hxx"
 
+#include "test_scratch.hxx"
+
 #if defined( _WIN32 )
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -776,9 +778,7 @@ namespace {
 TEST_CASE( "exec drives a real read tool call over a loopback provider", "[loop][e2e]" ) {
 	// The tests run from the build tree, so the workspace is a temp directory
 	// with one real file the tool reads from disk.
-	const auto fixture_root = std::filesystem::temp_directory_path( )
-		/ ( "mcode-loop-e2e-" + std::to_string( ::rand( ) ) );
-	std::filesystem::create_directories( fixture_root );
+	const auto fixture_root = test::scratch_directory( "mcode-loop-e2e" );
 
 	const auto marker = std::string{ "marker-e2e-9137" };
 	const auto fixture_name = std::string{ "notes.txt" };

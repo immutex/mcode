@@ -7,16 +7,14 @@
 
 #include "mcode/agent/loop.hxx"
 
+#include "test_scratch.hxx"
+
 using namespace mcode;
 
 namespace {
 
 	auto scratch_dir( ) -> std::filesystem::path {
-		auto path = std::filesystem::temp_directory_path( ) / "mcode-eventlog-test";
-		std::filesystem::remove_all( path );
-		std::filesystem::create_directories( path );
-
-		return path;
+		return test::scratch_directory( "mcode-eventlog-test" );
 	}
 
 	auto read_all( const std::filesystem::path& path ) -> std::string {

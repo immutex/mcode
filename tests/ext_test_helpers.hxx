@@ -14,6 +14,8 @@
 #include "mcode/ext/loader.hxx"
 #include "mcode/model/provider.hxx"
 
+#include "test_scratch.hxx"
+
 namespace ext_test {
 
 	// The registry a load writes into. A free function cannot capture, so the
@@ -53,11 +55,7 @@ namespace ext_test {
 	}
 
 	inline auto scratch_root( ) -> std::filesystem::path {
-		auto path = std::filesystem::temp_directory_path( ) / "mcode-loader-test";
-		std::filesystem::remove_all( path );
-		std::filesystem::create_directories( path );
-
-		return path;
+		return mcode::test::scratch_directory( "mcode-loader-test" );
 	}
 
 	inline auto write( const std::filesystem::path& path, const std::string_view text ) -> void {

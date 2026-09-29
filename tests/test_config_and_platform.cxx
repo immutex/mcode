@@ -20,6 +20,8 @@
 #include "mcode/support/parse.hxx"
 #include "mcode/support/toml.hxx"
 
+#include "test_scratch.hxx"
+
 using namespace mcode;
 
 namespace {
@@ -150,8 +152,7 @@ TEST_CASE( "a parse error names the line", "[toml]" ) {
 TEST_CASE( "project scope may only add restrictions", "[config]" ) {
 	// This is the security-relevant rule: a cloned repository must not be able to
 	// widen a permission or disable a sandbox by shipping a config file.
-	auto root = std::filesystem::temp_directory_path( ) / "mcode-config-test" / "project";
-	std::filesystem::remove_all( root );
+	auto root = test::scratch_directory( "mcode-config-test" ) / "project";
 
 	// A project file that only restricts is accepted.
 	write_file( root / "ok.toml", R"(
@@ -190,8 +191,7 @@ TEST_CASE( "project scope may only add restrictions", "[config]" ) {
 }
 
 TEST_CASE( "user scope may set anything the project may not", "[config]" ) {
-	auto root = std::filesystem::temp_directory_path( ) / "mcode-config-test" / "user";
-	std::filesystem::remove_all( root );
+	auto root = test::scratch_directory( "mcode-config-test" ) / "user";
 
 	write_file( root / "config.toml", R"(
 model = "some-model"
