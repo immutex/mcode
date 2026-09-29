@@ -24,7 +24,14 @@ add_executable(mcode_tests
     test_loader_failures.cxx
     test_manifest.cxx
     test_hooks.cxx
+    test_mcp.cxx
 )
+
+add_executable(mcp_echo fixtures/mcp_echo.cxx)
+target_include_directories(mcp_echo PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+mcode_configure_target(mcp_echo)
+set_target_properties(mcp_echo PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
 target_link_libraries(mcode_tests
     PRIVATE
@@ -36,7 +43,8 @@ target_link_libraries(mcode_tests
 target_compile_definitions(mcode_tests PRIVATE
     MCODE_FIXTURE_REPO="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/fixture-repo"
     MCODE_FIXTURE_EXTENSIONS="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/extensions"
-    MCODE_EXTENSIONS_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/../extensions")
+    MCODE_EXTENSIONS_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/../extensions"
+    MCODE_MCP_ECHO="$<TARGET_FILE:mcp_echo>")
 
 mcode_configure_target(mcode_tests)
 
