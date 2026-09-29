@@ -11,7 +11,6 @@ namespace mcode::perm {
 
 	namespace {
 
-
 	// The floor's exec rules, as first tokens. `sudo`, `doas`, `runas` as
 	// the first token is escalation; the same word as an argument is not.
 	inline constexpr auto FLOOR_PROGRAMS = std::array< std::string_view, 7 >{
@@ -137,11 +136,9 @@ namespace mcode::perm {
 		return canonical ? *canonical : std::filesystem::path{ };
 	}
 
-	// --- floor checks, one per rule ------------------------------------
-
-	// Recursive delete of a filesystem root or the user's home.
 	}
 
+	// Recursive delete of a filesystem root or the user's home.
 	[[nodiscard]] auto floor_recursive_delete( const std::vector< std::string >& argv,
 		const mcode::workspace& space ) -> std::optional< std::string > {
 		if ( !token_equals( argv.front( ), RM_PROGRAM ) ) {
@@ -287,8 +284,6 @@ namespace mcode::perm {
 
 		return std::nullopt;
 	}
-
-
 
 	// The floor's reason for this request, or nothing when it is not on the
 	// floor. The order is fixed and the first hit wins; every rule is a

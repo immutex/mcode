@@ -8,6 +8,7 @@
 #include "mcode/perm/argv.hxx"
 #include "mcode/perm/permission.hxx"
 #include "mcode/support/json.hxx"
+#include "mcode/support/time.hxx"
 
 namespace mcode {
 
@@ -128,6 +129,52 @@ namespace mcode {
 			publish( events::kind::tool_result, "{\"ok\":false,\"error\":\"no_handler\"}" );
 
 			return finish( );
+		}
+
+		// The veto gate. A separate check from the permission engine, and
+		// ahead of it resolving prompts: an extension veto denies the call
+		// even under --yolo, which is why the event is vetoable at all.
+		// Publishing it here, before the handler runs, is what makes the
+		// hook observable at all -- nothing else ever published this kind.
+		{
+			auto pre_payload = std::string{ "{\"tool\":\"" };
+			json::append_escaped( pre_payload, call.name );
+			pre_payload += "\",\"args\":";
+			pre_payload += call.args_json.empty( ) ? "{}" : call.args_json;
+			pre_payload += "}";
+
+			auto pre_event = events::event{ };
+			pre_event.type = events::kind::tool_pre_call;
+			pre_event.timestamp_ms = support::epoch_milliseconds( );
+			pre_event.payload_json = std::move( pre_payload );
+
+			// The loop's own publish is fire-and-forget, so the vetoable
+			// publish goes to the bus directly: the returned veto is the
+			// decision, not a notification.
+			const auto veto = bus_ != nullptr ? bus_->publish( std::move( pre_event ) )
+				: std::optional< events::veto >{ };
+
+			if ( veto ) {
+				outcome.ok = false;
+				outcome.code = errc::tool_failed;
+				outcome.error_message = "denied by extension veto: " +
+					( veto->reason.empty( ) ? std::string{ "policy" } : veto->reason );
+				outcome.permission_denied = true;
+				permission_denied_ = true;
+
+				auto payload = std::string{ "{\"ok\":false,\"denied\":true,\"veto\":true,\"tool\":\"" };
+				json::append_escaped( payload, call.name );
+				payload += "\",\"source\":\"";
+				json::append_escaped( payload, veto->source );
+				payload += "\",\"reason\":\"";
+				json::append_escaped( payload, veto->reason );
+				payload += "\"}";
+
+				log_->append( "tool.result", payload );
+				publish( events::kind::tool_result, std::move( payload ) );
+
+				return finish( );
+			}
 		}
 
 		// The permission check, ahead of every handler. One engine, one check

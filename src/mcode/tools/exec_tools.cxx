@@ -166,29 +166,10 @@ namespace mcode::tools {
 				false );
 		}
 
-		auto request = perm::permission_request{ };
-		request.tool_name = "bash";
-		request.klass = tool_class::exec;
-		request.resource = perm::canonical_argv( *tokens );
-
-		const auto decision = context.permissions->decide( request );
-
-		if ( decision != perm::permission_decision::allow ) {
-			const auto& verdict = context.permissions->last_verdict( );
-			const auto& program = tokens->front( );
-
-			auto message = std::string{ "exec denied by the permission engine: " + program };
-
-			if ( !verdict.reason.empty( ) ) {
-				message += " (" + verdict.reason + ")";
-			}
-
-			return error_result( message,
-				verdict.matched.scope == "floor"
-					? "this action is on the hard-deny floor; no flag or config overrides it"
-					: "the command prompts or is denied; run it interactively to approve it, or add an allow rule",
-				false );
-		}
+		// The permission decision happens once, in the loop, before any handler
+		// runs. Deciding here as well made a "yes once" answer prompt twice and
+		// let a second answer override the first. This function only shapes the
+		// command and runs it.
 
 		// Execute the argv the policy judged, not the raw string: a shell would
 		// re-split, redirect or expand text the gate never approved. The shell

@@ -2,8 +2,8 @@
 
 #include "mcode/perm/argv.hxx"
 #include "mcode/perm/floor.hxx"
+#include "mcode/perm/rules.hxx"
 
-#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <utility>
@@ -113,139 +113,8 @@ namespace mcode::perm {
 
 	auto permission_engine::rule_matches( const rule& candidate,
 		const permission_request& request ) const -> bool {
-		if ( candidate.klass != request.klass ) {
-			return false;
-		}
-
-		// Exec rules match the canonical argv exactly, never a prefix: a
-		// remembered `git status` must not authorize `git push`.
-		if ( request.klass == tool_class::exec ) {
-			return candidate.pattern == request.resource;
-		}
-
-		// Path rules are globs over the canonical path. `*` within a segment,
-		// `**` across segments; a trailing `/*` does not cross into deeper
-		// directories unless the pattern says `**`.
-		if ( request.klass == tool_class::read || request.klass == tool_class::write ) {
-			const auto path = std::string_view{ request.resource };
-
-			auto pattern_parts = std::vector< std::string_view >{ };
-			auto path_parts = std::vector< std::string_view >{ };
-
-			const auto split = []( const std::string_view text ) {
-				auto parts = std::vector< std::string_view >{ };
-				auto start = std::size_t{ 0 };
-
-				while ( start <= text.size( ) ) {
-					const auto slash = text.find( '/', start );
-					const auto end = ( slash == std::string_view::npos ) ? text.size( ) : slash;
-
-					if ( end > start ) {
-						parts.push_back( text.substr( start, end - start ) );
-					}
-
-					if ( slash == std::string_view::npos ) {
-						break;
-					}
-
-					start = slash + 1;
-				}
-
-				return parts;
-			};
-
-			pattern_parts = split( candidate.pattern );
-			path_parts = split( path );
-
-			auto states = std::vector< std::pair< std::size_t, std::size_t > >{ { 0, 0 } };
-
-			while ( !states.empty( ) ) {
-				const auto [ pattern_index, path_index ] = states.back( );
-				states.pop_back( );
-
-				if ( pattern_index == pattern_parts.size( ) &&
-					path_index == path_parts.size( ) ) {
-					return true;
-				}
-
-				if ( pattern_index >= pattern_parts.size( ) ) {
-					continue;
-				}
-
-				const auto& part = pattern_parts[ pattern_index ];
-
-				if ( part == "**" ) {
-					for ( auto skip = path_index; skip <= path_parts.size( ); ++skip ) {
-						states.emplace_back( pattern_index + 1, skip );
-					}
-
-					continue;
-				}
-
-				if ( path_index >= path_parts.size( ) ) {
-					continue;
-				}
-
-				// Segment match with `*` wildcard support.
-				const auto& segment = path_parts[ path_index ];
-				auto matched = false;
-
-				if ( part.find( '*' ) == std::string_view::npos ) {
-					matched = part == segment;
-				} else {
-					const auto wildcard_match = []( const std::string_view pattern,
-						const std::string_view text ) {
-						auto p = std::size_t{ 0 };
-						auto t = std::size_t{ 0 };
-						auto star = std::string_view::npos;
-						auto after_star = std::size_t{ 0 };
-
-						while ( t < text.size( ) ) {
-							if ( p < pattern.size( ) &&
-								( pattern[ p ] == text[ t ] || pattern[ p ] == '?' ) ) {
-								++p;
-								++t;
-
-								continue;
-							}
-
-							if ( p < pattern.size( ) && pattern[ p ] == '*' ) {
-								star = p++;
-								after_star = t;
-
-								continue;
-							}
-
-							if ( star != std::string_view::npos ) {
-								p = star + 1;
-								t = ++after_star;
-
-								continue;
-							}
-
-							return false;
-						}
-
-						while ( p < pattern.size( ) && pattern[ p ] == '*' ) {
-							++p;
-						}
-
-						return p == pattern.size( );
-					};
-
-					matched = wildcard_match( part, segment );
-				}
-
-				if ( matched ) {
-					states.emplace_back( pattern_index + 1, path_index + 1 );
-				}
-			}
-
-			return false;
-		}
-
-		// Tool-class rules (mcp, net, spawn) match the tool name exactly.
-		return candidate.pattern == request.tool_name;
+		return perm::rule_matches( candidate, request.klass, request.resource,
+			request.tool_name );
 	}
 
 	auto permission_engine::evaluate_rules( const permission_request& request ) const
@@ -308,19 +177,29 @@ namespace mcode::perm {
 		// The default rule set from the resolved table. Workspace-internal
 		// writes are allow -- the deliberate, recorded deviation from the
 		// original table. Prompts are for commands and for writes outside the
-		// workspace.
+		// workspace. `approval = always` prompts for everything, including
+		// reads, which is the setting's entire purpose.
 		switch ( request.klass ) {
 			case tool_class::read: {
-				if ( options_.approval == "always" ) {
-					return { permission_decision::ask,
-						{ "default", "approval = always", permission_decision::ask },
-						"approval = always prompts for every tool" };
-				}
-
 				auto candidate = std::filesystem::path{ request.resource };
 
 				if ( candidate.is_relative( ) ) {
 					candidate = space_->root( ) / candidate;
+				}
+
+				// A deny is not a question, so the default-set secret deny
+				// holds even under `approval = always`: the paranoid setting
+				// prompts for everything it may allow, never for a refusal.
+				if ( const auto secret = default_secret_deny( candidate.generic_string( ) ) ) {
+					return { permission_decision::deny,
+						{ "default", *secret, permission_decision::deny },
+						"reading " + *secret + " is denied by the default set" };
+				}
+
+				if ( options_.approval == "always" ) {
+					return { permission_decision::ask,
+						{ "default", "approval = always", permission_decision::ask },
+						"approval = always prompts for every tool" };
 				}
 
 				if ( !inside_boundary( candidate ) ) {
@@ -334,6 +213,12 @@ namespace mcode::perm {
 			}
 
 			case tool_class::write: {
+				if ( options_.approval == "always" ) {
+					return { permission_decision::ask,
+						{ "default", "approval = always", permission_decision::ask },
+						"approval = always prompts for every tool" };
+				}
+
 				auto candidate = std::filesystem::path{ request.resource };
 
 				if ( candidate.is_relative( ) ) {
@@ -368,13 +253,13 @@ namespace mcode::perm {
 
 	auto permission_engine::resolve_ask( const permission_request& request,
 		const rule_match& matched ) -> permission_decision {
-		// yolo disables prompts, not policy: every ask resolves to allow
-		// whatever it is, but the floor and permissions.deny already decided
-		// before this point.
-		if ( options_.yolo ) {
+		// yolo and approval = "never" disable prompts, not policy: every ask
+		// resolves to allow whatever it is, but the floor and permissions.deny
+		// already decided before this point.
+		if ( options_.yolo || options_.approval == "never" ) {
 			last_verdict_ = { permission_decision::allow,
 				{ "yolo", matched.pattern, permission_decision::allow },
-				"yolo resolves the prompt to allow" };
+				"yolo or approval = never resolves the prompt to allow" };
 
 			return permission_decision::allow;
 		}
@@ -414,8 +299,9 @@ namespace mcode::perm {
 			case approval_outcome::allow_remember: {
 				// Persist the canonical key, never a prefix. A remembered
 				// `git push` must not authorize `git push --force`. A write
-				// outside the workspace is never auto-persisted (`12`), and
-				// `store_key_for` returns nothing for it.
+				// outside the workspace is never auto-persisted -- the table
+				// marks that row "no" -- and `store_key_for` returns nothing
+				// for it.
 				const auto key = store_key_for( { request.klass, request.tool_name,
 					request.resource } );
 

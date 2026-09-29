@@ -164,11 +164,6 @@ namespace mcode::perm {
 			return last_verdict_;
 		}
 
-		// Session-scope state, for tests and the detail view.
-		[[nodiscard]] auto session_rule_count( ) const noexcept -> std::size_t {
-			return session_rules_.size( );
-		}
-
 		// Load-time warnings: project-store allow drops and unreadable stores.
 		[[nodiscard]] auto warnings( ) const noexcept -> const std::vector< std::string >& {
 			return warnings_;

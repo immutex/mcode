@@ -87,33 +87,38 @@ namespace mcode::tools {
 				false );
 		}
 
-		// The outside-workspace write decision, shared by write and edit. The
-		// engine resolves it: a deny rule denies, the default set prompts (or
-		// denies headless), and an answer is honoured. Protected paths (.git/,
-		// .mcode/) are denied by the floor before any rule runs.
+		// The write decision, shared by write and edit. The engine resolves
+		// it: a deny rule denies, the default set prompts for a path outside
+		// the workspace (or denies headless), and an answer is honoured.
+		// Protected paths keep their deny semantics through the engine's
+		// floor, so a refusal here is still a refusal.
 		[[nodiscard]] auto check_write_permission( tool_context& context,
 			const std::string_view path ) -> std::optional< std::string > {
 			auto& space = *context.space;
 			auto resolved = space.resolve( path );
 
-			if ( resolved && !space.is_protected( *resolved ) ) {
-				return std::nullopt;
-			}
-
-			auto candidate = std::filesystem::path{ space.root( ) } /
-				std::filesystem::path{ path };
-			auto canonical = platform::canonicalize( candidate );
-
-			if ( !canonical ) {
-				return error_result( "cannot resolve " + std::string{ path } + ": " +
-						resolved.error( ).msg,
-					"check the path; paths are relative to the workspace root", false );
-			}
-
 			auto request = perm::permission_request{ };
 			request.tool_name = "write";
 			request.klass = tool_class::write;
-			request.resource = canonical->generic_string( );
+
+			if ( resolved ) {
+				request.resource = resolved->generic_string( );
+			} else {
+				// Outside the workspace: the engine still decides, on the
+				// canonical spelling of the named path. An unresolvable path
+				// stays a hard refusal -- there is nothing to judge.
+				auto candidate = std::filesystem::path{ space.root( ) } /
+					std::filesystem::path{ path };
+				auto canonical = platform::canonicalize( candidate );
+
+				if ( !canonical ) {
+					return error_result( "cannot resolve " + std::string{ path } + ": " +
+							resolved.error( ).msg,
+						"check the path; paths are relative to the workspace root", false );
+				}
+
+				request.resource = canonical->generic_string( );
+			}
 
 			if ( context.permissions->decide( request ) == perm::permission_decision::allow ) {
 				return std::nullopt;
@@ -326,17 +331,78 @@ namespace mcode::tools {
 		auto& space = *context.space;
 		auto resolved = space.resolve( *path );
 
-		if ( !resolved ) {
-			return error_result( "cannot resolve " + *path + ": " + resolved.error( ).msg,
-				"the path must stay inside the workspace; paths are relative to the root", false );
-		}
-
-		if ( space.is_protected( *resolved ) ) {
+		if ( resolved && space.is_protected( *resolved ) ) {
 			return refuse_protected( *path );
 		}
 
 		if ( const auto denied = check_write_permission( context, *path ) ) {
 			return *denied;
+		}
+
+		if ( !resolved ) {
+			// The engine allowed a path outside the workspace. The workspace's
+			// own writer refuses it, so the write goes to the canonical path
+			// directly. Create-only: an overwrite outside the workspace has no
+			// read-before-write invariant behind it, so it stays refused.
+			auto candidate = std::filesystem::path{ space.root( ) } /
+				std::filesystem::path{ *path };
+			auto canonical = platform::canonicalize( candidate );
+
+			if ( !canonical ) {
+				return error_result( "cannot resolve " + *path + ": " + resolved.error( ).msg,
+					"check the path; paths are relative to the workspace root", false );
+			}
+
+			auto error_code = std::error_code{ };
+			const auto exists = std::filesystem::exists(
+				platform::to_extended_path( *canonical ), error_code );
+
+			if ( error_code ) {
+				return error_result( "cannot check " + *path + ": " + error_code.message( ),
+					"the path resolved but its existence could not be determined", false );
+			}
+
+			if ( exists ) {
+				return error_result( "refusing to overwrite " + *path,
+					"the file is outside the workspace, so the read-before-write invariant "
+					"cannot protect it; delete or move it first, or write a new file",
+					false );
+			}
+
+			if ( !canonical->parent_path( ).empty( ) ) {
+				std::filesystem::create_directories(
+					platform::to_extended_path( canonical->parent_path( ) ), error_code );
+
+				if ( error_code ) {
+					return error_result( "cannot create " +
+							canonical->parent_path( ).string( ) + ": " + error_code.message( ),
+						"check the parent directory is creatable", false );
+				}
+			}
+
+			auto output = std::ofstream{ platform::to_extended_path( *canonical ),
+				std::ios::binary | std::ios::trunc };
+
+			if ( !output ) {
+				return error_result( "cannot open " + canonical->string( ),
+					"check the path is a file, not a directory, and is writable", false );
+			}
+
+			output.write( content->data( ), static_cast< std::streamsize >( content->size( ) ) );
+			output.close( );
+
+			if ( !output ) {
+				return error_result( "failed to write " + canonical->string( ),
+					"the file was opened but the write failed; check the disk and permissions",
+					false );
+			}
+
+			auto out = std::string{ "{\"ok\":true,\"path\":\"" };
+			json::append_escaped( out, *path );
+			out += "\",\"bytes\":" + std::to_string( content->size( ) );
+			out += ",\"mode\":\"create\",\"outside_workspace\":true}";
+
+			return out;
 		}
 
 		auto error_code = std::error_code{ };
@@ -423,17 +489,19 @@ namespace mcode::tools {
 		auto& space = *context.space;
 		auto resolved = space.resolve( *path );
 
-		if ( !resolved ) {
-			return error_result( "cannot resolve " + *path + ": " + resolved.error( ).msg,
-				"the path must stay inside the workspace", false );
-		}
-
-		if ( space.is_protected( *resolved ) ) {
+		if ( resolved && space.is_protected( *resolved ) ) {
 			return refuse_protected( *path );
 		}
 
 		if ( const auto denied = check_write_permission( context, *path ) ) {
 			return *denied;
+		}
+
+		if ( !resolved ) {
+			return error_result( "cannot edit " + *path,
+				"the path is outside the workspace; an edit needs the read-before-write "
+				"invariant, which only workspace reads provide -- write the file instead",
+				false );
 		}
 
 		auto error_code = std::error_code{ };

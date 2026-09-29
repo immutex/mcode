@@ -12,6 +12,7 @@
 #include "mcode/perm/permission.hxx"
 #include "mcode/fs/workspace.hxx"
 #include "mcode/platform/seams.hxx"
+#include "mcode/support/glob.hxx"
 #include "mcode/support/text.hxx"
 
 namespace mcode::tools {
@@ -127,40 +128,10 @@ namespace mcode::tools {
 						? path
 						: path.substr( last_slash + 1 );
 
-					return wildcard_match( pattern, name );
+					return support::wildcard_match( pattern, name );
 				}
 
-				return wildcard_match( pattern, path );
-			}
-
-			[[nodiscard]] static auto wildcard_match( const std::string_view pattern,
-				const std::string_view text ) noexcept -> bool {
-				auto pattern_index = std::size_t{ 0 };
-				auto text_index = std::size_t{ 0 };
-				auto star_pattern = std::string_view::npos;
-				auto star_text = std::size_t{ 0 };
-
-				while ( text_index < text.size( ) ) {
-					if ( pattern_index < pattern.size( ) &&
-						( pattern[ pattern_index ] == '?' || pattern[ pattern_index ] == text[ text_index ] ) ) {
-						++pattern_index;
-						++text_index;
-					} else if ( pattern_index < pattern.size( ) && pattern[ pattern_index ] == '*' ) {
-						star_pattern = pattern_index++;
-						star_text = text_index;
-					} else if ( star_pattern != std::string_view::npos ) {
-						pattern_index = star_pattern + 1;
-						text_index = ++star_text;
-					} else {
-						return false;
-					}
-				}
-
-				while ( pattern_index < pattern.size( ) && pattern[ pattern_index ] == '*' ) {
-					++pattern_index;
-				}
-
-				return pattern_index == pattern.size( );
+				return support::wildcard_match( pattern, path );
 			}
 
 		private:
@@ -228,77 +199,10 @@ namespace mcode::tools {
 		}
 
 		// Matches a glob pattern (with `**` crossing directories) against a
-		// workspace-relative path. Segment-wise: `**` consumes zero or more
-		// segments, every other segment matches exactly one.
+		// workspace-relative path. The shared matcher owns the segment walk.
 		[[nodiscard]] auto glob_matches_pattern( const std::string_view path,
 			const std::string_view pattern ) -> bool {
-			auto path_parts = std::vector< std::string_view >{ };
-			auto pattern_parts = std::vector< std::string_view >{ };
-
-			const auto split = []( const std::string_view text ) {
-				auto parts = std::vector< std::string_view >{ };
-				auto start = std::size_t{ 0 };
-
-				while ( start <= text.size( ) ) {
-					const auto slash = text.find( '/', start );
-					const auto end = ( slash == std::string_view::npos ) ? text.size( ) : slash;
-
-					if ( end > start ) {
-						parts.push_back( text.substr( start, end - start ) );
-					}
-
-					if ( slash == std::string_view::npos ) {
-						break;
-					}
-
-					start = slash + 1;
-				}
-
-				return parts;
-			};
-
-			path_parts = split( path );
-			pattern_parts = split( pattern );
-
-			if ( pattern_parts.empty( ) ) {
-				return false;
-			}
-
-			// Iterative match over (pattern index, path index) with `**` fan-out.
-			auto states = std::vector< std::pair< std::size_t, std::size_t > >{ { 0, 0 } };
-
-			while ( !states.empty( ) ) {
-				const auto [ pattern_index, path_index ] = states.back( );
-				states.pop_back( );
-
-				if ( pattern_index == pattern_parts.size( ) && path_index == path_parts.size( ) ) {
-					return true;
-				}
-
-				if ( pattern_index >= pattern_parts.size( ) ) {
-					continue;
-				}
-
-				const auto& part = pattern_parts[ pattern_index ];
-
-				if ( part == "**" ) {
-					for ( auto skip = path_index; skip <= path_parts.size( ); ++skip ) {
-						states.emplace_back( pattern_index + 1, skip );
-					}
-
-					continue;
-				}
-
-				if ( path_index >= path_parts.size( ) ) {
-					continue;
-				}
-
-				if ( ignore_rules::wildcard_match( part, path_parts[ path_index ] ) ) {
-					states.emplace_back( pattern_index + 1, path_index + 1 );
-				}
-			}
-
-			return false;
+			return support::glob_match( pattern, path );
 		}
 
 	}
@@ -469,9 +373,9 @@ namespace mcode::tools {
 				break;
 			}
 
-			if ( name_filter && !ignore_rules::wildcard_match( *name_filter,
+			if ( name_filter && !support::wildcard_match( *name_filter,
 				relative.substr( relative.rfind( '/' ) + 1 ) ) &&
-				!ignore_rules::wildcard_match( *name_filter, relative ) ) {
+				!support::wildcard_match( *name_filter, relative ) ) {
 				continue;
 			}
 
