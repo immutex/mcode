@@ -295,6 +295,86 @@ The batch's own acceptance criteria, as verified:
 | The session-start budget holds | 15 skills plus a realistic chain, asserted inside 8.5K |
 | An MCP server's tools register and are callable | `test_mcp` through the fixture binary, including crash-restart, timeout, banner and hash-pin |
 
+## Post-ship audit — what the green suite did not prove
+
+Everything above was true when it was written, and the suite was green. A
+full review then audited each slice against its own plan, and found real
+defects that the 344 passing tests did not catch. Recorded here because the
+pattern matters more than the individual bugs: **a test suite proves the paths
+it exercises, and says nothing about whether a path is reachable at all.**
+
+### The MCP slice was dead in the shipped binary
+
+The largest finding. Every layer was implemented and tested — 16 cases against
+a fixture server, covering restart, timeout, cancellation, hash-pinning — and
+**nothing constructed a `supervisor`**. `src/cli_commands.cxx`, which the plan's
+own Files table assigns "construct the supervisor, connect servers", contained
+zero MCP references. `parse_mcp_servers` had no production caller. The loader
+built `install_request` without `.servers`, so `mcode.mcp.register` returned
+`nil, "no server store was installed with this surface"` for every real
+extension.
+
+So a configured server never launched. The tests drove the layers directly and
+all passed.
+
+Now wired, and verified against the real binary by measuring the request:
+
+| Config | Input tokens |
+|---|---|
+| no servers | 1611 |
+| `[mcp.servers.echo]` with `enabled = false` | 1611 — identical; the server never launched |
+| the same server with `enabled = true` | 1738 — +127 for its two tool schemas |
+
+Three other gaps in the same slice, all closed: tool **results** were never
+wrapped as untrusted data (only descriptions were); the absolute-maximum timeout
+was documented as enforced "on every request regardless" while no caller clamped
+it; and `client::call_tool` returned raw content while `docs/35` requires the
+wrap on the model-bound path.
+
+### Permissions: six defects, one of them breaking the headline criterion
+
+- **`bash` was decided twice per call** — once by the loop, once again inside the
+  handler — and `allow_once` records nothing, so answering "yes once" **prompted
+  again** and the second answer could contradict the first. This is the batch's
+  headline criterion ("the common path prompts at most once per distinct
+  command") failing in the common path. The plan says one check point; the loop
+  is now it, and the handler keeps only input-shape validation.
+- `[sandbox] approval = "never"` did not suppress prompts; only `--yolo` did.
+- `approval = "always"` prompted for reads but not writes.
+- A write outside the workspace was still a hard refusal, so the promised prompt
+  was unreachable.
+- The **secrets deny rules did not exist at all** (`.env`, `keys`, `id_rsa*`,
+  `.aws/`, `*.pem`), though the resolved table lists them.
+- **`tool.pre_call` was never published**, so the vetoable event `docs/18`
+  defines for extension hooks could never fire. Published and honoured now,
+  ahead of the handler and not bypassable by `--yolo`.
+
+### Skills: one unfalsifiable criterion, one near-vacuous test
+
+- The acceptance item "`disable-model-invocation` … keeps `/name` working" was
+  **untestable**: there is no slash-command surface anywhere in the harness. It
+  could never pass and never fail. Corrected to assert the surface that exists.
+- The 8.5K session-start budget test summed prompt + chain + index and omitted
+  the 3.5K tools slice — it would have passed with the tools component 70% over.
+- `index_lines` was production-dead while `render_index` and the CLI each had
+  their own copy of the loop, and the CLI's copy printed **unsanitized**
+  descriptions. One implementation now, and the CLI sanitizes.
+
+### Conventions
+
+Files over the 600-line cap, a forbidden `(void)closed;` no-op, three copies of
+`surface_from`, a duplicated wildcard matcher, a duplicated tool-list
+canonicalization, and a set of dead fields — `prefix_bytes` (whose comment
+claimed a byte offset while the code stored a message count), `near_budget_note`,
+and `event_log::branch_id` with no producer. All removed or consolidated.
+
+### The lesson
+
+Every defect above is one of two shapes: **a component that works and is never
+reached**, or **a claim with nothing behind it**. Neither is visible from a
+green suite. The batch's own stated lesson — "point the harness at something
+real" — applies to wiring and reachability, not only to behaviour.
+
 **Not achieved, and why.** The batch-level acceptance run's step 4 — answer
 "always" at a real prompt, then confirm a second identical command does not
 prompt — was not driven end-to-end, because the cheap model available here will

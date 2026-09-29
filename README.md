@@ -460,6 +460,35 @@ code comments.
     itself the authority. This batch cites `docs/05:71` directly. The underlying
     inconsistency predates this batch and is not resolved here.
 
+55. **A subsystem is not shipped until the host constructs it.** The MCP client
+    was complete and fully tested — 16 cases against a fixture server covering
+    restart, timeout, cancellation and hash-pinning — and **nothing in the
+    binary ever built a `supervisor`**. A configured server never launched, and
+    every test passed. The same shape as item 53: components that work, and a
+    composition that does not exist. A test that drives a layer directly proves
+    the layer; it says nothing about whether anything reaches it.
+
+56. **`tool.pre_call` must be published by the loop, and its veto honoured.**
+    The event and its `hooks.cxx` mapping existed, `bus::publish` already
+    returned a veto, and nothing ever published it — so an extension hook that
+    vetoes a tool call could never fire. It is published ahead of the handler
+    and its veto denies the call, which is deliberately a **separate gate from
+    the permission engine** and therefore not bypassable by `--yolo`.
+
+57. **MCP servers come from two places that must produce one thing.**
+    `[mcp.servers.<name>]` in `config.toml` is the primary path — no extension,
+    no Lua. `mcode.mcp.register` is the extension-declared path. Both funnel
+    into one `mcp::server_config` and one connect implementation, and a
+    duplicate name between them is a hard error rather than a silent override.
+    An extension-declared server still arrives `enabled = false`: declaring a
+    server is not consenting to run it.
+
+58. **The supervisors outlive the loop, deliberately.** They own the child
+    processes, and the handlers the loop dispatches into reference them. The
+    `server_set` is declared *before* the `agent_loop` in `run_exec`, so reverse
+    destruction order tears the loop down first and no handler can outlive its
+    target. Every early-return path has the same ordering.
+
 ## Building
 
 ```bash
