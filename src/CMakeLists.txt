@@ -35,11 +35,20 @@ add_library(mcode_core STATIC
     mcode/events/bus.cxx
 
     mcode/cli/exec.cxx
+    mcode/cli/skill_command.cxx
+
+    mcode/skills/frontmatter.cxx
+    mcode/skills/discovery.cxx
+    mcode/skills/index.cxx
+    mcode/skills/session_context.cxx
+
+    mcode/instruct/chain.cxx
 
     mcode/eval/suite.cxx
 
     mcode/ext/api.cxx
     mcode/ext/api_invoke.cxx
+    mcode/ext/api_skill.cxx
     mcode/ext/loader.cxx
     mcode/ext/lua_json.cxx
     mcode/ext/manifest.cxx

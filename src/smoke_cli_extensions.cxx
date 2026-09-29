@@ -230,11 +230,13 @@ auto smoke_cli_and_extensions( ) -> void {
 				failure.reason.c_str( ) );
 		}
 
-		check( shipped.report.loaded.size( ) == 1, "the shipped extensions directory is not empty" );
+		check( shipped.report.loaded.size( ) == 2, "both shipped extensions loaded" );
 		check( shipped.report.failed.empty( ), "every shipped extension loaded" );
 		check( shipped_providers.size( ) == 3, "the providers extension declared three providers" );
 		check( shipped_providers.find( "openai-chat-completions" ) != nullptr,
 			"the OpenAI descriptor is registered" );
+		check( shipped_registry.find( "skill_read" ) != nullptr,
+			"the skills extension registered skill_read" );
 
 		if ( const auto* descriptor = shipped_providers.find( "anthropic-messages" );
 			descriptor != nullptr ) {

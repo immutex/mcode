@@ -66,6 +66,8 @@ TEST_CASE( "a bad manifest fails the extension, not the session", "[loader]" ) {
 
 	auto report = ext::load_extensions( { extensions_root( ) }, providers, hooks, options ).report;
 
+	// The shipped skills extension does not live here; the fixture root holds
+	// exactly one good and one broken extension.
 	if ( report.loaded.size( ) != 1 ) {
 		auto reasons = std::string{ };
 
@@ -184,17 +186,23 @@ TEST_CASE( "the shipped reference providers load", "[loader]" ) {
 	options.register_api = register_api;
 
 	auto report = ext::load_extensions( { std::filesystem::path{ MCODE_EXTENSIONS_ROOT } }, providers, hooks,
-		options ).report;
+		options );
 
-	// It registers providers rather than tools, so the registry stays empty --
-	// but it must not be reported as failed.
-	if ( report.loaded.size( ) != 1 ) {
-		FAIL( "unexpected report:" << describe( report ) );
+	// The skills extension also ships there and registers a tool, so the load
+	// count is two; this test is about the provider descriptors.
+	if ( report.report.loaded.size( ) != 2 ) {
+		FAIL( "unexpected report:" << describe( report.report ) );
 	}
 
-	REQUIRE( report.loaded.size( ) == 1 );
-	REQUIRE( report.loaded.front( ).name == "providers" );
-	REQUIRE( report.loaded.front( ).bytes_used > 0 );
+	REQUIRE( report.report.loaded.size( ) == 2 );
+
+	const auto providers_entry = std::find_if( report.report.loaded.begin( ),
+		report.report.loaded.end( ), []( const ext::load_outcome& outcome ) {
+			return outcome.name == "providers";
+		} );
+
+	REQUIRE( providers_entry != report.report.loaded.end( ) );
+	REQUIRE( providers_entry->bytes_used > 0 );
 }
 
 TEST_CASE( "a registered tool is callable and reaches the extension", "[loader]" ) {
@@ -362,7 +370,7 @@ TEST_CASE( "the providers extension declares three providers through the API", "
 	auto loaded = ext::load_extensions( { std::filesystem::path{ MCODE_EXTENSIONS_ROOT } }, providers, hooks,
 		options );
 
-	if ( loaded.report.loaded.size( ) != 1 ) {
+	if ( loaded.report.loaded.size( ) != 2 ) {
 		FAIL( "unexpected report:" << describe( loaded.report ) );
 	}
 
@@ -410,7 +418,7 @@ TEST_CASE( "disabling every extension leaves a working registry", "[loader]" ) {
 	REQUIRE( loaded.report.loaded.empty( ) );
 	REQUIRE( loaded.report.failed.empty( ) );
 	REQUIRE( loaded.extensions.empty( ) );
-	REQUIRE( loaded.report.disabled == 3 );
+	REQUIRE( loaded.report.disabled == 4 );
 
 	// The core tools are intact, and no extension tool appeared.
 	REQUIRE( registry.size( ) == core_count );

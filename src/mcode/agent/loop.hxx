@@ -281,8 +281,8 @@ namespace mcode {
 
 	// The core system prompt, sections 1-8 in the cache-stable order. Byte-stable
 	// for the session; the environment block and recitation live in the tail.
-	// The instruction chain and skill index are the skills workstream's
-	// sections 10-11; empty means the section is absent.
+	// The instruction chain and skill index are sections 10-11, assembled once
+	// at session start. Empty means the section is absent.
 	[[nodiscard]] auto build_system_prompt( const tool_registry& registry,
 		const std::string_view instruction_chain = { },
 		const std::string_view skill_index = { } ) -> std::string;
@@ -338,8 +338,8 @@ namespace mcode {
 			// rules, remember-store writes).
 			perm::permission_engine* permissions = nullptr;
 
-			// Prompt sections owned by the skills workstream. Empty means the
-			// section is absent.
+			// Prompt sections 10 and 11, assembled once at session start.
+			// Empty means the section is absent.
 			std::string instruction_chain;
 			std::string skill_index;
 		};
@@ -417,6 +417,8 @@ namespace mcode {
 		std::string api_key_;
 		std::string workspace_root_;
 		std::string platform_name_;
+		std::string instruction_chain_;
+		std::string skill_index_;
 
 		thrash_detector thrash_;
 		std::string last_failure_;

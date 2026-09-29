@@ -1,0 +1,5 @@
+name = "skills"
+version = "0.1.0"
+api_version = 1
+description = "Exposes discovered skills to the model through the skill_read tool"
+permissions = []

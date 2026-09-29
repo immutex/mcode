@@ -12,6 +12,7 @@
 #include "mcode/ext/hooks.hxx"
 #include "mcode/ext/manifest.hxx"
 #include "mcode/model/provider.hxx"
+#include "mcode/skills/discovery.hxx"
 
 namespace mcode::ext {
 
@@ -59,6 +60,10 @@ namespace mcode::ext {
 			model::provider_registry& providers;
 			hook_registry& hooks;
 			const manifest& details;
+
+			// The discovered skills, for `mcode.skill.read` / `mcode.skill.list`.
+			// Null when discovery did not run; the entries then read as empty.
+			const mcode::skills::discovery_report* skills = nullptr;
 		};
 
 		auto install( const install_request& request ) -> status;
@@ -101,6 +106,15 @@ namespace mcode::ext {
 		auto handle_on( lua_State* state ) -> int;
 		auto handle_off( lua_State* state ) -> int;
 		auto handle_emit( lua_State* state ) -> int;
+		auto handle_skill_read( lua_State* state ) -> int;
+		auto handle_skill_list( lua_State* state ) -> int;
+
+		// The discovered skills this surface was installed with. Null when
+		// discovery did not run.
+		[[nodiscard]] auto installed_skills( ) const noexcept
+			-> const mcode::skills::discovery_report* {
+			return skills_;
+		}
 
 	private:
 
@@ -108,6 +122,10 @@ namespace mcode::ext {
 		tool_registry* registry_ = nullptr;
 		model::provider_registry* providers_ = nullptr;
 		hook_registry* hooks_ = nullptr;
+
+		// Borrowed, not owned: discovery happens once per session before the
+		// extensions load, and the report outlives every surface that reads it.
+		const mcode::skills::discovery_report* skills_ = nullptr;
 
 		// A COPY, not a pointer. The loader builds a manifest per candidate and
 		// destroys it at the end of the iteration, so a pointer here dangles the
