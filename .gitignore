@@ -4,6 +4,9 @@
 /install/
 tools/**/build/
 
+# --- mcode session state ---
+.mcode/
+
 # --- Conan ---
 # conan.lock is deliberately NOT ignored: docs/14 §Build configuration requires
 # committed lockfiles for reproducibility.

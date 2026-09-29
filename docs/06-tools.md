@@ -95,7 +95,14 @@ That last test is the sharp one. A missing `task` tool means the agent does the 
 | `ask_user` | read | **Silent-failure** — its absence makes the agent guess | Ambiguity escalation (`11`) |
 | `tool_search` | read | **Bootstrapping** — it *is* the loading mechanism | Find and load deferred tool schemas |
 
-Eight core tools, **≈2–2.5K tokens** of schema (~200–300 each, BoR arXiv 2605.24660). Always loaded, cannot be disabled.
+Eight core tools, **≈2–2.5K tokens** of schema (~200–300 each, BoR arXiv 2605.24660). Always loaded, cannot be disabled. Measured for the shipped eight: **4,297 bytes ≈ 1,074 tokens** (bytes ÷ 4), well under the 3K budget.
+
+`glob` and `grep` are ignore-aware in the tool layer, not in `workspace`: `.git/`,
+`.mcode/` and common build output directories are always skipped, and the root
+`.gitignore` is honoured for its simple subset (literal names, `*.ext` wildcards,
+trailing-`/` directory rules). Full gitignore semantics — nested files, negation,
+`**` rules — are out of scope for the first batch; the workspace walk itself
+stays ignore-blind.
 
 The file primitives stay native rather than becoming extensions, even though they *could* be (Maki ships them as Lua). The reason is cooperation risk: a Lua `read`/`edit` would have to be trusted to call the host's read-recording API for the staleness check to work at all. Keeping them core means the file-integrity invariants have **zero cooperation requirement** — the same result with less surface area.
 
@@ -118,6 +125,14 @@ Deliberate omissions: no completion tool (the verification gate reads the final 
 | Wrong encoding | Decode as UTF-8 with replacement; report `encoding: non-utf8` rather than failing |
 | Symlink | Follow, but resolve against the workspace boundary (`12`) — escaping symlinks are outside |
 | Missing | Structured error with the closest existing path (typo recovery) |
+
+**The three size caps agree by construction.** `read` serves a window through a
+bounded streaming read (16 MiB per call) and never goes through `read_file`'s
+whole-file path, so the 8 MiB `MAX_TEXT_FILE_BYTES` cap is a whole-file-consumer
+bound, not a read-tool bound: a 9 MiB file is navigable a window at a time and
+still writable (the 10 MiB `MAX_WRITE_FILE_BYTES` cap). A file above the write
+cap is refused by `write` regardless of readability. The window threshold that
+matters to the model is the 1 MiB `large_file` note, not a refusal.
 
 `write` refuses to create files >10 MiB and refuses to overwrite a file it has not read this session (the read-before-write invariant). `edit` operates on exact anchors and never silently rewrites an entire file.
 
