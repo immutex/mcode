@@ -9,6 +9,7 @@
 
 #include "mcode/agent/loop.hxx"
 #include "mcode/cli/exec.hxx"
+#include "mcode/cli/skill_command.hxx"
 #include "mcode/events/bus.hxx"
 #include "mcode/eval/suite.hxx"
 #include "mcode/ext/hooks.hxx"
@@ -76,6 +77,12 @@ auto main( int argument_count, char** arguments ) -> int {
 
 	if ( !argv.empty( ) && argv.front( ) == "exec" ) {
 		return run_exec( { argv.begin( ) + 1, argv.end( ) } );
+	}
+
+	// `mcode skill list|validate` -- inspects the skill roots without starting
+	// a session, so a user can see what will be indexed and why one was skipped.
+	if ( !argv.empty( ) && argv.front( ) == "skill" ) {
+		return mcode::cli::run_skill( { argv.begin( ) + 1, argv.end( ) } );
 	}
 
 	// `mcode eval [--json] [fixture-root]` -- the deterministic suite.
