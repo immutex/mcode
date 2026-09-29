@@ -388,7 +388,23 @@ namespace mcode::perm {
 			return { };
 		}
 
-		into = **loaded;
+		// Merged rather than assigned, so two stores can be layered: the user's
+		// remembered answers and the repository's own file. A later layer wins
+		// on a key collision, and a deny survives the merge because the drop
+		// below only ever removes allows.
+		for ( const auto& spec : SECTIONS ) {
+			const auto* source = find_section( const_cast< store_layer& >( **loaded ), spec.key );
+
+			if ( source == nullptr ) {
+				continue;
+			}
+
+			auto* target = find_section( into, spec.key );
+
+			for ( const auto& [ key, decision ] : *source ) {
+				target->insert_or_assign( key, decision );
+			}
+		}
 
 		// A project-scoped store cannot widen: drop every allow it carries,
 		// with a warning, because a cloned repo must not be able to grant

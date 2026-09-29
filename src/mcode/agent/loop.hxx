@@ -417,8 +417,6 @@ namespace mcode {
 		std::string api_key_;
 		std::string workspace_root_;
 		std::string platform_name_;
-		std::string instruction_chain_;
-		std::string skill_index_;
 
 		thrash_detector thrash_;
 		std::string last_failure_;
@@ -426,6 +424,8 @@ namespace mcode {
 		bool permission_denied_ = false;
 		std::string verification_command_;
 		perm::permission_engine* permissions_ = nullptr;
+		std::string instruction_chain_;
+		std::string skill_index_;
 		std::vector< tool_call > pending_calls_;
 		std::map< std::string, std::size_t, std::less<> > reflection_counts_;
 		std::size_t total_reflections_ = 0;

@@ -14,6 +14,7 @@
 #include "mcode/core/registry.hxx"
 #include "mcode/events/bus.hxx"
 #include "mcode/ext/api.hxx"
+#include "mcode/skills/discovery.hxx"
 #include "mcode/ext/lua_host.hxx"
 #include "mcode/ext/manifest.hxx"
 
@@ -129,10 +130,14 @@ namespace mcode::ext {
 	// The real API installer: everything the frozen surface defines. Passed as
 	// `loader_options::register_api`, and injectable so a test can substitute a
 	// narrower surface without the loader growing a second code path.
-	// Captures only the tool registry, which the surface writes into directly.
+	// Captures the tool registry, which the surface writes into directly, and
+	// the discovered skills, which `mcode.skill.read` resolves against. The
+	// skills pointer must outlive every loaded extension.
+	//
 	// Providers and hooks arrive per call, because the caller owns them and a
 	// second reference would be a second source of truth.
-	[[nodiscard]] auto default_register_api( tool_registry& registry )
+	[[nodiscard]] auto default_register_api( tool_registry& registry,
+		const skills::discovery_report* skills = nullptr )
 		-> std::function< status( const registration& ) >;
 
 	// The extension roots, in precedence order: project, then user. Project

@@ -22,6 +22,7 @@
 #include "mcode/perm/permission.hxx"
 #include "mcode/perm/store.hxx"
 #include "mcode/platform/seams.hxx"
+#include "mcode/skills/session_context.hxx"
 #include "mcode/support/config.hxx"
 #include "mcode/support/time.hxx"
 #include "mcode/tools/context.hxx"
@@ -131,15 +132,46 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	auto hooks = mcode::ext::hook_registry{ bus };
 	auto tool_registry = mcode::tool_registry{ };
 
+	const auto workspace_path = parsed->working_directory.empty( )
+		? std::filesystem::current_path( )
+		: std::filesystem::path{ parsed->working_directory };
+
+	// Sections 10 and 11: the repository's instructions and the skill index.
+	// Assembled once, here, because both are session-start only -- recomputing
+	// either per turn would invalidate the cached request prefix.
+	//
+	// The discovered skills must outlive every loaded extension, because the
+	// `skills` extension resolves `skill_read` against this object.
+	auto skills_options = mcode::skills::session_context_options{ };
+	skills_options.workspace = workspace_path;
+
+	const auto data_directory = mcode::platform::app_data_path( mcode::platform::data_kind::config );
+	const auto bundled_directory = mcode::platform::executable_directory( );
+
+	if ( data_directory ) {
+		skills_options.user_agents_file = *data_directory / "AGENTS.md";
+		skills_options.user_skills_root = *data_directory / "skills";
+	}
+
+	if ( bundled_directory ) {
+		skills_options.org_agents_file = *bundled_directory / "AGENTS.md";
+		skills_options.extension_roots = { *bundled_directory / "extensions" };
+	}
+
+	auto skills_context = mcode::skills::assemble_session_context( skills_options );
+
+	if ( parsed->verbose ) {
+		for ( const auto& warning : skills_context.warnings ) {
+			std::fprintf( stderr, "mcode: %s\n", warning.c_str( ) );
+		}
+	}
+
 	if ( !parsed->no_extensions ) {
 		auto options = mcode::ext::loader_options{ };
-		options.register_api = mcode::ext::default_register_api( tool_registry );
+		options.register_api = mcode::ext::default_register_api( tool_registry,
+			&skills_context.skills );
 
-		const auto workspace = parsed->working_directory.empty( )
-			? std::filesystem::current_path( )
-			: std::filesystem::path{ parsed->working_directory };
-
-		auto roots = mcode::ext::default_roots( workspace );
+		auto roots = mcode::ext::default_roots( workspace_path );
 
 		// The shipped providers are declared by an extension, not compiled in,
 		// and the loader only knows the workspace and user roots. The bundled
@@ -150,8 +182,8 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		// /proc/self/exe, and `24` requires that decision to live in `platform`
 		// rather than in portable code. A missing directory is not fatal -- the
 		// bundled extensions are simply absent, which the loader already reports.
-		if ( auto bundled = mcode::platform::executable_directory( ) ) {
-			roots.push_back( *bundled / "extensions" );
+		if ( bundled_directory ) {
+			roots.push_back( *bundled_directory / "extensions" );
 		}
 
 		auto loaded = mcode::ext::load_extensions( roots, registry, hooks, options );
@@ -255,23 +287,35 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 
 	auto reads = mcode::tools::session_reads{ };
 
-	// The permission engine, the approval source and the remember store.
-	// Terminal source when a TTY is attached and --json is absent; headless
-	// otherwise. Integration rewrites this block properly.
-	auto store_file = mcode::platform::app_data_path( mcode::platform::data_kind::config );
-	auto store = mcode::perm::remember_store{ store_file
-		? *store_file / "permissions.json"
+	// Two stores, not one. Answers the user gives with `[a]` are remembered in
+	// their own file, which follows them between repositories; the repository's
+	// own `.mcode/permissions.json` is loaded read-only and has every allow
+	// dropped, so a cloned repository cannot grant itself permissions -- and
+	// cannot edit the user's answers either.
+	const auto user_data = mcode::platform::app_data_path( mcode::platform::data_kind::config );
+
+	auto user_store = mcode::perm::remember_store{ user_data
+		? *user_data / "permissions.json"
 		: std::filesystem::path{ ".mcode/permissions.json" } };
 
-	auto engine = mcode::perm::permission_engine{ *space, &store };
+	auto project_store = mcode::perm::remember_store{ space->root( ) / ".mcode"
+		/ "permissions.json" };
+
+	auto engine = mcode::perm::permission_engine{ *space, &user_store };
 
 	auto headless_source = mcode::perm::headless_approval_source{ };
 	auto terminal_source = mcode::perm::terminal_approval_source{ };
 
+	// A prompt only where someone can answer it. `terminal_size` reports the
+	// size of stdout's console, so it succeeds exactly when stdout is a
+	// terminal -- which is the condition, and asking it through the seam that
+	// already owns that question is better than a second platform branch here.
+	const auto interactive = !parsed->json && mcode::platform::terminal_size( ).has_value( );
+
 	{
 		auto engine_options = mcode::perm::permission_engine::options{ };
 		engine_options.yolo = parsed->yolo;
-		engine_options.headless = parsed->json;
+		engine_options.headless = !interactive;
 		engine_options.approval = parsed->approval.empty( )
 			? config->get_string( "sandbox.approval" ).value_or( std::string{ "on-request" } )
 			: parsed->approval;
@@ -281,14 +325,34 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		}
 
 		engine.set_options( engine_options );
-		engine.set_approval_source( parsed->json
-			? static_cast< mcode::perm::approval_source* >( &headless_source )
-			: static_cast< mcode::perm::approval_source* >( &terminal_source ) );
-
-		std::ignore = engine.load_store( );
+		engine.set_approval_source( interactive
+			? static_cast< mcode::perm::approval_source* >( &terminal_source )
+			: static_cast< mcode::perm::approval_source* >( &headless_source ) );
 
 		for ( const auto& dir : parsed->add_dirs ) {
 			engine.add_root( dir );
+		}
+
+		// The user's own deny and ask rules. Read from the merged config, never
+		// from a raw layer: the never-widen rule is enforced during the merge,
+		// and reading a layer directly would bypass it.
+		engine.add_config_rules( mcode::perm::rule_scope::user,
+			config->get_string_array( "permissions.deny" ),
+			config->get_string_array( "permissions.ask" ) );
+
+		// A store that cannot be read is not a reason to run with no policy:
+		// the engine already reports it, and a failed load leaves the rules
+		// that were merged above in place.
+		if ( const auto loaded = engine.load_store( ); !loaded ) {
+			std::fprintf( stderr, "mcode: %s\n", loaded.error( ).msg.c_str( ) );
+		}
+
+		if ( const auto loaded = engine.load_project_store( project_store ); !loaded ) {
+			std::fprintf( stderr, "mcode: %s\n", loaded.error( ).msg.c_str( ) );
+		}
+
+		for ( const auto& warning : engine.warnings( ) ) {
+			std::fprintf( stderr, "mcode: %s\n", warning.c_str( ) );
 		}
 	}
 
@@ -346,6 +410,14 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	dependencies.api_key = *api_key;
 	dependencies.workspace_root = space->root( ).string( );
 	dependencies.platform_name = std::string{ PLATFORM_NAME };
+	dependencies.permissions = &engine;
+
+	// Sections 10 and 11. The index is emitted only when `skill_read` is
+	// actually registered, which the prompt builder checks itself -- under
+	// `--no-extensions` there is no such tool, so the section is absent without
+	// this code having to know that.
+	dependencies.instruction_chain = skills_context.chain.text;
+	dependencies.skill_index = skills_context.skill_index;
 
 	auto loop = mcode::agent_loop{ dependencies };
 
@@ -372,8 +444,15 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		// that merely had no verification gate. Asked of the budget, not inferred
 		// from the log's wording: a reason string that changes would silently turn a
 		// budget exit into a success.
+		//
+		// A denial is checked after the budget because the budget is the more
+		// specific cause: a run that ran out of steps *and* was denied is a budget
+		// exit. The flag is cleared by any later successful call, so a denial the
+		// run recovered from does not reach here.
 		if ( loop.budget( ).exhausted( ) ) {
 			code = mcode::cli::exit_code::budget_exhausted;
+		} else if ( loop.permission_denied( ) ) {
+			code = mcode::cli::exit_code::permission_denied;
 		}
 	}
 

@@ -140,6 +140,13 @@ namespace mcode::perm {
 		// memory and the store is re-read on every save.
 		[[nodiscard]] auto load_store( ) -> status;
 
+		// Loads a second layer over the first, for the repository's own
+		// `.mcode/permissions.json`. Its allows are dropped when the file sits
+		// under the workspace root, so a cloned repository cannot grant itself
+		// permissions; denies survive. Answers the user gives with `[a]` are
+		// written to the primary store, never to this one.
+		[[nodiscard]] auto load_project_store( remember_store& store ) -> status;
+
 		// Adds extra workspace roots (--add-dir). Widens the boundary for one
 		// run; paths under an added root are inside for every check.
 		auto add_root( const std::filesystem::path& root ) -> void;

@@ -603,5 +603,9 @@ namespace mcode::perm {
 		return load_store_into( store_, *space_, stored_, warnings_ );
 	}
 
+	auto permission_engine::load_project_store( remember_store& store ) -> status {
+		return load_store_into( &store, *space_, stored_, warnings_ );
+	}
+
 }
 

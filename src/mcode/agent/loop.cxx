@@ -41,7 +41,8 @@ namespace mcode {
 		provider_( deps.provider ), api_key_( deps.api_key ),
 		workspace_root_( deps.workspace_root ),
 		platform_name_( deps.platform_name ),
-		permissions_( deps.permissions ), instruction_chain_( deps.instruction_chain ),
+		permissions_( deps.permissions ),
+		instruction_chain_( deps.instruction_chain ),
 		skill_index_( deps.skill_index ) {
 		if ( registry_ == nullptr ) {
 			registry_ = &owned_registry_;

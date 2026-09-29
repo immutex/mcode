@@ -326,16 +326,17 @@ namespace mcode::ext {
 		return outcome;
 	}
 
-	auto default_register_api( tool_registry& registry )
+	auto default_register_api( tool_registry& registry,
+		const skills::discovery_report* skills )
 		-> std::function< status( const registration& ) > {
 		// The tool registry is captured by reference, not copied: the surface writes
 		// into it directly, and a copy would leave the caller's registry empty while
 		// the extension appeared to load. Everything else arrives per call, because
 		// the caller owns the ones it must inspect afterwards.
-		return [ &registry ]( const registration& given ) -> status {
+		return [ &registry, skills ]( const registration& given ) -> status {
 			return given.surface.install( api_surface::install_request{ .host = given.host,
 				.registry = registry, .providers = given.providers, .hooks = given.hooks,
-				.details = given.details } );
+				.details = given.details, .skills = skills } );
 		};
 	}
 
