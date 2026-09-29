@@ -61,6 +61,7 @@ add_library(mcode_core STATIC
     mcode/net/sse.cxx
     mcode/net/http_client.cxx
 
+    mcode/net/http_internal.cxx
     mcode/proc/process.cxx
 
     mcode/agent/event_log.cxx

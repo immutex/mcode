@@ -164,9 +164,9 @@ namespace {
 
 }
 
-// The merge acceptance test from docs/26: `exec` drives a real turn in which the
-// model calls the real `read` tool over a real HTTP round trip and receives real
-// file content. Not a state sequence, not a schema -- the file's text comes back.
+// The merge acceptance test: `exec` drives a real turn in which the model calls
+// the real `read` tool over a real HTTP round trip and receives real file
+// content. Not a state sequence, not a schema -- the file's text comes back.
 TEST_CASE( "exec drives a real read tool call over a loopback provider", "[loop][e2e]" ) {
 	// The tests run from the build tree, so the workspace is a temp directory
 	// with one real file the tool reads from disk.

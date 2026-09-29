@@ -1,5 +1,7 @@
 #include "mcode/net/http_client.hxx"
 
+#include "mcode/net/http_internal.hxx"
+
 #include <boost/asio/connect.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
@@ -194,105 +196,6 @@ namespace mcode::net {
 			return out;
 		}
 
-		// HTTP/1.1 `Transfer-Encoding: chunked`. The SSE body is read straight off
-		// the socket, so the framing has to be removed before the event parser
-		// sees it. Left in, a chunk-size line is a line with no colon and is
-		// discarded -- but a chunk boundary landing inside an event splits its
-		// JSON across two lines, the continuation is discarded as well, and the
-		// truncated payload is rejected. Cloudflare fronts the gateway and always
-		// chunks, so this is the normal case, not an edge case.
-		class chunked_decoder {
-		public:
-			auto feed( const std::string_view raw ) -> status {
-				pending_.append( raw );
-
-				while ( !done_ ) {
-					if ( state_ == state::size ) {
-						const auto end = pending_.find( '\n' );
-
-						if ( end == std::string::npos ) {
-							return { };
-						}
-
-						auto line = std::string{ pending_.substr( 0, end ) };
-
-						pending_.erase( 0, end + 1 );
-
-						if ( !line.empty( ) && line.back( ) == '\r' ) {
-							line.pop_back( );
-						}
-
-						// A chunk extension follows a semicolon and carries no size.
-						if ( const auto semicolon = line.find( ';' );
-							semicolon != std::string::npos ) {
-							line.resize( semicolon );
-						}
-
-						auto size = std::uint64_t{ 0 };
-						const auto* begin = line.data( );
-						const auto* finish = begin + line.size( );
-						const auto parsed = std::from_chars( begin, finish, size, 16 );
-
-						if ( parsed.ec != std::errc{ } || parsed.ptr != finish ) {
-							return std::unexpected(
-								fail( errc::protocol, "malformed chunk size in the SSE body" ) );
-						}
-
-						// The last chunk is followed by an optional trailer, which
-						// is not part of the body.
-						if ( size == 0 ) {
-							done_ = true;
-
-							return { };
-						}
-
-						remaining_ = size;
-						state_ = state::data;
-
-						continue;
-					}
-
-					const auto take = std::min< std::uint64_t >( remaining_, pending_.size( ) );
-
-					decoded_.append( pending_, 0, static_cast< std::size_t >( take ) );
-					pending_.erase( 0, static_cast< std::size_t >( take ) );
-					remaining_ -= take;
-
-					if ( remaining_ != 0 ) {
-						return { };
-					}
-
-					// The CRLF that terminates the chunk data.
-					if ( pending_.size( ) < 2 ) {
-						return { };
-					}
-
-					pending_.erase( 0, 2 );
-					state_ = state::size;
-				}
-
-				return { };
-			}
-
-			[[nodiscard]] auto take_decoded( ) -> std::string {
-				return std::exchange( decoded_, std::string{ } );
-			}
-
-			[[nodiscard]] auto finished( ) const -> bool { return done_; }
-
-		private:
-			enum class state { size, data };
-
-			state state_ = state::size;
-			std::string pending_;
-			std::string decoded_;
-			std::uint64_t remaining_ = 0;
-			bool done_ = false;
-		};
-
-		[[nodiscard]] auto is_chunked( const std::string_view transfer_encoding ) -> bool {
-			return lower( transfer_encoding ).find( "chunked" ) != std::string::npos;
-		}
 
 		// Reads the SSE body incrementally. Shared by both transports; the
 		// buffered prefix from the header read is drained first, or a server that
@@ -300,7 +203,7 @@ namespace mcode::net {
 		auto pump_sse( beast::flat_buffer& buffer, std::function< std::size_t( void*, std::size_t ) > read_some,
 			sse_parser& parser_state, const std::uint64_t max_response_bytes, const bool chunked ) -> status {
 			auto total = std::uint64_t{ 0 };
-			auto decoder = chunked_decoder{ };
+			auto decoder = detail::chunked_decoder{ };
 
 			const auto deliver = [&]( const std::string_view bytes ) -> status {
 				total += bytes.size( );
@@ -583,7 +486,7 @@ namespace mcode::net {
 						return stream.read_some( asio::buffer( destination, capacity ) );
 					},
 					parser_state, max_response_bytes_,
-					is_chunked( parser.get( ).base( )[ http::field::transfer_encoding ] ) );
+					detail::is_chunked( parser.get( ).base( )[ http::field::transfer_encoding ] ) );
 
 				// `~ssl_stream` performs a graceful close: it waits for the peer's
 				// close_notify. A provider that keeps the connection alive never
@@ -626,7 +529,7 @@ namespace mcode::net {
 					return stream.read_some( asio::buffer( destination, capacity ) );
 				},
 				parser_state, max_response_bytes_,
-				is_chunked( parser.get( ).base( )[ http::field::transfer_encoding ] ) );
+				detail::is_chunked( parser.get( ).base( )[ http::field::transfer_encoding ] ) );
 
 			auto ignored = boost::system::error_code{ };
 			stream.socket( ).close( ignored );
