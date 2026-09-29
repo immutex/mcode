@@ -34,13 +34,13 @@ namespace mcode {
 		return "idle";
 	}
 
-	agent_loop::agent_loop( dependencies dependencies )
-		: registry_( dependencies.registry ), client_( dependencies.client ),
-		log_( dependencies.log ), bus_( dependencies.bus ), budget_( dependencies.budget ),
-		model_name_( dependencies.model_name ), caps_( dependencies.caps ),
-		provider_( dependencies.provider ), api_key_( dependencies.api_key ),
-		workspace_root_( dependencies.workspace_root ),
-		platform_name_( dependencies.platform_name ) {
+	agent_loop::agent_loop( dependencies deps )
+		: registry_( deps.registry ), client_( deps.client ),
+		log_( deps.log ), bus_( deps.bus ), budget_( deps.budget ),
+		model_name_( deps.model_name ), caps_( deps.caps ),
+		provider_( deps.provider ), api_key_( deps.api_key ),
+		workspace_root_( deps.workspace_root ),
+		platform_name_( deps.platform_name ) {
 		if ( registry_ == nullptr ) {
 			registry_ = &owned_registry_;
 		}

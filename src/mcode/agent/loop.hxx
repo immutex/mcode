@@ -323,7 +323,10 @@ namespace mcode {
 		agent_loop( tool_registry& registry, event_log& log, session_budget budget = { } )
 			: registry_( &registry ), log_( &log ), budget_( budget ) { }
 
-		explicit agent_loop( dependencies dependencies );
+		// The parameter is `deps`, not `dependencies`: a parameter named after the
+		// nested type it carries is rejected by GCC as shadowing a member (-Wshadow),
+		// and clang does not implement that warning.
+		explicit agent_loop( dependencies deps );
 
 		[[nodiscard]] auto execute( const tool_call& call ) -> tool_outcome;
 

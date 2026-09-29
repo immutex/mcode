@@ -253,7 +253,7 @@ namespace mcode::model {
 		return std::nullopt;
 	}
 
-	http_model_client::http_model_client( net::http_client& transport, options options )
+	http_model_client::http_model_client( net::http_client& transport, client_options options )
 		: transport_( &transport ), options_( std::move( options ) ) {
 		if ( !options_.sleep ) {
 			options_.sleep = thread_sleep;

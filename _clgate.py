@@ -104,6 +104,114 @@ def to_clang(command: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+# --- Preflight: two classes the clang compile cannot see -------------------
+#
+# Both of these reached `master` and failed CI, and neither is catchable by the
+# clang pass below:
+#
+#   1. A parameter whose name equals a nested type of the same class. GCC reports
+#      it as -Wshadow ("shadows a member"); clang does not implement that warning
+#      at all, so `-Wshadow-all` stays silent. Verified against clang 21.
+#
+#   2. A Win32-only identifier outside a `#if defined(_WIN32)` guard. The gate
+#      compiles with `_WIN32` defined, so the POSIX branch of every conditional is
+#      never even parsed here -- the failure only exists on the Linux and macOS
+#      legs.
+#
+# Both are textual and deterministic, so they are checked directly rather than
+# waiting for a ten-minute CI round trip.
+
+WIN32_HEADERS = (
+    "windows.h", "wincrypt.h", "winsock2.h", "ws2tcpip.h", "shlobj.h",
+    "conio.h", "direct.h", "windowsx.h", "processthreadsapi.h", "handleapi.h",
+)
+
+WIN32_IDENTIFIERS = (
+    "GetModuleFileNameA", "GetModuleFileNameW", "GetModuleFileNameExA",
+    "GetLastError", "FormatMessageA", "LocalFree", "CloseHandle",
+    "CreateProcessA", "CreateProcessW", "OpenProcess", "TerminateProcess",
+    "CreateFileA", "CreateFileW", "GetStdHandle", "SetConsoleMode",
+    "GetConsoleScreenBufferInfo", "CreateJobObjectW", "AssignProcessToJobObject",
+    "CreateRestrictedToken", "CertOpenSystemStoreW", "CertEnumCertificatesInStore",
+    "CertCloseStore", "CreateAppContainerProfile", "WSAStartup", "WSACleanup",
+    "DWORD", "HANDLE", "BOOL", "WCHAR", "LPCWSTR", "LPWSTR", "LPVOID",
+    "INVALID_HANDLE_VALUE", "MAX_PATH", "CONSOLE_SCREEN_BUFFER_INFO",
+    "STARTUPINFOA", "PROCESS_INFORMATION", "SECURITY_ATTRIBUTES", "FILETIME",
+)
+
+def code_only( line: str ) -> str:
+    """The line with any `//` comment removed, so prose is not matched."""
+    return line.split("//", 1)[0]
+
+def check_platform_guards( files: list[ pathlib.Path ] ) -> list[ str ]:
+    """Win32 identifiers used where `_WIN32` is not defined."""
+    problems = []
+    stack: list[ dict ] = []
+
+    for path in files:
+        text = path.read_text(encoding="utf-8", errors="replace")
+
+        for number, line in enumerate(text.splitlines(), 1):
+            stripped = line.strip()
+
+            if stripped.startswith("#"):
+                if re.match(r"#\s*(if|ifdef|ifndef)\b", stripped):
+                    tests_windows = bool(re.search(r"_WIN32|_MSC_VER|_WINDOWS", stripped))
+                    stack.append({"chain_windows": tests_windows, "in_windows": tests_windows})
+                elif re.match(r"#\s*elif\b", stripped) and stack:
+                    tests_windows = bool(re.search(r"_WIN32|_MSC_VER|_WINDOWS", stripped))
+                    stack[-1] = {"chain_windows": tests_windows, "in_windows": tests_windows}
+                elif re.match(r"#\s*else\b", stripped) and stack:
+                    stack[-1]["in_windows"] = not stack[-1]["in_windows"]
+                elif re.match(r"#\s*endif\b", stripped) and stack:
+                    stack.pop()
+
+                continue
+
+            if any(frame["in_windows"] for frame in stack):
+                continue
+
+            code = code_only(line)
+
+            if not code.strip():
+                continue
+
+            for header in WIN32_HEADERS:
+                if re.search(r"#\s*include\s*<" + re.escape(header) + ">", code):
+                    problems.append(f"{path}:{number} includes <{header}> outside a _WIN32 guard")
+
+            for token in WIN32_IDENTIFIERS:
+                if re.search(r"\b" + re.escape(token) + r"\b", code):
+                    problems.append(f"{path}:{number} uses {token} outside a _WIN32 guard")
+                    break
+
+    return problems
+
+def check_shadowed_member_types( files: list[ pathlib.Path ] ) -> list[ str ]:
+    """A parameter named after a nested type of the same class (GCC -Wshadow)."""
+    problems = []
+
+    for path in files:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        nested = set(re.findall(r"^\t+(?:struct|class|enum class)\s+([a-z_][a-z0-9_]*)\s*\{", text, re.M))
+
+        if not nested:
+            continue
+
+        for name in sorted(nested):
+            # A parameter list containing `name` immediately before `,` or `=`.
+            pattern = r"\(\s*[^;()]*?\b[a-z_][a-z0-9_:<>,\s\*&]*\b" + re.escape(name) + r"\s*[=,)]"
+            match = re.search(pattern, text)
+
+            if match:
+                line = text[:match.start()].count("\n") + 1
+                problems.append(
+                    f"{path}:{line} a parameter named '{name}' shadows the nested type "
+                    f"'{name}'; GCC rejects this (-Wshadow), clang does not warn"
+                )
+
+    return problems
+
 def main() -> int:
     clang = find_clang()
 
@@ -118,6 +226,17 @@ def main() -> int:
         print(f"no {commands}; configure the Release preset first", file=sys.stderr)
 
         return 2
+
+    sources = sorted((repo / "src").rglob("*.cxx")) + sorted((repo / "src").rglob("*.hxx"))
+    problems = check_platform_guards(sources) + check_shadowed_member_types(sources)
+
+    if problems:
+        print("preflight failed:", file=sys.stderr)
+
+        for problem in problems:
+            print("  " + problem, file=sys.stderr)
+
+        return 1
 
     entries = json.loads(commands.read_text(encoding="utf-8"))
     pattern = sys.argv[1] if len(sys.argv) > 1 else r"\.cxx$"

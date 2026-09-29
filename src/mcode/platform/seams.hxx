@@ -102,6 +102,15 @@ namespace mcode::platform {
 
 	[[nodiscard]] auto app_data_path( data_kind kind ) -> result< std::filesystem::path>;
 
+	// The directory the running binary sits in. The bundled extensions are copied
+	// beside it, so this is how the loader finds them.
+	//
+	// A seam rather than an inline platform check: the previous version called
+	// GetModuleFileNameA directly in the CLI, which does not compile on POSIX at
+	// all -- `DWORD` and the function are both Win32-only. `24` requires the
+	// platform decision to live here so portable code never sees it.
+	[[nodiscard]] auto executable_directory( ) -> result< std::filesystem::path >;
+
 	// --- 6. ResizeSource ----------------------------------------------------
 	// SIGWINCH versus WINDOW_BUFFER_SIZE_EVENT versus in-band DECSET 2048. The
 	// interface is a poll rather than a callback so the loop stays single-threaded.

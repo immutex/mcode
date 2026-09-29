@@ -2,8 +2,10 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <string>
 #include <utility>
+#include <vector>
 
 #if defined( _WIN32 )
 #include <windows.h>
@@ -14,6 +16,10 @@
 #include <signal.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
+#endif
+
+#if defined( __APPLE__ )
+#include <mach-o/dyld.h>
 #endif
 
 namespace mcode::platform {
@@ -36,6 +42,11 @@ namespace mcode::platform {
 	// `unsigned` and not `UINT`: that typedef is Win32-only, and this constant is
 	// declared outside the platform guard.
 	inline constexpr auto TERMINATED_EXIT_CODE = unsigned{ 1 };
+
+	// A path longer than this is not a usable extension root on any platform, and
+	// the lookup loops double their buffer, so the cap is what stops a pathological
+	// case from growing without bound.
+	inline constexpr auto MAX_EXECUTABLE_PATH_BYTES = std::size_t{ 64u * 1024u };
 
 	// Zero and above-max are both not process ids. Zero is the dangerous one: to
 	// `kill` it means the caller's whole process group.
@@ -344,6 +355,98 @@ namespace mcode::platform {
 
 			return std::unexpected( fail( errc::io, "unreachable data_kind" ) );
 		#endif
+	#endif
+	}
+
+	// The directory the running binary sits in.
+	//
+	// Three different mechanisms, and the buffer handling matters more than the
+	// lookup: every one of them reports "too long" differently, and a partial path
+	// silently becomes the wrong directory rather than an error.
+	auto executable_directory( ) -> result< std::filesystem::path > {
+	#if defined( _WIN32 )
+		// GetModuleFileNameA truncates and returns the buffer size, with no error
+		// code and a NUL-terminated string, so a full buffer is the only signal
+		// that the path did not fit. Grow and retry rather than accept a prefix.
+		auto capacity = std::size_t{ MAX_PATH };
+		auto buffer = std::vector< char >{ };
+
+		for ( ;; ) {
+			buffer.assign( capacity, '\0' );
+
+			const auto written = ::GetModuleFileNameA( nullptr, buffer.data( ),
+				static_cast< DWORD >( buffer.size( ) ) );
+
+			if ( written == 0 ) {
+				return std::unexpected( fail( errc::io, "GetModuleFileNameA failed" ) );
+			}
+
+			if ( written < buffer.size( ) ) {
+				return std::filesystem::path{ std::string{ buffer.data( ), written } }
+					.parent_path( );
+			}
+
+			if ( capacity >= MAX_EXECUTABLE_PATH_BYTES ) {
+				return std::unexpected( fail( errc::io, "the executable path is too long" ) );
+			}
+
+			capacity *= 2;
+		}
+	#elif defined( __APPLE__ )
+		// _NSGetExecutablePath reports the required size in its own argument and
+		// returns non-zero when the buffer was too small, so the second call is the
+		// real one. The path it writes may be relative or contain symlinks.
+		auto size = std::uint32_t{ 0 };
+
+		(void)::_NSGetExecutablePath( nullptr, &size );
+
+		if ( size == 0 ) {
+			return std::unexpected( fail( errc::io, "_NSGetExecutablePath reported no size" ) );
+		}
+
+		auto buffer = std::vector< char >( size, '\0' );
+
+		if ( ::_NSGetExecutablePath( buffer.data( ), &size ) != 0 ) {
+			return std::unexpected( fail( errc::io, "_NSGetExecutablePath failed" ) );
+		}
+
+		auto error_code = std::error_code{ };
+		auto resolved = std::filesystem::weakly_canonical(
+			std::filesystem::path{ buffer.data( ) }, error_code );
+
+		if ( error_code ) {
+			return std::unexpected( fail( errc::io,
+				"cannot resolve the executable path: " + error_code.message( ) ) );
+		}
+
+		return resolved.parent_path( );
+	#else
+		// /proc/self/exe is a symlink to the binary; readlink does not NUL-terminate
+		// and returns the length it would have written, so a full buffer means the
+		// result was truncated.
+		auto capacity = std::size_t{ 256 };
+
+		for ( ;; ) {
+			auto buffer = std::vector< char >( capacity, '\0' );
+			const auto written = ::readlink( "/proc/self/exe", buffer.data( ), buffer.size( ) );
+
+			if ( written < 0 ) {
+				return std::unexpected( fail( errc::io,
+					"cannot read /proc/self/exe; the executable directory is unavailable" ) );
+			}
+
+			if ( static_cast< std::size_t >( written ) < buffer.size( ) ) {
+				return std::filesystem::path{
+					std::string{ buffer.data( ), static_cast< std::size_t >( written ) } }
+					.parent_path( );
+			}
+
+			if ( capacity >= MAX_EXECUTABLE_PATH_BYTES ) {
+				return std::unexpected( fail( errc::io, "the executable path is too long" ) );
+			}
+
+			capacity *= 2;
+		}
 	#endif
 	}
 

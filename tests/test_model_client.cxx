@@ -285,7 +285,7 @@ TEST_CASE( "a transient failure is retried", "[retry]" ) {
 	auto transport = net::http_client{ };
 	auto sleeps = std::vector< std::chrono::milliseconds >{ };
 
-	auto options = model::http_model_client::options{ };
+	auto options = model::http_model_client::client_options{ };
 	options.sleep = [ &sleeps ]( const std::chrono::milliseconds duration ) { sleeps.push_back( duration ); };
 	options.random = zero_random;
 
@@ -318,7 +318,7 @@ TEST_CASE( "a fatal failure is not retried", "[retry]" ) {
 
 	auto transport = net::http_client{ };
 
-	auto options = model::http_model_client::options{ };
+	auto options = model::http_model_client::client_options{ };
 	options.sleep = no_sleep;
 	options.random = zero_random;
 
@@ -342,7 +342,7 @@ TEST_CASE( "a quota 429 is never retried but a rate-limit 429 is", "[retry]" ) {
 
 		auto transport = net::http_client{ };
 
-		auto options = model::http_model_client::options{ };
+		auto options = model::http_model_client::client_options{ };
 		options.sleep = no_sleep;
 		options.random = zero_random;
 
@@ -363,7 +363,7 @@ TEST_CASE( "a quota 429 is never retried but a rate-limit 429 is", "[retry]" ) {
 
 		auto transport = net::http_client{ };
 
-		auto options = model::http_model_client::options{ };
+		auto options = model::http_model_client::client_options{ };
 		options.sleep = no_sleep;
 		options.random = zero_random;
 
@@ -391,7 +391,7 @@ TEST_CASE( "a partial stream is never retried", "[retry]" ) {
 
 	auto transport = net::http_client{ };
 
-	auto options = model::http_model_client::options{ };
+	auto options = model::http_model_client::client_options{ };
 	options.sleep = no_sleep;
 	options.random = zero_random;
 
@@ -432,7 +432,7 @@ TEST_CASE( "retry honours Retry-After", "[retry]" ) {
 
 	auto transport = net::http_client{ };
 
-	auto options = model::http_model_client::options{ };
+	auto options = model::http_model_client::client_options{ };
 	options.sleep = no_sleep;
 	options.random = zero_random;
 

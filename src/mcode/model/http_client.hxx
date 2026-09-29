@@ -71,12 +71,18 @@ namespace mcode::model {
 		using sleep_function = std::function< void( std::chrono::milliseconds ) >;
 		using rng_function = std::function< std::uint64_t( ) >;
 
-		struct options {
+		// Named `client_options`, not `options`: a nested type called `options`
+		// collides with the conventional parameter name, and GCC rejects the
+		// parameter as shadowing the member type (-Wshadow). Clang does not
+		// implement that warning at all, so it passed the local gate and failed
+		// the GCC leg of CI. The other request structs follow this convention
+		// already (`process_options`, `loader_options`).
+		struct client_options {
 			sleep_function sleep;
 			rng_function random;
 		};
 
-		explicit http_model_client( net::http_client& transport, options options = { } );
+		explicit http_model_client( net::http_client& transport, client_options options = { } );
 
 		auto stream( const stream_request& request, const event_sink& sink ) -> status override;
 
@@ -89,7 +95,7 @@ namespace mcode::model {
 			failure_class& outcome, net::http_failure& failure ) -> status;
 
 		net::http_client* transport_;
-		options options_;
+		client_options options_;
 		usage usage_;
 	};
 

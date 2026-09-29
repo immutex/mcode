@@ -6,10 +6,6 @@
 #include <string>
 #include <vector>
 
-#if defined( _WIN32 )
-#include <windows.h>
-#endif
-
 #include "mcode/agent/loop.hxx"
 #include "mcode/cli/exec.hxx"
 #include "mcode/core/registry.hxx"
@@ -21,6 +17,7 @@
 #include "mcode/model/http_client.hxx"
 #include "mcode/model/provider.hxx"
 #include "mcode/net/http_client.hxx"
+#include "mcode/platform/seams.hxx"
 #include "mcode/support/config.hxx"
 #include "mcode/support/time.hxx"
 #include "mcode/tools/context.hxx"
@@ -35,12 +32,6 @@ namespace {
 	inline constexpr std::string_view PLATFORM_NAME = "macos";
 #else
 	inline constexpr std::string_view PLATFORM_NAME = "linux";
-#endif
-
-#if defined( _WIN32 )
-	// GetModuleFileNameA writes into this; a module path longer than it is not
-	// usable as an extension root and is treated as absent.
-	inline constexpr std::size_t BINARY_PATH_BYTES = 1024;
 #endif
 
 	// Forwards the inner client's events to the loop. In human mode it mirrors
@@ -150,12 +141,14 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		// The shipped providers are declared by an extension, not compiled in,
 		// and the loader only knows the workspace and user roots. The bundled
 		// copy lives beside the binary, so it is added here explicitly.
-		char binary_path[ BINARY_PATH_BYTES ] = { };
-		const auto binary_size = GetModuleFileNameA( nullptr, binary_path,
-			static_cast< DWORD >( sizeof( binary_path ) ) );
-
-		if ( binary_size > 0 && binary_size < sizeof( binary_path ) ) {
-			roots.push_back( std::filesystem::path{ binary_path }.parent_path( ) / "extensions" );
+		//
+		// Through the platform seam: the directory of the running binary is
+		// Win32's GetModuleFileNameA, macOS's _NSGetExecutablePath and Linux's
+		// /proc/self/exe, and `24` requires that decision to live in `platform`
+		// rather than in portable code. A missing directory is not fatal -- the
+		// bundled extensions are simply absent, which the loader already reports.
+		if ( auto bundled = mcode::platform::executable_directory( ) ) {
+			roots.push_back( *bundled / "extensions" );
 		}
 
 		auto loaded = mcode::ext::load_extensions( roots, registry, hooks, options );
