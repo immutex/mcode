@@ -11,6 +11,8 @@
 #include <vector>
 
 #include "mcode/model/capabilities.hxx"
+#include "mcode/support/config.hxx"
+#include "mcode/support/toml.hxx"
 #include "mcode/model/credentials.hxx"
 #include "mcode/model/http_client.hxx"
 #include "mcode/model/provider.hxx"
@@ -488,6 +490,90 @@ TEST_CASE( "usage folds by max across events", "[usage]" ) {
 
 	REQUIRE( client_usage.input == 100 );
 	REQUIRE( client_usage.output == 50 );
+}
+
+TEST_CASE( "a config entry prices a model the table does not carry", "[capabilities]" ) {
+	// The gateway case: the compiled-in table cannot know every id a proxy
+	// serves, so the user prices theirs. Absent from both sources still fails
+	// closed -- the section below is what makes the id known.
+	//
+	// The id is quoted because it carries `/` and `.`; a quoted segment is taken
+	// verbatim, so the entry key is the id as written, with no mangling.
+	REQUIRE_FALSE( model::resolve_capabilities( "cb/gpt-5.6-sol", nullptr ).has_value( ) );
+
+	auto parsed = toml::parse( R"(
+[models."cb/gpt-5.6-sol"]
+caching = "implicit"
+context_window = 400000
+max_output_tokens = 128000
+price_input = 1.25
+price_cached_read = 0.125
+price_output = 10.0
+supports_thinking = true
+)" );
+
+	REQUIRE( static_cast< bool >( parsed ) );
+
+	auto layers = std::vector< config::layer >{ };
+	layers.push_back( { .level = config::scope::user, .origin = { }, .values = std::move( *parsed ) } );
+
+	auto merged = config::merged_config::merge( std::move( layers ) );
+	REQUIRE( static_cast< bool >( merged ) );
+
+	const auto caps = model::resolve_capabilities( "cb/gpt-5.6-sol", &*merged );
+	REQUIRE( caps.has_value( ) );
+
+	if ( caps ) {
+		REQUIRE( caps->model == "cb/gpt-5.6-sol" );
+		REQUIRE( caps->price_input == 1.25 );
+		REQUIRE( caps->price_output == 10.0 );
+		REQUIRE( caps->context_window == 400'000 );
+		REQUIRE( caps->max_output_tokens == 128'000 );
+		REQUIRE( caps->caching == model::cache_mode::implicit );
+		REQUIRE( caps->supports_thinking );
+
+		// Not set by the entry, so the struct default stands rather than a zero.
+		REQUIRE( caps->supports_tool_calls );
+	}
+
+	// An entry that names no price is refused: it would price every turn at
+	// zero, which is the failure the table exists to prevent.
+	auto unpriced = toml::parse( R"(
+[models.cheap]
+supports_thinking = true
+)" );
+	REQUIRE( static_cast< bool >( unpriced ) );
+
+	auto unpriced_layers = std::vector< config::layer >{ };
+	unpriced_layers.push_back( { .level = config::scope::user, .origin = { },
+		.values = std::move( *unpriced ) } );
+
+	auto unpriced_merged = config::merged_config::merge( std::move( unpriced_layers ) );
+	REQUIRE( static_cast< bool >( unpriced_merged ) );
+	REQUIRE_FALSE( model::resolve_capabilities( "cheap", &*unpriced_merged ).has_value( ) );
+
+	// An integer price is the same number as a float one.
+	auto integral = toml::parse( R"(
+[models.flat]
+price_input = 2
+price_output = 4
+)" );
+	REQUIRE( static_cast< bool >( integral ) );
+
+	auto integral_layers = std::vector< config::layer >{ };
+	integral_layers.push_back( { .level = config::scope::user, .origin = { },
+		.values = std::move( *integral ) } );
+
+	auto integral_merged = config::merged_config::merge( std::move( integral_layers ) );
+	REQUIRE( static_cast< bool >( integral_merged ) );
+
+	const auto flat = model::resolve_capabilities( "flat", &*integral_merged );
+	REQUIRE( flat.has_value( ) );
+
+	if ( flat ) {
+		REQUIRE( flat->price_input == 2.0 );
+		REQUIRE( flat->price_output == 4.0 );
+	}
 }
 
 TEST_CASE( "an unknown model id does not price as free", "[capabilities]" ) {

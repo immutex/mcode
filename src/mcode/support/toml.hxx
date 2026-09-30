@@ -44,6 +44,10 @@ namespace mcode::toml {
 
 		[[nodiscard]] auto as_string( ) const -> result< std::string >;
 		[[nodiscard]] auto as_int( ) const -> result< std::int64_t >;
+
+		// Accepts an integer too: a price written as `1` rather than `1.0` is
+		// the same number, and refusing it would be a trap for no gain.
+		[[nodiscard]] auto as_double( ) const -> result< double >;
 		[[nodiscard]] auto as_bool( ) const -> result< bool >;
 		[[nodiscard]] auto as_string_array( ) const -> result< std::vector< std::string > >;
 	};

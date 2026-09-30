@@ -254,13 +254,16 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
 	}
 
-	// Capabilities are looked up per model id and fail closed: an unknown model
+	// Capabilities are resolved per model id and fail closed: an unknown model
 	// would price every turn at zero and silently disable budget enforcement.
-	const auto caps = mcode::model::lookup_capabilities( model_name );
+	// The config may price a model the compiled-in table does not carry.
+	const auto caps = mcode::model::resolve_capabilities( model_name, &*config );
 
 	if ( !caps ) {
 		const auto message = "model '" + model_name
-			+ "' is not in the compiled-in capabilities table; refusing to run unpriced";
+			+ "' has no capabilities; price it in your config under "
+			+ mcode::model::capability_config_section( model_name )
+			+ ", or use a model the built-in table knows -- refusing to run unpriced";
 
 		std::fprintf( stderr, "mcode: %s\n", message.c_str( ) );
 		stream.emit_run_end( mcode::cli::exit_code::usage_error, message );
@@ -692,12 +695,13 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 			+ "' is registered; check [model] provider and the loaded extensions" ) );
 	}
 
-	const auto caps = mcode::model::lookup_capabilities( model_name );
+	const auto caps = mcode::model::resolve_capabilities( model_name, &*config );
 
 	if ( !caps ) {
 		return std::unexpected( mcode::fail( mcode::errc::config,
-			"model '" + model_name
-			+ "' is not in the compiled-in capabilities table; refusing to run unpriced" ) );
+			"model '" + model_name + "' has no capabilities; price it in your config under "
+			+ mcode::model::capability_config_section( model_name )
+			+ ", or use a model the built-in table knows -- refusing to run unpriced" ) );
 	}
 
 	auto auth = descriptor->auth;

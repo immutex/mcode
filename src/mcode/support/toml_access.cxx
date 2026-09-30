@@ -21,6 +21,18 @@ namespace mcode::toml {
 		return integer;
 	}
 
+	auto value::as_double( ) const -> result< double > {
+		if ( kind == value_kind::floating ) {
+			return floating;
+		}
+
+		if ( kind == value_kind::integer ) {
+			return static_cast< double >( integer );
+		}
+
+		return std::unexpected( fail( errc::config, "value is not a number" ) );
+	}
+
 	auto value::as_bool( ) const -> result< bool > {
 		if ( kind != value_kind::boolean ) {
 			return std::unexpected( fail( errc::config, "value is not a boolean" ) );

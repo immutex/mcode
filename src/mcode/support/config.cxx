@@ -198,6 +198,20 @@ namespace mcode::config {
 		return std::nullopt;
 	}
 
+	auto merged_config::get_double( const std::string_view key ) const -> std::optional< double > {
+		const auto found = values_.find( std::string{ key } );
+
+		if ( found == values_.end( ) ) {
+			return std::nullopt;
+		}
+
+		if ( auto number = found->second.as_double( ) ) {
+			return *number;
+		}
+
+		return std::nullopt;
+	}
+
 	auto merged_config::get_bool( const std::string_view key ) const -> std::optional< bool > {
 		const auto found = values_.find( std::string{ key } );
 

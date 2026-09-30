@@ -64,6 +64,9 @@ namespace mcode::config {
 		std::string_view{ "extensions" },
 		std::string_view{ "permissions" },
 		std::string_view{ "mcp" },
+		// Per-model capability overrides, for a gateway whose ids the
+		// compiled-in table cannot know. See `model/capabilities.hxx`.
+		std::string_view{ "models" },
 	};
 
 	struct layer {
@@ -80,6 +83,7 @@ namespace mcode::config {
 
 		[[nodiscard]] auto get_string( std::string_view key ) const -> std::optional< std::string >;
 		[[nodiscard]] auto get_int( std::string_view key ) const -> std::optional< std::int64_t >;
+		[[nodiscard]] auto get_double( std::string_view key ) const -> std::optional< double >;
 		[[nodiscard]] auto get_bool( std::string_view key ) const -> std::optional< bool >;
 		[[nodiscard]] auto get_string_array( std::string_view key ) const
 			-> std::vector< std::string >;

@@ -1,5 +1,6 @@
 #include "mcode/model/capabilities.hxx"
 
+
 #include "mcode/support/json.hxx"
 #include "mcode/support/parse.hxx"
 
@@ -226,6 +227,89 @@ namespace mcode::model {
 		}
 
 		return std::nullopt;
+	}
+
+	auto capability_config_section( const std::string_view model_id ) -> std::string {
+		return "[models.\"" + std::string{ model_id } + "\"]";
+	}
+
+	auto resolve_capabilities( const std::string_view model_id,
+		const mcode::config::merged_config* from_config ) -> std::optional< capabilities > {
+		auto caps = lookup_capabilities( model_id );
+
+		if ( from_config == nullptr ) {
+			return caps;
+		}
+
+		// No transform on the id. A quoted key segment is taken verbatim, so
+		// `[models."cb/gpt-5.6-sol"]` flattens to exactly `models.cb/gpt-5.6-sol`
+		// and a lookup for the id as written finds it. An unquoted
+		// `[models.gpt-5.6-sol]` re-joins its dots to the same string, so
+		// quoting is needed only for characters a bare key forbids, `/` among
+		// them. Mangling the id instead (`_` for `.`) would collide two ids and
+		// silently price one at the other's rate.
+		const auto prefix = "models." + std::string{ model_id } + '.';
+		auto merged = caps.value_or( capabilities{ } );
+
+		if ( const auto value = from_config->get_string( prefix + "caching" ) ) {
+			merged.caching = parse_caching( *value );
+		}
+
+		if ( const auto value = from_config->get_int( prefix + "context_window" ) ) {
+			merged.context_window = *value;
+		}
+
+		if ( const auto value = from_config->get_int( prefix + "max_output_tokens" ) ) {
+			merged.max_output_tokens = *value;
+		}
+
+		if ( const auto value = from_config->get_bool( prefix + "supports_tool_calls" ) ) {
+			merged.supports_tool_calls = *value;
+		}
+
+		if ( const auto value = from_config->get_bool( prefix + "supports_strict_schema" ) ) {
+			merged.supports_strict_schema = *value;
+		}
+
+		if ( const auto value = from_config->get_bool( prefix + "supports_response_schema" ) ) {
+			merged.supports_response_schema = *value;
+		}
+
+		if ( const auto value = from_config->get_bool( prefix + "supports_thinking" ) ) {
+			merged.supports_thinking = *value;
+		}
+
+		if ( const auto value = from_config->get_bool( prefix + "supports_effort" ) ) {
+			merged.supports_effort = *value;
+		}
+
+		if ( const auto value = from_config->get_double( prefix + "price_input" ) ) {
+			merged.price_input = *value;
+		}
+
+		if ( const auto value = from_config->get_double( prefix + "price_cached_read" ) ) {
+			merged.price_cached_read = *value;
+		}
+
+		if ( const auto value = from_config->get_double( prefix + "price_cache_write" ) ) {
+			merged.price_cache_write = *value;
+		}
+
+		if ( const auto value = from_config->get_double( prefix + "price_output" ) ) {
+			merged.price_output = *value;
+		}
+
+		// A config entry is a declaration that this model is known. Without it,
+		// a section that only sets `supports_tool_calls` would leave every price
+		// at zero -- the silent zero the table exists to prevent -- so an entry
+		// with no input price at all is refused rather than priced at nothing.
+		if ( !caps && merged.price_input <= 0.0 && merged.price_output <= 0.0 ) {
+			return std::nullopt;
+		}
+
+		merged.model = std::string{ model_id };
+
+		return merged;
 	}
 
 }

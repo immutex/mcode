@@ -611,6 +611,12 @@ code comments.
     `getcwd`. Enforcement belongs on the spawn path; `test_config_and_platform`
     asserts only the capability and mechanism.
 
+75. **A quoted TOML key segment is taken verbatim, so `[models."<id>"]` needs
+    no escaping.** The id is written literally, including its `/` and `.`, and
+    the entry flattens to `models.<id>` exactly. Quoting is required rather than
+    cosmetic: a bare key rejects `/`, and mangling the id instead (`_` for `.`)
+    would let two ids collide and silently price one at the other's rate.
+
 ## Building
 
 ```bash
