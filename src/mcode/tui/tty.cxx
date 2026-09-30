@@ -165,7 +165,7 @@ namespace mcode::tui {
 			return;
 		}
 
-		auto written = unsigned long{ 0 };
+		auto written = static_cast< unsigned long >( 0 );
 		WriteFile( output_handle_, bytes.data( ),
 			static_cast< unsigned long >( bytes.size( ) ), &written, nullptr );
 		FlushFileBuffers( output_handle_ );
@@ -183,7 +183,7 @@ namespace mcode::tui {
 		const auto deadline = GetTickCount64( ) + wait_ms;
 
 		while ( !got_enter ) {
-			auto available = unsigned long{ 0 };
+			auto available = static_cast< unsigned long >( 0 );
 
 			if ( GetNumberOfConsoleInputEvents( input_handle_, &available ) == 0 ) {
 				return std::nullopt;
@@ -200,14 +200,14 @@ namespace mcode::tui {
 			}
 
 			auto records = std::array< INPUT_RECORD, 32 >{ };
-			auto count = unsigned long{ 0 };
+			auto count = static_cast< unsigned long >( 0 );
 
 			if ( ReadConsoleInputA( input_handle_, records.data( ),
 				static_cast< unsigned long >( records.size( ) ), &count ) == 0 ) {
 				return std::nullopt;
 			}
 
-			for ( auto index = unsigned long{ 0 }; index < count; ++index ) {
+			for ( auto index = static_cast< unsigned long >( 0 ); index < count; ++index ) {
 				const auto& record = records[ index ];
 
 				if ( record.EventType != KEY_EVENT ) {
@@ -259,7 +259,7 @@ namespace mcode::tui {
 		const auto deadline = GetTickCount64( ) + wait_ms;
 
 		while ( true ) {
-			auto available = unsigned long{ 0 };
+			auto available = static_cast< unsigned long >( 0 );
 
 			if ( GetNumberOfConsoleInputEvents( input_handle_, &available ) == 0 ) {
 				event.type = key_event::kind::exit;
@@ -280,7 +280,7 @@ namespace mcode::tui {
 			}
 
 			auto records = std::array< INPUT_RECORD, 8 >{ };
-			auto count = unsigned long{ 0 };
+			auto count = static_cast< unsigned long >( 0 );
 
 			if ( ReadConsoleInputA( input_handle_, records.data( ),
 				static_cast< unsigned long >( records.size( ) ), &count ) == 0 ) {
@@ -289,7 +289,7 @@ namespace mcode::tui {
 				return event;
 			}
 
-			for ( auto index = unsigned long{ 0 }; index < count; ++index ) {
+			for ( auto index = static_cast< unsigned long >( 0 ); index < count; ++index ) {
 				const auto& record = records[ index ];
 
 				if ( record.EventType != KEY_EVENT ||

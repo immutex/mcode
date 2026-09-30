@@ -18,11 +18,6 @@ namespace mcode::ext {
 		// an unbounded name would let one extension fill the completion list.
 		inline constexpr auto MAX_COMMAND_NAME_LENGTH = std::size_t{ 64 };
 
-		// The cap on completions one invocation may return. The completion list
-		// is rendered into the prompt line, so an unbounded return would let an
-		// extension push arbitrary text at the user.
-		inline constexpr auto MAX_COMPLETIONS = 32;
-
 		auto is_valid_command_name( const std::string_view name ) -> bool {
 			if ( name.empty( ) || name.size( ) > MAX_COMMAND_NAME_LENGTH ) {
 				return false;

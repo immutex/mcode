@@ -147,10 +147,6 @@ namespace mcode::tui {
 				value == 0x1F44D || value == 0x1F44E;
 		}
 
-		[[nodiscard]] auto is_variation_selector( const char32_t value ) noexcept -> bool {
-			return value == 0xFE0E || value == 0xFE0F;
-		}
-
 		[[nodiscard]] auto is_regional_indicator( const char32_t value ) noexcept -> bool {
 			return value >= 0x1F1E6 && value <= 0x1F1FF;
 		}
