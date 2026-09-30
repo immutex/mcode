@@ -81,15 +81,25 @@ together; `32` remains the plan of record and `33`–`35` the per-slice briefs.
 35. `34-workstream-skills.md` — skills, the `AGENTS.md` instruction chain, prompt sections 10–11.
 36. `35-workstream-mcp.md` — the stdio MCP client, tool registration, supervision.
 
+**Third batch — the current work plan.** The three workstreams that turn a
+working batch tool into a daily driver: an interactive TUI, the Lua API
+completed, and the OS sandbox. Read `36` first.
+
+37. `36-third-batch.md` — **the current work plan**: interactive surface, Lua API, sandbox.
+38. `37-workstream-tui.md` — the terminal layer, cell renderer, streaming markdown, the REPL.
+39. `38-workstream-lua-api.md` — the 13 missing entry points, permissions, `/reload`.
+40. `39-workstream-sandbox.md` — restricted token, Landlock, Seatbelt, egress deny.
+
 **If you only read three:** `01`, `03`, `21`.
 
-> **Both batches have shipped.** `26-first-batch.md` and `32-second-batch.md`
-> are the records of what landed and why; `33`–`35` are the per-slice briefs.
-> `32` still owns the batch-level acceptance criteria and the deviations it
-> resolved — read it before changing a permission default.
+> **Two batches have shipped; the third is in progress.** `26-first-batch.md`
+> and `32-second-batch.md` are the records of what landed and why; `33`–`35`
+> are the second batch's per-slice briefs, and `37`–`39` the third's. `32` still
+> owns the second batch's acceptance criteria and the deviations it resolved —
+> read it before changing a permission default.
 >
 > The deviations a reader would otherwise get wrong are in
-> `README.md` §Non-obvious constraints (items 48–54): workspace writes are
+> `README.md` §Non-obvious constraints (items 48–59): workspace writes are
 > `allow` by default, `--yolo` skips questions but not the hard-deny floor, and
 > `--yolo` is not a sandbox.
 
