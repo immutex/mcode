@@ -16,6 +16,13 @@
 #include <thread>
 #include <utility>
 
+#if defined( _WIN32 )
+#include <sddl.h>
+#include "mcode/platform/sandbox_windows.hxx"
+#else
+#include "mcode/platform/sandbox_launcher.hxx"
+#endif
+
 namespace mcode::proc {
 
 	namespace {
@@ -52,6 +59,12 @@ namespace mcode::proc {
 
 		asio::writable_pipe stdin_pipe{ context };
 		asio::readable_pipe stdout_pipe{ context };
+
+#if defined( _WIN32 )
+		// Held for the child's lifetime: kill-on-close is what guarantees the
+		// server process does not outlive the session.
+		platform::unique_job_windows job;
+#endif
 
 		std::thread drainer;
 		std::mutex ring_mutex;
@@ -125,10 +138,68 @@ namespace mcode::proc {
 			// `on_setup` overwrites the handles -- the child's stderr ended up on
 			// the parent's stdout. One `process_stdio`, passed to the launcher
 			// directly, is the only arrangement where all three pipes bind.
+#if defined( _WIN32 )
+			// The MCP server child is sandboxed when a profile is supplied:
+			// restricted token, Job Object, ACL boundary, same as run_process.
+			if ( options.sandbox != nullptr ) {
+				auto token = platform::sandbox_windows_restricted_token( );
+
+				if ( !token ) {
+					return std::unexpected( token.error( ) );
+				}
+
+				auto job = platform::sandbox_windows_job_create( );
+
+				if ( !job ) {
+					return std::unexpected( job.error( ) );
+				}
+
+				auto sid_text = std::wstring{ platform::sandbox_windows_sid_string( ) };
+				PSID sandbox_sid = nullptr;
+
+				if ( !::ConvertStringSidToSidW( sid_text.c_str( ), &sandbox_sid ) ) {
+					return std::unexpected( fail( errc::io,
+						"ConvertStringSidToSidW failed: " + std::to_string( ::GetLastError( ) ) ) );
+				}
+
+				auto sid_owner = std::unique_ptr< void, decltype( &::LocalFree ) >{
+					sandbox_sid, &::LocalFree };
+
+				for ( const auto& root : options.sandbox->write_paths ) {
+					if ( const auto granted = platform::sandbox_windows_grant_write( root, sandbox_sid );
+						!granted ) {
+						return std::unexpected( granted.error( ) );
+					}
+				}
+
+				owned.state_->job = std::move( *job );
+
+				auto initializer = platform::sandbox_windows_initializer{ ( *token ).get( ),
+					owned.state_->job.get( ) };
+
+				child = process::default_process_launcher( )( context, options.executable,
+					options.args,
+					process::process_stdio{ owned.state_->stdin_pipe, owned.state_->stdout_pipe,
+						stderr_pipe },
+					initializer );
+			} else {
+				child = process::default_process_launcher( )( context, options.executable,
+					options.args,
+					process::process_stdio{ owned.state_->stdin_pipe, owned.state_->stdout_pipe,
+						stderr_pipe } );
+			}
+#elif defined( __linux__ ) || defined( __APPLE__ )
+			child = process::default_process_launcher( )( context, options.executable,
+				options.args,
+				process::process_stdio{ owned.state_->stdin_pipe, owned.state_->stdout_pipe,
+					stderr_pipe },
+				platform::sandbox_posix_initializer{ options.sandbox } );
+#else
 			child = process::default_process_launcher( )( context, options.executable,
 				options.args,
 				process::process_stdio{ owned.state_->stdin_pipe, owned.state_->stdout_pipe,
 					stderr_pipe } );
+#endif
 		} catch ( const boost::system::system_error& exception ) {
 			return std::unexpected(
 				fail( errc::io, std::string{ "spawn failed: " } + exception.what( ) ) );

@@ -18,7 +18,10 @@
 
 #if defined( _WIN32 )
 #include <processthreadsapi.h>
+#include <sddl.h>
 #include "mcode/platform/sandbox_windows.hxx"
+#else
+#include "mcode/platform/sandbox_launcher.hxx"
 #endif
 
 namespace mcode {
@@ -73,63 +76,81 @@ namespace mcode {
 		using mcode::platform::PROC_THREAD_ATTRIBUTE_TOKEN_NUMBER;
 		using mcode::platform::PROC_THREAD_ATTRIBUTE_JOB_LIST_NUMBER;
 		using mcode::platform::PROC_THREAD_ATTRIBUTE_INPUT_FLAG;
-		// The launcher initializer that hands the child its restricted token
-		// and its Job Object through the process attribute list. Both handles
-		// are owned by the caller's state struct, which outlives the spawn.
-		struct sandbox_windows_initializer {
-			HANDLE token = nullptr;
-			HANDLE job = nullptr;
 
-			auto on_setup( process::windows::default_launcher& launcher,
-				const std::filesystem::path&, const std::wstring& ) -> boost::system::error_code {
-				// The attribute list is built here rather than by the caller so
-				// the two attribute numbers stay next to the handles they wrap.
-				auto size = SIZE_T{ 0 };
 
-				(void)::InitializeProcThreadAttributeList( nullptr, 2, 0, &size );
-
-				storage.resize( size );
-				attribute_list = reinterpret_cast< LPPROC_THREAD_ATTRIBUTE_LIST >(
-					storage.data( ) );
-
-				if ( !::InitializeProcThreadAttributeList( attribute_list, 2, 0, &size ) ) {
-					return boost::system::error_code{ static_cast< int >( ::GetLastError( ) ),
-						boost::system::system_category( ) };
-				}
-
-				if ( !::UpdateProcThreadAttribute( attribute_list, 0,
-					static_cast< DWORD_PTR >( PROC_THREAD_ATTRIBUTE_TOKEN_NUMBER ) |
-						static_cast< DWORD_PTR >( PROC_THREAD_ATTRIBUTE_INPUT_FLAG ),
-					&token, sizeof( token ), nullptr, nullptr ) ) {
-					return boost::system::error_code{ static_cast< int >( ::GetLastError( ) ),
-						boost::system::system_category( ) };
-				}
-
-				if ( !::UpdateProcThreadAttribute( attribute_list, 0,
-					static_cast< DWORD_PTR >( PROC_THREAD_ATTRIBUTE_JOB_LIST_NUMBER ) |
-						static_cast< DWORD_PTR >( PROC_THREAD_ATTRIBUTE_INPUT_FLAG ),
-					&job, sizeof( job ), nullptr, nullptr ) ) {
-					return boost::system::error_code{ static_cast< int >( ::GetLastError( ) ),
-						boost::system::system_category( ) };
-				}
-
-				launcher.startup_info.lpAttributeList = attribute_list;
-
-				return { };
-			}
-
-			auto on_error( process::windows::default_launcher& launcher,
-				const std::filesystem::path&, const std::wstring& ) -> void {
-				if ( launcher.startup_info.lpAttributeList == attribute_list ) {
-					launcher.startup_info.lpAttributeList = nullptr;
-					::DeleteProcThreadAttributeList( attribute_list );
-					attribute_list = nullptr;
-				}
-			}
-
-			std::vector< unsigned char > storage;
-			LPPROC_THREAD_ATTRIBUTE_LIST attribute_list = nullptr;
+		// Everything one sandboxed child needs, held until the spawn returns
+		// and the Job handle takes over ownership of the child's lifetime.
+		struct sandbox_spawn_state {
+			platform::unique_token_windows token;
+			platform::unique_job_windows job;
 		};
+
+		[[nodiscard]] auto make_sandbox_spawn_state( const platform::sandbox_profile& profile )
+			-> result< sandbox_spawn_state > {
+			auto token = platform::sandbox_windows_restricted_token( );
+
+			if ( !token ) {
+				return std::unexpected( token.error( ) );
+			}
+
+			auto job = platform::sandbox_windows_job_create( );
+
+			if ( !job ) {
+				return std::unexpected( job.error( ) );
+			}
+
+			// The write boundary is enforced by the token's restricting SID
+			// intersected with the DACLs on the write roots; grant before the
+			// child can touch anything.
+			auto sid_text = std::wstring{ platform::sandbox_windows_sid_string( ) };
+			PSID sandbox_sid = nullptr;
+
+			if ( !::ConvertStringSidToSidW( sid_text.c_str( ), &sandbox_sid ) ) {
+				return std::unexpected( fail( errc::io,
+					"ConvertStringSidToSidW failed: " + std::to_string( ::GetLastError( ) ) ) );
+			}
+
+			auto sid_owner = std::unique_ptr< void, decltype( &::LocalFree ) >{
+				sandbox_sid, &::LocalFree };
+
+			for ( const auto& root : profile.write_paths ) {
+				if ( const auto granted = platform::sandbox_windows_grant_write( root, sandbox_sid );
+					!granted ) {
+					return std::unexpected( granted.error( ) );
+				}
+			}
+
+			return sandbox_spawn_state{ std::move( *token ), std::move( *job ) };
+		}
+
+		// An empty optional and a null profile both yield a no-op initializer,
+		// which the launcher accepts alongside the real one because it defines
+		// none of the hooks.
+		[[nodiscard]] auto sandbox_initializer(
+			const std::optional< sandbox_spawn_state >& state,
+			const platform::sandbox_profile* )
+			-> platform::sandbox_windows_initializer {
+			if ( !state ) {
+				return platform::sandbox_windows_initializer{ };
+			}
+
+			return platform::sandbox_windows_initializer{ state->token.get( ), state->job.get( ) };
+		}
+#endif
+
+#if defined( __linux__ ) || defined( __APPLE__ )
+
+#endif
+
+#if defined( __linux__ ) || defined( __APPLE__ )
+		// The POSIX form: the profile pointer drives the fork-exec hook, and
+		// null spawns unsandboxed.
+		[[nodiscard]] auto sandbox_initializer(
+			const std::optional< sandbox_spawn_state >&,
+			const platform::sandbox_profile* profile )
+			-> sandbox_posix_initializer {
+			return sandbox_posix_initializer{ profile };
+		}
 #endif
 
 	}
@@ -206,8 +227,24 @@ namespace mcode {
 
 			auto environment = process::process_environment{ std::move( environment_strings ) };
 
+			// The sandbox state must outlive the spawn call: the Job handle is
+			// what kills the child when this process dies, and the attribute
+			// list must stay valid until CreateProcessW has consumed it.
+			auto sandbox_state = std::optional< sandbox_spawn_state >{ };
+
+			if ( options.sandbox != nullptr ) {
+				auto state = make_sandbox_spawn_state( *options.sandbox );
+
+				if ( !state ) {
+					return std::unexpected( state.error( ) );
+				}
+
+				sandbox_state = std::move( *state );
+			}
+
 			auto child = process::process{ context, options.executable, options.args,
-				process::process_stdio{ in, out.pipe, err.pipe }, environment };
+				process::process_stdio{ in, out.pipe, err.pipe }, environment,
+				sandbox_initializer( sandbox_state, options.sandbox ) };
 
 			in.close( );
 
