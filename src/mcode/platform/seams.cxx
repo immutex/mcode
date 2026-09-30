@@ -104,8 +104,9 @@ namespace mcode::platform {
 	}
 
 	// M0 ships interfaces and honest stubs. Where a platform cannot do the thing
-	// yet, the call returns `unsupported` and `sandbox_support_level` says so --
-	// a stub that silently succeeded would let a caller believe it was isolated.
+	// yet, the call returns `unsupported` and `sandbox_capability_level` says
+	// so -- a stub that silently succeeded would let a caller believe it was
+	// isolated.
 
 	auto pty_session::supported( ) noexcept -> bool {
 		// False until spawn exists. The predicate exists so a caller can decide
@@ -140,14 +141,19 @@ namespace mcode::platform {
 	auto sandbox_capability_level( ) noexcept -> sandbox_capability {
 	#if defined( _WIN32 )
 		// Tier 1 needs no administrator: restricted token, Job Object and the
-		// ACL boundary all work under a normal user token.
-		return sandbox_capability::full;
+		// ACL boundary all work under a normal user token. Egress is NOT
+		// claimed here -- sandbox_network_level says best_effort, and `full`
+		// would assert a network denial this tier cannot deliver without admin.
+		return sandbox_capability::filesystem;
 	#elif defined( __linux__ )
-		// Landlock's ABI is a runtime property, so the constant answer is only
-		// "this platform implements the seam". A caller that needs the truth
-		// about this kernel calls sandbox_linux_abi( ); the spawn path does.
-		return sandbox_capability::full;
+		// Landlock's ABI is a runtime property of the kernel, so this constant
+		// is a platform-capability claim, not a runtime one: a kernel without
+		// Landlock hard-fails in apply_sandbox and the spawn path reports that
+		// refusal. sandbox_linux_abi( ) is the runtime probe.
+		return sandbox_capability::filesystem;
 	#elif defined( __APPLE__ )
+		// Seatbelt applies in-process before the child's first exec, so the
+		// filesystem tier is enforced whenever the profile applies.
 		return sandbox_capability::full;
 	#else
 		return sandbox_capability::unavailable;

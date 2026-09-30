@@ -31,13 +31,6 @@ namespace mcode::platform {
 	inline constexpr auto JOB_ACTIVE_PROCESS_LIMIT = std::uint32_t{ 32 };
 	inline constexpr auto JOB_MEMORY_LIMIT_BYTES = std::uint64_t{ 2u * 1024u * 1024u * 1024u };
 
-	// The token-attribute numbers the header gates behind _WIN32_WINNT >=
-	// WIN8/WINTHRESHOLD. The build floor is 1809, so the values are always
-	// present; the constants are spelled directly because PROC_THREAD_ATTRIBUTE_
-	// TOKEN is not declared in any SDK header.
-	inline constexpr auto PROC_THREAD_ATTRIBUTE_TOKEN_NUMBER = std::uint16_t{ 5 };
-	inline constexpr auto PROC_THREAD_ATTRIBUTE_JOB_LIST_NUMBER = std::uint16_t{ 13 };
-
 	// CloseHandle is not in the gate's list, but the header windows.h provides
 	// it and the clang pass parses this file with _WIN32 defined; the POSIX leg
 	// never compiles it. The deleter keeps every early error path leak-free.

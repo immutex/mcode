@@ -58,8 +58,11 @@ namespace mcode::platform {
 		// closed rather than assume isolation.
 		unavailable,
 		// Filesystem confinement (read_paths / write_paths) is enforced.
+		// Egress denial is NOT claimed here even when the platform could do
+		// it; sandbox_network_level owns that answer.
 		filesystem,
-		// Filesystem confinement and egress denial are both enforced.
+		// Filesystem confinement and egress denial are both enforced, and the
+		// two answers agree that they are.
 		full,
 	};
 

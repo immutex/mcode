@@ -50,6 +50,14 @@ namespace mcode::platform {
 	// The sandbox identity, in SDDL form, for WFP scoping and diagnostics.
 	[[nodiscard]] auto sandbox_windows_sid_string( ) -> std::wstring;
 
+	// The attribute-list numbers for the token and the Job. PROC_THREAD_
+	// ATTRIBUTE_TOKEN is not declared in any SDK header, so the value is
+	// spelled here; the Job value is 13 and the PROC_THREAD_ATTRIBUTE_INPUT
+	// flag (0x00020000) marks both as input attributes.
+	inline constexpr std::uint16_t PROC_THREAD_ATTRIBUTE_TOKEN_NUMBER = 5;
+	inline constexpr std::uint16_t PROC_THREAD_ATTRIBUTE_JOB_LIST_NUMBER = 13;
+	inline constexpr std::uint32_t PROC_THREAD_ATTRIBUTE_INPUT_FLAG = 0x00020000;
+
 #endif
 
 	// A restricted copy of the caller's own token: DISABLE_MAX_PRIVILEGE, every

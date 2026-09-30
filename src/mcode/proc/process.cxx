@@ -16,6 +16,11 @@
 #include <memory>
 #include <utility>
 
+#if defined( _WIN32 )
+#include <processthreadsapi.h>
+#include "mcode/platform/sandbox_windows.hxx"
+#endif
+
 namespace mcode {
 
 	namespace {
@@ -62,11 +67,70 @@ namespace mcode {
 
 			const auto room = drain.capacity - drain.data.size( );
 			drain.data.append( data, std::min( length, room ) );
-
-			if ( length > room ) {
-				drain.truncated = true;
-			}
 		}
+
+#if defined( _WIN32 )
+		using mcode::platform::PROC_THREAD_ATTRIBUTE_TOKEN_NUMBER;
+		using mcode::platform::PROC_THREAD_ATTRIBUTE_JOB_LIST_NUMBER;
+		using mcode::platform::PROC_THREAD_ATTRIBUTE_INPUT_FLAG;
+		// The launcher initializer that hands the child its restricted token
+		// and its Job Object through the process attribute list. Both handles
+		// are owned by the caller's state struct, which outlives the spawn.
+		struct sandbox_windows_initializer {
+			HANDLE token = nullptr;
+			HANDLE job = nullptr;
+
+			auto on_setup( process::windows::default_launcher& launcher,
+				const std::filesystem::path&, const std::wstring& ) -> boost::system::error_code {
+				// The attribute list is built here rather than by the caller so
+				// the two attribute numbers stay next to the handles they wrap.
+				auto size = SIZE_T{ 0 };
+
+				(void)::InitializeProcThreadAttributeList( nullptr, 2, 0, &size );
+
+				storage.resize( size );
+				attribute_list = reinterpret_cast< LPPROC_THREAD_ATTRIBUTE_LIST >(
+					storage.data( ) );
+
+				if ( !::InitializeProcThreadAttributeList( attribute_list, 2, 0, &size ) ) {
+					return boost::system::error_code{ static_cast< int >( ::GetLastError( ) ),
+						boost::system::system_category( ) };
+				}
+
+				if ( !::UpdateProcThreadAttribute( attribute_list, 0,
+					static_cast< DWORD_PTR >( PROC_THREAD_ATTRIBUTE_TOKEN_NUMBER ) |
+						static_cast< DWORD_PTR >( PROC_THREAD_ATTRIBUTE_INPUT_FLAG ),
+					&token, sizeof( token ), nullptr, nullptr ) ) {
+					return boost::system::error_code{ static_cast< int >( ::GetLastError( ) ),
+						boost::system::system_category( ) };
+				}
+
+				if ( !::UpdateProcThreadAttribute( attribute_list, 0,
+					static_cast< DWORD_PTR >( PROC_THREAD_ATTRIBUTE_JOB_LIST_NUMBER ) |
+						static_cast< DWORD_PTR >( PROC_THREAD_ATTRIBUTE_INPUT_FLAG ),
+					&job, sizeof( job ), nullptr, nullptr ) ) {
+					return boost::system::error_code{ static_cast< int >( ::GetLastError( ) ),
+						boost::system::system_category( ) };
+				}
+
+				launcher.startup_info.lpAttributeList = attribute_list;
+
+				return { };
+			}
+
+			auto on_error( process::windows::default_launcher& launcher,
+				const std::filesystem::path&, const std::wstring& ) -> void {
+				if ( launcher.startup_info.lpAttributeList == attribute_list ) {
+					launcher.startup_info.lpAttributeList = nullptr;
+					::DeleteProcThreadAttributeList( attribute_list );
+					attribute_list = nullptr;
+				}
+			}
+
+			std::vector< unsigned char > storage;
+			LPPROC_THREAD_ATTRIBUTE_LIST attribute_list = nullptr;
+		};
+#endif
 
 	}
 
