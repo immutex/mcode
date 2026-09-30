@@ -291,17 +291,15 @@ TEST_CASE( "the seven platform seams exist and report honestly", "[platform]" ) 
 	// to prevent.
 	REQUIRE_FALSE( platform::sandbox_mechanism( ).empty( ) );
 
-	auto applied = platform::apply_sandbox( { } );
-
+	// `apply_sandbox` is NOT called here. On Linux and macOS it restricts the
+	// CALLING process, and neither Landlock nor Seatbelt can be undone -- so
+	// applying it in-process would sandbox the test runner itself and every
+	// assertion after this line would fail on a denied `getcwd`. That is what
+	// it used to do. The spawn path applies the profile to the child, which is
+	// where it belongs, and `test_sandbox.cxx` asserts the result through
+	// probes rather than by damaging the process running the suite.
 	if ( platform::sandbox_capability_level( ) == platform::sandbox_capability::unavailable ) {
 		REQUIRE( platform::sandbox_network_level( ) == platform::sandbox_network_support::unavailable );
-		REQUIRE_FALSE( static_cast< bool >( applied ) );
-		REQUIRE( applied.error( ).code == errc::unsupported );
-	} else {
-		// A claimed filesystem tier must either apply or name the refusal.
-		if ( !applied ) {
-			REQUIRE_FALSE( applied.error( ).msg.empty( ) );
-		}
 	}
 
 	// 3. Termination.

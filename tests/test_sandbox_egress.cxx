@@ -63,12 +63,21 @@ TEST_CASE( "allow_network = false blocks egress", "[sandbox][egress]" ) {
 	profile.write_paths.push_back( root );
 	profile.allow_network = false;
 
-	auto options = process_options{ };
+	// The executable is resolved before the spawn: POSIX `exec` does not search
+	// PATH, so a bare "sh" fails with ENOENT even when a shell is present --
+	// Windows happens to search, which is why the bare name worked there.
 #if defined( _WIN32 )
-	options.executable = "cmd.exe";
+	const auto shell = find_executable( "cmd.exe" );
+#else
+	const auto shell = find_executable( "sh" );
+#endif
+	REQUIRE( static_cast< bool >( shell ) );
+
+	auto options = process_options{ };
+	options.executable = *shell;
+#if defined( _WIN32 )
 	options.args = { "/c", "curl -m 3 -s https://example.invalid > nul" };
 #else
-	options.executable = "sh";
 	options.args = { "-c", "timeout 3 curl -s https://example.invalid > /dev/null 2>&1" };
 #endif
 	options.working_directory = root.string( );
