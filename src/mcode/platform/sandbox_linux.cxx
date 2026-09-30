@@ -42,18 +42,6 @@ namespace mcode::platform {
 		"/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/dev",
 	};
 
-	// The devices a child may WRITE. Read on `/dev` is granted wholesale
-	// because `/dev/null`, `/dev/urandom` and `/dev/zero` are needed to start
-	// any process at all; write is not, because `/dev` also holds the raw
-	// block devices and granting write on the directory would hand them over.
-	// These three are sinks -- writing to them cannot affect anything.
-	//
-	// A redirect to `/dev/null` is not a nicety: `grep x /dev/null` exits 2
-	// rather than 1 without it, because the shell cannot open the file.
-	inline constexpr std::string_view WRITABLE_DEVICES[] = {
-		"/dev/null", "/dev/zero", "/dev/full",
-	};
-
 	// LANDLOCK_ACCESS_FS_IOCTL_DEV, which ABI 5 introduced and which the build
 	// headers may not name: they are enum members in linux/landlock.h, not
 	// macros, so a missing one cannot be detected with #ifdef. The value is
@@ -188,7 +176,6 @@ namespace mcode::platform {
 
 		const auto read_only = LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_READ_FILE |
 			LANDLOCK_ACCESS_FS_READ_DIR;
-		const auto read_write = read_only | LANDLOCK_ACCESS_FS_WRITE_FILE;
 
 		for ( const auto root : SYSTEM_READ_ROOTS ) {
 			const auto path = std::filesystem::path{ root };
@@ -198,18 +185,6 @@ namespace mcode::platform {
 			}
 
 			if ( const auto granted = grant( path, read_only ); !granted ) {
-				return std::unexpected( granted.error( ) );
-			}
-		}
-
-		for ( const auto device : WRITABLE_DEVICES ) {
-			const auto path = std::filesystem::path{ device };
-
-			if ( !std::filesystem::exists( path ) ) {
-				continue;
-			}
-
-			if ( const auto granted = grant( path, read_write ); !granted ) {
 				return std::unexpected( granted.error( ) );
 			}
 		}
