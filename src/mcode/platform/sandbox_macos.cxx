@@ -20,8 +20,6 @@ namespace mcode::platform {
 		int ( * )( const char* profile, uint64_t parameters_length,
 			const char* const parameters[], char** errorbuf );
 
-	inline constexpr int SANDBOX_NAMED_EXTERNAL = 0x0003;
-
 	// The deny-default profile. Static, not generated: a generated profile is a
 	// parser, and a parser for a security policy is a vulnerability. The
 	// (deny default) is mandatory -- (allow default) profiles are structurally
@@ -115,8 +113,12 @@ namespace mcode::platform {
 		const auto profile_text = seatbelt_profile( profile, temp_dir );
 		char* errorbuf = nullptr;
 
-		const auto applied = init_fn( profile_text.c_str( ), SANDBOX_NAMED_EXTERNAL,
-			nullptr, &errorbuf );
+		// Flags MUST be zero: the profile is the text itself. Passing
+		// SANDBOX_NAMED_EXTERNAL (0x0003) instead tells sandbox_init the first
+		// argument is a path to a profile file, so it tries to open a
+		// kilobyte of policy text as a filename and fails with ENAMETOOLONG --
+		// which is what the spawn error reported before this was fixed.
+		const auto applied = init_fn( profile_text.c_str( ), 0, nullptr, &errorbuf );
 
 		if ( applied != 0 ) {
 			auto message = std::string{ "sandbox_init_with_parameters failed" };
