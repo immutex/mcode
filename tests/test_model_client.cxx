@@ -534,6 +534,36 @@ supports_thinking = true
 
 		// Not set by the entry, so the struct default stands rather than a zero.
 		REQUIRE( caps->supports_tool_calls );
+
+		// An explicit cached-read price is used as written.
+		REQUIRE( caps->price_cached_read == 0.125 );
+	}
+
+	// With no cached-read price, the input price stands in rather than zero: a
+	// gateway that reports the whole prompt as a cache read bills all of the
+	// input at this rate, so a zero would under-estimate the run by the entire
+	// input cost.
+	{
+		auto plain = toml::parse( R"(
+[models.plain]
+price_input = 7.0
+price_output = 21.0
+)" );
+		REQUIRE( static_cast< bool >( plain ) );
+
+		auto plain_layers = std::vector< config::layer >{ };
+		plain_layers.push_back( { .level = config::scope::user, .origin = { },
+			.values = std::move( *plain ) } );
+
+		auto plain_merged = config::merged_config::merge( std::move( plain_layers ) );
+		REQUIRE( static_cast< bool >( plain_merged ) );
+
+		const auto plain_caps = model::resolve_capabilities( "plain", &*plain_merged );
+		REQUIRE( plain_caps.has_value( ) );
+
+		if ( plain_caps ) {
+			REQUIRE( plain_caps->price_cached_read == 7.0 );
+		}
 	}
 
 	// An entry that names no price is refused: it would price every turn at

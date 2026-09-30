@@ -287,8 +287,10 @@ namespace mcode::model {
 			merged.price_input = *value;
 		}
 
-		if ( const auto value = from_config->get_double( prefix + "price_cached_read" ) ) {
-			merged.price_cached_read = *value;
+		const auto cached_read = from_config->get_double( prefix + "price_cached_read" );
+
+		if ( cached_read ) {
+			merged.price_cached_read = *cached_read;
 		}
 
 		if ( const auto value = from_config->get_double( prefix + "price_cache_write" ) ) {
@@ -305,6 +307,16 @@ namespace mcode::model {
 		// with no input price at all is refused rather than priced at nothing.
 		if ( !caps && merged.price_input <= 0.0 && merged.price_output <= 0.0 ) {
 			return std::nullopt;
+		}
+
+		// An unset cached-read price is not a free one. A gateway that reports
+		// the whole prompt as a cache read -- which is what InferHub does, even
+		// on a first request -- bills the entire input at this rate, so leaving
+		// it at zero under-estimates the run by the whole input cost and the
+		// budget stops late instead of early. Assuming no discount is the
+		// neutral position; a user who knows their cached rate sets it.
+		if ( !cached_read && merged.price_input > 0.0 ) {
+			merged.price_cached_read = merged.price_input;
 		}
 
 		merged.model = std::string{ model_id };

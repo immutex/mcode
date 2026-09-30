@@ -617,6 +617,24 @@ code comments.
     cosmetic: a bare key rejects `/`, and mangling the id instead (`_` for `.`)
     would let two ids collide and silently price one at the other's rate.
 
+76. **A gateway may report the whole prompt as a cache read, even on the first
+    request.** InferHub does: `cached_read` equals the entire input count, so
+    `billed_input` in `compute_cost` is zero and the input contributes nothing.
+    A `price_cached_read` of 0 is therefore not "unknown" but the claim that
+    input is free, under-estimating a run by its whole input cost — and budget
+    enforcement then stops late rather than early. `resolve_capabilities` falls
+    back to `price_input` when the config sets no cached-read price, so the
+    default assumes no discount instead of a total one.
+
+76. **A gateway may report the whole prompt as a cache read, even on the first
+    request.** InferHub does: `cached_read` equals the full input count, so
+    `billed_input` in `compute_cost` is zero and the input contributes nothing.
+    A `price_cached_read` of 0 is therefore not "unknown" but the claim that
+    input is free, under-estimating a run by its whole input cost — and a budget
+    that under-estimates stops late rather than early. `resolve_capabilities`
+    falls back to `price_input` when the config sets no cached-read price, so
+    the default assumes no discount instead of a total one.
+
 ## Building
 
 ```bash
