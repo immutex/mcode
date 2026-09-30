@@ -3,18 +3,22 @@
 // `extensions/mcode.d.luau` is the author-facing contract. Every entry point it
 // declares must exist in the host, and every entry point the host installs must
 // be declared -- an author type-checks against the declaration file and fails
-// at runtime when the two disagree, in either direction. The check walks the
-// real loader and the real VM: the fixture extension probes which `mcode.*`
-// paths are callable and reports the list back through a registered tool.
+// at runtime when the two disagree, in either direction.
 //
-// The declared list is read from `extensions/mcode.d.luau` at compile time,
-// spelled as the same list the definition file declares. A name added to one
-// side without the other fails this test.
+// Neither side is hand-copied. The declared list is PARSED out of the
+// definition file at test time, and the implemented list is enumerated by the
+// probe extension walking the live `mcode` table, so a name added to one side
+// without the other fails here without anyone remembering to update a
+// mirror. The earlier version of this test kept a hand-written array and
+// missed two real gaps (`defer`, `notify`) while reporting a name that was
+// never an entry point at all (`cmd.handler` is a parameter of `on`).
 
 #include "ext_test_helpers.hxx"
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -24,45 +28,113 @@ using namespace ext_test;
 
 namespace {
 
-	// The declared surface, verbatim from `extensions/mcode.d.luau`. Sorted so a
-	// missing name is one binary search away and the failure lists drift
-	// deterministically.
-	constexpr auto DECLARED = std::array< std::string_view, 26 >{
-		"cmd.register",
-		"cmd.handler",
-		"cfg.get",
-		"context.add_instructions",
-		"emit",
-		"fs.read",
-		"fs.write",
-		"log.debug",
-		"log.error",
-		"log.info",
-		"log.warn",
-		"mcp.register",
-		"model.register",
-		"net.get",
-		"net.search",
-		"off",
-		"on",
-		"session.fork",
-		"session.snapshot",
-		"skill.list",
-		"skill.read",
-		"skill.register",
-		"timer.at",
-		"timer.every",
-		"tool.register",
-		"tool.unregister",
-	};
+	// Reads the definition file and returns every callable entry point it
+	// declares, as dotted paths (`tool.register`, `on`).
+	//
+	// The grammar this walks is the one the file actually uses: a `declare
+	// mcode: { ... }` block whose entries sit at one tab (top level) or two tabs
+	// (namespace members). A declaration whose signature spans lines is tracked
+	// by paren balance, which is what keeps `handler` -- a parameter of `on` --
+	// out of the list, and comments are stripped before counting.
+	[[nodiscard]] auto parse_declared_entries( const std::filesystem::path& file )
+		-> std::vector< std::string > {
+		auto source = std::ifstream{ file, std::ios::binary };
 
-	// Deliberately absent entries, each with its reason. These are asserted
-	// ABSENT from the declaration file's runtime surface: a declared-and-absent
-	// name is the failure this slice exists to fix, so an aspiration must be
-	// removed rather than left declared.
-	constexpr auto ABSENT = std::array< std::string_view, 1 >{
-		"spawn",
-	};
+		if ( !source ) {
+			FAIL( "cannot read the definition file: " << file.string( ) );
+			return { };
+		}
+
+		auto declared = std::vector< std::string >{ };
+		auto in_declare = false;
+		auto namespace_name = std::string{ };
+		auto signature_depth = 0;
+
+		auto line = std::string{ };
+
+		while ( std::getline( source, line ) ) {
+			if ( const auto comment = line.find( "--" ); comment != std::string::npos ) {
+				line.resize( comment );
+			}
+
+			if ( line.find_first_not_of( " \t\r" ) == std::string::npos ) {
+				continue;
+			}
+
+			if ( !in_declare ) {
+				if ( line.starts_with( "declare mcode" ) ) {
+					in_declare = true;
+				}
+
+				continue;
+			}
+
+			// The declare block ends at the closing brace in column zero.
+			if ( signature_depth == 0 && namespace_name.empty( ) && line.starts_with( "}" ) ) {
+				break;
+			}
+
+			const auto paren_delta = static_cast< int >( std::count( line.begin( ), line.end( ), '(' ) )
+				- static_cast< int >( std::count( line.begin( ), line.end( ), ')' ) );
+
+			if ( signature_depth > 0 ) {
+				signature_depth += paren_delta;
+
+				continue;
+			}
+
+			// A namespace closes at one tab plus `}`.
+			if ( !namespace_name.empty( ) && line.starts_with( "\t}" ) ) {
+				namespace_name.clear( );
+
+				continue;
+			}
+
+			// Entries sit at exactly one tab (top level) or two (namespace member);
+			// deeper indentation is signature content and never an entry.
+			const auto indent = line.find_first_not_of( '\t' );
+
+			if ( indent != ( namespace_name.empty( ) ? 1 : 2 ) ) {
+				continue;
+			}
+
+			const auto content = line.substr( indent );
+			const auto colon = content.find( ':' );
+
+			if ( colon == std::string::npos || colon == 0 ) {
+				continue;
+			}
+
+			const auto name = content.substr( 0, colon );
+
+			if ( name.find_first_not_of(
+				"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_" )
+				!= std::string::npos ) {
+				continue;
+			}
+
+			const auto after = content.find_first_not_of( " \t", colon + 1 );
+
+			if ( after == std::string::npos ) {
+				continue;
+			}
+
+			if ( content[ after ] == '(' ) {
+				auto path = name;
+
+				if ( !namespace_name.empty( ) ) {
+					path = namespace_name + "." + name;
+				}
+
+				declared.push_back( path );
+				signature_depth = paren_delta;
+			} else if ( content[ after ] == '{' && namespace_name.empty( ) ) {
+				namespace_name = name;
+			}
+		}
+
+		return declared;
+	}
 
 	[[nodiscard]] auto contains( const std::vector< std::string >& present,
 		const std::string_view name ) -> bool {
@@ -75,11 +147,25 @@ namespace {
 		return false;
 	}
 
-	[[nodiscard]] auto difference( const std::array< std::string_view, 26 >& expected,
+	// The deliberately-absent list is a fixed array, and the caller asks
+	// whether a name is in it rather than the other way round.
+	template< std::size_t Count >
+	[[nodiscard]] auto contains( const std::array< std::string_view, Count >& present,
+		const std::string_view name ) -> bool {
+		for ( const auto entry : present ) {
+			if ( entry == name ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	[[nodiscard]] auto missing_from( const std::vector< std::string >& expected,
 		const std::vector< std::string >& present ) -> std::string {
 		auto missing = std::string{ };
 
-		for ( const auto name : expected ) {
+		for ( const auto& name : expected ) {
 			if ( !contains( present, name ) ) {
 				missing += " ";
 				missing += name;
@@ -89,21 +175,12 @@ namespace {
 		return missing;
 	}
 
-	[[nodiscard]] auto undeclared( const std::vector< std::string >& present ) -> std::string {
+	[[nodiscard]] auto undeclared( const std::vector< std::string >& declared,
+		const std::vector< std::string >& present ) -> std::string {
 		auto extra = std::string{ };
 
 		for ( const auto& name : present ) {
-			auto known = false;
-
-			for ( const auto candidate : DECLARED ) {
-				if ( candidate == name ) {
-					known = true;
-
-					break;
-				}
-			}
-
-			if ( !known ) {
+			if ( !contains( declared, name ) ) {
 				extra += " ";
 				extra += name;
 			}
@@ -112,7 +189,7 @@ namespace {
 		return extra;
 	}
 
-} // namespace
+}
 
 TEST_CASE( "the declared surface and the implemented surface agree", "[surface]" ) {
 	auto registry = tool_registry{ };
@@ -133,41 +210,26 @@ TEST_CASE( "the declared surface and the implemented surface agree", "[surface]"
 
 	write( directory / "ext.toml",
 		"name = \"surface-probe\"\nversion = \"0.1.0\"\napi_version = 1\npermissions = []\n" );
+
+	// The probe walks the live `mcode` table instead of checking a hand-written
+	// list, so an entry the host installs but the definition file does not
+	// declare shows up here no matter when it was added.
 	write( directory / "init.luau", R"LUASRC(local present = {}
 
-local names = {
-	"tool.register", "tool.unregister", "model.register",
-	"on", "off", "emit",
-	"log.debug", "log.info", "log.warn", "log.error",
-	"skill.read", "skill.list", "skill.register",
-	"mcp.register",
-	"cmd.register", "cmd.handler",
-	"timer.at", "timer.every",
-	"cfg.get",
-	"session.snapshot", "session.fork",
-	"net.get", "net.search",
-	"fs.read", "fs.write",
-	"context.add_instructions",
-}
+local function walk(prefix, container)
+	for key, value in pairs(container) do
+		local path = prefix == "" and key or (prefix .. "." .. key)
+		local kind = type(value)
 
-for _, path in names do
-	local segments = string.split(path, ".")
-	local cursor = mcode
-	local reachable = true
-
-	for _, segment in segments do
-		if type(cursor) ~= "table" then
-			reachable = false
-			break
+		if kind == "function" then
+			table.insert(present, path)
+		elseif kind == "table" then
+			walk(path, value)
 		end
-
-		cursor = cursor[segment]
-	end
-
-	if reachable and type(cursor) == "function" then
-		table.insert(present, path)
 	end
 end
+
+walk("", mcode)
 
 mcode.tool.register({
 	name = "surface_report",
@@ -215,8 +277,28 @@ mcode.tool.register({
 		present.push_back( current );
 	}
 
-	const auto missing = difference( DECLARED, present );
-	const auto extra = undeclared( present );
+	auto declared = parse_declared_entries(
+		std::filesystem::path{ MCODE_EXTENSIONS_ROOT } / "mcode.d.luau" );
+
+	REQUIRE_FALSE( declared.empty( ) );
+
+	// Deliberately absent entries, each with its reason. Removed from the
+	// declaration rather than left as an aspiration, and asserted absent from
+	// the host so the decision cannot silently rot either way: `spawn` is a
+	// manifest PERMISSION, not a declared function, and `bash`/`cmd` cover the
+	// need.
+	constexpr auto ABSENT = std::array< std::string_view, 1 >{ "spawn" };
+
+	auto required = std::vector< std::string >{ };
+
+	for ( const auto& name : declared ) {
+		if ( !contains( ABSENT, name ) ) {
+			required.push_back( name );
+		}
+	}
+
+	const auto missing = missing_from( required, present );
+	const auto extra = undeclared( declared, present );
 
 	if ( !missing.empty( ) ) {
 		FAIL( "declared but not implemented:" << missing );
