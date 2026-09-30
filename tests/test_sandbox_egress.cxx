@@ -76,7 +76,11 @@ TEST_CASE( "allow_network = false blocks egress", "[sandbox][egress]" ) {
 	options.timeout = std::chrono::milliseconds{ 10'000 };
 
 	const auto outcome = run_process( options );
-	REQUIRE( static_cast< bool >( outcome ) );
+
+	// The reason matters: a refused profile and a missing binary both arrive
+	// as a failed spawn, and they need different fixes.
+	REQUIRE_MESSAGE( static_cast< bool >( outcome ),
+		"the sandboxed spawn failed: " << outcome.error( ).msg );
 
 	// The connection was denied at the OS layer, so the command failed rather
 	// than reached the network.

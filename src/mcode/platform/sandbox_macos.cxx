@@ -39,8 +39,14 @@ namespace mcode::platform {
 		text += "(allow sysctl-read)\n";
 		text += "(allow mach-lookup)\n";
 
+		// `/dev`, `/etc` and `/tmp` are symlinks into `/private`, and Seatbelt
+		// matches the resolved path -- so `(subpath "/dev")` alone does not
+		// cover `/dev/null`, whose real path is `/private/dev/null`. Both
+		// spellings are listed because which one a caller passes is not
+		// knowable here.
 		text += "(allow file-read* (subpath \"/System\") (subpath \"/usr\") (subpath \"/bin\")"
-			" (subpath \"/sbin\") (subpath \"/dev\")\n";
+			" (subpath \"/sbin\") (subpath \"/dev\") (subpath \"/private/dev\")"
+			" (subpath \"/private/etc\"))\n";
 
 		for ( const auto& path : profile.read_paths ) {
 			text += "(allow file-read* (subpath \"" + path.string( ) + "\"))\n";
@@ -68,8 +74,8 @@ namespace mcode::platform {
 		// sinks, because `/dev` also holds the raw disks. A redirect to
 		// `/dev/null` is not a nicety -- without it `grep x /dev/null` exits 2
 		// rather than 1, because the shell cannot open the file.
-		text += "(allow file-write* (literal \"/dev/null\") (literal \"/dev/zero\")"
-			" (literal \"/dev/full\"))\n";
+		text += "(allow file-write* (literal \"/dev/null\") (literal \"/private/dev/null\")"
+			" (literal \"/dev/zero\") (literal \"/private/dev/zero\"))\n";
 
 		if ( !profile.allow_network ) {
 			text += "(deny network*)\n";
