@@ -29,9 +29,18 @@ add_executable(mcode_tests
     test_loader_failures.cxx
     test_manifest.cxx
     test_hooks.cxx
+    test_api_surface.cxx
+    test_api_fs_cfg.cxx
+    test_api_cmd_timer.cxx
+    test_api_net_session.cxx
+    test_ext_reload.cxx
     test_skills.cxx
     test_instruct_chain.cxx
     test_mcp.cxx
+    test_tui_frame.cxx
+    test_tui_markdown.cxx
+    test_tui_editor.cxx
+    test_tui_repl.cxx
 )
 
 add_executable(mcp_echo fixtures/mcp_echo.cxx)
