@@ -64,6 +64,13 @@ namespace mcode::platform {
 			text += "(deny file-write* (subpath \"" + path.string( ) + "/.mcode\"))\n";
 		}
 
+		// Read on `/dev` is already allowed above; write is granted only on the
+		// sinks, because `/dev` also holds the raw disks. A redirect to
+		// `/dev/null` is not a nicety -- without it `grep x /dev/null` exits 2
+		// rather than 1, because the shell cannot open the file.
+		text += "(allow file-write* (literal \"/dev/null\") (literal \"/dev/zero\")"
+			" (literal \"/dev/full\"))\n";
+
 		if ( !profile.allow_network ) {
 			text += "(deny network*)\n";
 		} else {

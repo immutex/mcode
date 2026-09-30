@@ -39,7 +39,19 @@ namespace mcode::platform {
 	// distributions disagree about `/lib64` and a missing one must not fail
 	// the spawn.
 	inline constexpr std::string_view SYSTEM_READ_ROOTS[] = {
-		"/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc",
+		"/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/dev",
+	};
+
+	// The devices a child may WRITE. Read on `/dev` is granted wholesale
+	// because `/dev/null`, `/dev/urandom` and `/dev/zero` are needed to start
+	// any process at all; write is not, because `/dev` also holds the raw
+	// block devices and granting write on the directory would hand them over.
+	// These three are sinks -- writing to them cannot affect anything.
+	//
+	// A redirect to `/dev/null` is not a nicety: `grep x /dev/null` exits 2
+	// rather than 1 without it, because the shell cannot open the file.
+	inline constexpr std::string_view WRITABLE_DEVICES[] = {
+		"/dev/null", "/dev/zero", "/dev/full",
 	};
 
 	// LANDLOCK_ACCESS_FS_IOCTL_DEV, which ABI 5 introduced and which the build
@@ -145,18 +157,19 @@ namespace mcode::platform {
 
 		auto ruleset = unique_ruleset_linux{ static_cast< int >( ruleset_fd ) };
 
-		auto grant_read = [ & ]( const std::filesystem::path& path ) -> status {
+		// The access mask is a parameter because a rule for a file takes the
+		// same shape as one for a directory: only the granted bits differ.
+		auto grant = [ & ]( const std::filesystem::path& path,
+			const std::uint64_t access ) -> status {
 			const auto fd = ::open( path.c_str( ), O_PATH | O_CLOEXEC );
 
 			if ( fd < 0 ) {
 				return std::unexpected( mcode::fail( mcode::errc::io,
-					"cannot open read path " + path.string( ) + ": " + std::strerror( errno ) ) );
+					"cannot open " + path.string( ) + ": " + std::strerror( errno ) ) );
 			}
 
 			auto beneath = landlock_path_beneath_attr{ };
-			beneath.allowed_access = handled_fs &
-				( LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_READ_FILE |
-					LANDLOCK_ACCESS_FS_READ_DIR );
+			beneath.allowed_access = handled_fs & access;
 			beneath.parent_fd = fd;
 
 			const auto added = ::syscall( SYSCALL_LANDLOCK_ADD_RULE, ruleset.get( ),
@@ -166,12 +179,16 @@ namespace mcode::platform {
 
 			if ( added < 0 ) {
 				return std::unexpected( mcode::fail( mcode::errc::io,
-					"landlock_add_rule(read " + path.string( ) + ") failed: " +
+					"landlock_add_rule(" + path.string( ) + ") failed: " +
 					std::strerror( open_error ) ) );
 			}
 
 			return { };
 		};
+
+		const auto read_only = LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_READ_FILE |
+			LANDLOCK_ACCESS_FS_READ_DIR;
+		const auto read_write = read_only | LANDLOCK_ACCESS_FS_WRITE_FILE;
 
 		for ( const auto root : SYSTEM_READ_ROOTS ) {
 			const auto path = std::filesystem::path{ root };
@@ -180,13 +197,25 @@ namespace mcode::platform {
 				continue;
 			}
 
-			if ( const auto granted = grant_read( path ); !granted ) {
+			if ( const auto granted = grant( path, read_only ); !granted ) {
+				return std::unexpected( granted.error( ) );
+			}
+		}
+
+		for ( const auto device : WRITABLE_DEVICES ) {
+			const auto path = std::filesystem::path{ device };
+
+			if ( !std::filesystem::exists( path ) ) {
+				continue;
+			}
+
+			if ( const auto granted = grant( path, read_write ); !granted ) {
 				return std::unexpected( granted.error( ) );
 			}
 		}
 
 		for ( const auto& path : profile.read_paths ) {
-			if ( const auto granted = grant_read( path ); !granted ) {
+			if ( const auto granted = grant( path, read_only ); !granted ) {
 				return std::unexpected( granted.error( ) );
 			}
 		}
