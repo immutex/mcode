@@ -426,11 +426,16 @@ code comments.
     ahead of the rule merge, not a rule in the list: a rule can be overridden by a
     later scope and the floor must not be.
 
-50. **`--yolo` is not "still sandboxed", and the help text used to say it was.**
-    `apply_sandbox` returns `unsupported` on all three platforms; OS enforcement
-    is deferred. The floor above is a policy check on parsed argv and canonical
-    paths, not isolation — a command that reaches outside those two inputs is not
-    caught. Claiming otherwise was a false security claim in shipped output.
+50. **`--yolo` now sandboxes where the platform can, and says exactly how much.**
+    The OS sandbox exists: `sandbox_capability_level()` reports
+    `write_boundary` on Windows (Low integrity token + mandatory labels via
+    `CreateProcessAsUserW` — writes confined, reads not), `filesystem` on
+    Linux (Landlock with runtime ABI detection), `filesystem` on macOS
+    (Seatbelt, deny-default). The MCP server path gets the Job Object only.
+    `--yolo`'s help text and `--verbose`'s sandbox line are asserted against
+    the seam, so all three cannot drift. The floor above is still a policy
+    check on parsed argv and canonical paths — it is the gate, the sandbox is
+    the boundary, and neither claims the other's job.
 
 51. **The remember store is `permissions.json`, not `config.toml`.** There is no
     TOML writer in the tree, and appending to a file the user hand-edits risks

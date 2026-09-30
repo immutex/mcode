@@ -382,9 +382,53 @@ namespace mcode::platform {
 		const void* stdin_read, const void* stdout_write, const void* stderr_write,
 		void* job, const void* token ) -> result< sandbox_spawn_windows > {
 #if defined( _WIN32 )
-		// The command line: quoted executable plus quoted arguments, the way
-		// the CRT re-parses them. No shell anywhere in this path.
+		// The stdio handles the caller owns may have been consumed by an IOCP
+		// association that altered their inheritability. Duplicate them for
+		// the child so the child's copies are independently inheritable.
+		auto duplicate_inheritable = []( const void* source ) -> HANDLE {
+			auto duplicate = HANDLE{ nullptr };
+
+			if ( ::DuplicateHandle( ::GetCurrentProcess( ),
+				static_cast< HANDLE >( const_cast< void* >( source ) ),
+				::GetCurrentProcess( ), &duplicate, 0, TRUE,
+				DUPLICATE_SAME_ACCESS ) ) {
+				return duplicate;
+			}
+
+			return static_cast< HANDLE >( const_cast< void* >( source ) );
+		};
+
+		auto child_stdin = duplicate_inheritable( stdin_read );
+		auto child_stdout = duplicate_inheritable( stdout_write );
+		auto child_stderr = duplicate_inheritable( stderr_write );
+		// CreateProcessAsUserW does not search PATH the way CreateProcessW
+		// does: a bare name must be resolved first, or the spawn fails with
+		// "file not found" for a program that exists.
+		auto resolved = executable;
+
+		if ( resolved.is_relative( ) || resolved.parent_path( ).empty( ) ) {
+			auto search = resolved.wstring( );
+			auto found = std::vector< wchar_t >( MAX_PATH + 1, L'\0' );
+
+			const auto length = ::SearchPathW( nullptr, search.c_str( ), L".exe",
+				static_cast< DWORD >( found.size( ) ), found.data( ), nullptr );
+
+			if ( length > 0 && length < found.size( ) ) {
+				resolved = std::filesystem::path{ std::wstring{ found.data( ), length } };
+			}
+		}
+
+		// The command line: quoted executable plus arguments quoted only when
+		// they need it. cmd.exe's /c parsing strips the first and last quote
+		// of the command it is given, so quoting every argument blindly turns
+		// `cmd /c "a" "b c"` into a command named `a b c` -- quote-when-needed
+		// keeps /c bare and the command string singly quoted, which is the
+		// form cmd's own rules handle.
 		auto quote = []( const std::wstring& value ) -> std::wstring {
+			if ( value.find_first_of( L" \"" ) == std::wstring::npos ) {
+				return value;
+			}
+
 			auto out = std::wstring{ L"\"" };
 			for ( const auto character : value ) {
 				if ( character == L'"' ) {
@@ -398,7 +442,7 @@ namespace mcode::platform {
 			return out;
 		};
 
-		auto command_line = quote( executable.wstring( ) );
+		auto command_line = quote( resolved.wstring( ) );
 
 		for ( const auto& argument : arguments ) {
 			auto wide = std::wstring{ };
@@ -429,26 +473,24 @@ namespace mcode::platform {
 
 		auto env_block = std::wstring{ };
 		for ( const auto& [ key, value ] : sorted ) {
-			env_block += key + L"=" + value + L"\0";
+			env_block += key;
+			env_block += L'=';
+			env_block += value;
+			env_block += L'\0';
 		}
 
-		if ( env_block.empty( ) ) {
-			env_block += L"\0";
-		}
-
-		env_block += L"\0";
+		// The block is double-NUL terminated: one for the last entry, one for
+		// the end of the block.
+		env_block += L'\0';
 
 		// Inheritable stdio: the three handles must be inheritable, which the
 		// pipe creation in the caller already arranged via SECURITY_ATTRIBUTES.
 		STARTUPINFOEXW startup_info{ };
 		startup_info.StartupInfo.cb = sizeof( startup_info );
 		startup_info.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-		startup_info.StartupInfo.hStdInput = static_cast< HANDLE >(
-			const_cast< void* >( stdin_read ) );
-		startup_info.StartupInfo.hStdOutput = static_cast< HANDLE >(
-			const_cast< void* >( stdout_write ) );
-		startup_info.StartupInfo.hStdError = static_cast< HANDLE >(
-			const_cast< void* >( stderr_write ) );
+		startup_info.StartupInfo.hStdInput = child_stdin;
+		startup_info.StartupInfo.hStdOutput = child_stdout;
+		startup_info.StartupInfo.hStdError = child_stderr;
 
 		auto size = SIZE_T{ 0 };
 		(void)::InitializeProcThreadAttributeList( nullptr, 1, 0, &size );
@@ -473,7 +515,7 @@ namespace mcode::platform {
 
 		const auto created = ::CreateProcessAsUserW(
 			static_cast< HANDLE >( const_cast< void* >( token ) ),
-			executable.empty( ) ? nullptr : executable.c_str( ),
+			resolved.empty( ) ? nullptr : resolved.c_str( ),
 			command_line.data( ),
 			nullptr, nullptr,
 			TRUE,
@@ -484,6 +526,10 @@ namespace mcode::platform {
 			&process_information );
 
 		::DeleteProcThreadAttributeList( startup_info.lpAttributeList );
+
+		::CloseHandle( child_stdin );
+		::CloseHandle( child_stdout );
+		::CloseHandle( child_stderr );
 
 		if ( created == 0 ) {
 			return std::unexpected( fail_win( "CreateProcessAsUserW", ::GetLastError( ) ) );

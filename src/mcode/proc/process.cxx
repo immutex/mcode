@@ -78,6 +78,10 @@ namespace mcode {
 		struct sandbox_spawn_state {
 			platform::unique_job_windows token;
 			platform::unique_job_windows job;
+
+			// The parent's write end of the child's stdin, held raw until the
+			// child exits and closed explicitly after the wait.
+			void* parent_stdin = nullptr;
 		};
 
 		[[nodiscard]] auto make_sandbox_spawn_state( const platform::sandbox_profile& profile )
@@ -185,7 +189,7 @@ namespace mcode {
 			auto err = pipe_drain{ context, options.max_output_bytes };
 			auto in = asio::writable_pipe{ context };
 
-			auto environment_strings = std::vector< std::string >{ };
+			auto environment_map = std::map< std::string, std::string, std::less<> >{ };
 
 			{
 				auto environment = options.scrub_environment
@@ -196,11 +200,14 @@ namespace mcode {
 					environment[ key ] = value;
 				}
 
-				environment_strings.reserve( environment.size( ) );
+				environment_map = environment;
+			}
 
-				for ( const auto& [ key, value ] : environment ) {
-					environment_strings.push_back( key + "=" + value );
-				}
+			auto environment_strings = std::vector< std::string >{ };
+			environment_strings.reserve( environment_map.size( ) );
+
+			for ( const auto& [ key, value ] : environment_map ) {
+				environment_strings.push_back( key + "=" + value );
 			}
 
 			auto environment = process::process_environment{ std::move( environment_strings ) };
@@ -220,11 +227,84 @@ namespace mcode {
 				sandbox_state = std::move( *state );
 			}
 
+#if defined( _WIN32 )
+			std::optional< process::process > child{ };
+
+			// The raw handles the sandboxed spawn inherits. The parent ends
+			// are assigned to the asio pipes afterwards; the child ends are
+			// inheritable and owned by the child once spawned.
+			void* in_handle = nullptr;
+			void* out_handle = nullptr;
+			void* err_handle = nullptr;
+
+			auto raw_pipes = std::optional< platform::sandbox_raw_pipes >{ };
+
+			if ( sandbox_state ) {
+				auto pipes = platform::sandbox_windows_make_pipes( );
+
+				if ( !pipes ) {
+					return std::unexpected( pipes.error( ) );
+				}
+
+				raw_pipes = std::move( *pipes );
+
+				in_handle = raw_pipes->child_stdin;
+				out_handle = raw_pipes->child_stdout;
+				err_handle = raw_pipes->child_stderr;
+			}
+
+			if ( sandbox_state ) {
+				// The sandboxed path spawns through CreateProcessAsUserW with
+				// the Low IL token; boost's launcher has no token parameter,
+				// so the stdio pipes are created here and handed over raw.
+				auto raw = platform::sandbox_windows_spawn(
+					std::filesystem::path{ options.executable }, options.args,
+					std::filesystem::path{ options.working_directory },
+					environment_map, in_handle, out_handle, err_handle,
+					sandbox_state->job.get( ), sandbox_state->token.get( ) );
+
+				if ( !raw ) {
+					return std::unexpected( raw.error( ) );
+				}
+
+				child.emplace( context, raw->process_id,
+					static_cast< process::process::native_handle_type >( raw->process_handle ) );
+
+				out.pipe.assign( raw_pipes->parent_stdout );
+				err.pipe.assign( raw_pipes->parent_stderr );
+
+				// The child's stdin is NOT assigned to an asio pipe: the IOCP
+				// association alters the handle in ways that break the
+				// child's console initialization, and a one-shot command
+				// never writes to stdin anyway. The parent holds the write
+				// end open until the child exits, which is what keeps the
+				// pipe alive.
+				sandbox_state->parent_stdin = raw_pipes->parent_stdin;
+
+				raw_pipes->parent_stdin = nullptr;
+				raw_pipes->parent_stdout = nullptr;
+				raw_pipes->parent_stderr = nullptr;
+			} else {
+				child.emplace( context, options.executable, options.args,
+					process::process_stdio{ in, out.pipe, err.pipe }, environment );
+			}
+#else
 			auto child = process::process{ context, options.executable, options.args,
 				process::process_stdio{ in, out.pipe, err.pipe }, environment,
 				sandbox_initializer( sandbox_state, options.sandbox ) };
+#endif
 
+#if defined( _WIN32 )
+			// The sandboxed child's stdin is a named-pipe server end. Closing
+			// the parent's client end now would disconnect the pipe and the
+			// child's reads would fail, so it stays open until the child has
+			// exited; the boost path relies on close-for-EOF instead.
+			if ( !sandbox_state ) {
+				in.close( );
+			}
+#else
 			in.close( );
+#endif
 
 			auto out_buffer = std::array< char, PIPE_CHUNK_BYTES >{ };
 			auto err_buffer = std::array< char, PIPE_CHUNK_BYTES >{ };
@@ -291,11 +371,17 @@ namespace mcode {
 
 			if ( timed_out ) {
 				auto ignored = boost::system::error_code{ };
-				child.terminate( ignored );
+				child->terminate( ignored );
+			}
+
+			// The child is gone; the stdin write end can go with it.
+			if ( sandbox_state && sandbox_state->parent_stdin != nullptr ) {
+				::CloseHandle( static_cast< HANDLE >( sandbox_state->parent_stdin ) );
+				sandbox_state->parent_stdin = nullptr;
 			}
 
 			auto wait_error = boost::system::error_code{ };
-			const auto exit_status = child.wait( wait_error );
+			const auto exit_status = child->wait( wait_error );
 
 			if ( wait_error ) {
 				return std::unexpected( fail( errc::io, "wait failed: " + wait_error.message( ) ) );

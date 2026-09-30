@@ -41,6 +41,8 @@ add_executable(mcode_tests
     test_tui_markdown.cxx
     test_tui_editor.cxx
     test_tui_repl.cxx
+    test_sandbox.cxx
+    test_sandbox_egress.cxx
 )
 
 add_executable(mcp_echo fixtures/mcp_echo.cxx)
