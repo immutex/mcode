@@ -500,6 +500,67 @@ code comments.
     45 tests for, but it costs a confusing ten minutes every time someone hits
     it, which is why it is here.
 
+60. **A parallel build fails nondeterministically; use `-- -j 1`.** `cmake
+    --build build/Release` fails 8 times out of 8 with
+    `LNK1104: cannot open file '<a different>.obj'` — never the same file
+    twice. It is a race between `lib.exe` reading the object list and other
+    translation units still being written, not an ACL, Defender or handle
+    leak: an exclusive-open probe on the named file succeeds, and
+    `cmake --build build/Release -- -j 1` succeeds first try. Serial costs
+    about 100 seconds on this tree, which is worth paying to avoid chasing a
+    phantom permissions bug.
+
+61. **A restricting SID cannot confine a child on Windows.** `CreateRestrictedToken`
+    performs two access checks and the second consults *only* the restricting
+    SIDs, so a synthetic sandbox SID — granted by no DLL — makes the child die
+    at load with `STATUS_ACCESS_DENIED`. Measured, not theorised. Integrity
+    levels confine **writes** without that second check, which is why the
+    capability ladder has a `write_boundary` rung: Windows confines writes and
+    not reads, and `sandbox_capability_level()` says so rather than claiming
+    `filesystem`.
+
+62. **`PROC_THREAD_ATTRIBUTE_TOKEN` does not exist.** The SDK's
+    `PROC_THREAD_ATTRIBUTE_NUM` has no token attribute; the value 5 that an
+    earlier revision of this tree used for one is
+    `ProcThreadAttributeIdealProcessor`. A token can only be applied through
+    `CreateProcessAsUserW`. The bogus constant meant the restricted token was
+    silently never applied, so the sandbox reported a confinement that did not
+    exist.
+
+63. **A member function named after a type shadows that type inside the class.**
+    `auto manifest() -> const manifest&` plus `manifest manifest_;` does not
+    compile — the unqualified name resolves to the member function. Same
+    failure with `session_state`. Qualify the type (`mcode::ext::manifest`) in
+    both the accessor's return type and the member declaration.
+
+64. **A designated initializer cannot skip a member and then name a later one.**
+    `install_request{ .host = ..., .files = ... }` fails to compile when
+    `.commands` sits between them in the declaration. Add the missing member to
+    the initializer, or move it to the end of the struct.
+
+65. **A pipe assigned to asio's IOCP service must be overlapped.** `CreatePipe`
+    with a zero flag produces a synchronous handle, and
+    `win_iocp_handle_service::assign` rejects it with `ERROR_INVALID_PARAMETER`
+    (87) — reported as `assign: The parameter is incorrect`. Pass
+    `FILE_FLAG_OVERLAPPED`. The boost launcher hides this because it creates its
+    own pipes.
+
+66. **Labelling a path that does not exist fails the whole spawn.**
+    `SetNamedSecurityInfoW` returns `ERROR_FILE_NOT_FOUND` for an absent path,
+    and the exec path adds `.git` and `.mcode` to the profile's deny list
+    unconditionally — so `bash` failed outright in any workspace that is not a
+    git repository. Skip a path that does not exist. The residual is recorded
+    on `sandbox_profile::deny_paths`: a sandboxed child can create a
+    not-yet-existing `.git`, which is narrower than refusing to run at all.
+
+67. **A hand-copied mirror of a declaration file drifts, in both directions.**
+    `test_api_surface.cxx` originally carried a 26-name array claiming to be
+    "verbatim" from `extensions/mcode.d.luau`. It contained `cmd.handler` —
+    which is a *parameter name* of `on`'s handler, not an entry point — and
+    omitted `defer` and `notify`, both real. Two genuine gaps went undetected
+    because the check compared a stale copy against the implementation. The
+    test now parses the `.luau` at test time.
+
 ## Building
 
 ```bash
