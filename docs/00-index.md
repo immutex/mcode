@@ -1,6 +1,6 @@
 # mcode — Design Docs
 
-> TL;DR: mcode is a lightweight, extensible C++23 CLI coding-agent harness with **Luau as its extension layer** — a native core for speed and a scripting ecosystem for reach. Read `01` for the thesis, `03` for the shape, `26` for the current work plan, then the topic you're building.
+> TL;DR: mcode is a lightweight, extensible C++23 CLI coding-agent harness with **Luau as its extension layer** — a native core for speed and a scripting ecosystem for reach. Read `01` for the thesis, `03` for the shape, `36` for the batch just shipped, then the topic you're building.
 >
 > **The extension VM is Luau**, chosen over LuaJIT on measured size, load time, RSS, and — decisively — a capability boundary LuaJIT cannot provide (`27`). `12` §Layer 3 owns what that boundary does and does not guarantee.
 
@@ -60,7 +60,7 @@ Rules for this directory:
 24. `15-model-layer.md` — provider abstraction, caching economics, model tiering.
 25. `22-config-and-cli.md` — config scopes, CLI surface, exit codes, concurrency.
 26. `16-roadmap.md` — milestones M0–M8, exit criteria, risk register.
-27. `26-first-batch.md` — **the current work plan**: the gate decisions, the measurement spine, and M0.
+27. `26-first-batch.md` — **the batch record**: the gate decisions, the measurement spine, and M0.
 28. `27-a1-vm-spike.md` — the VM spike: measurements and the Luau decision.
 29. `28-b-measurements.md` — the measurement spine: load, memory, dispatch.
 
@@ -76,30 +76,31 @@ a real repository: a permission engine with an approval prompt and a remember
 store, `AGENTS.md` and skills, and a stdio MCP client. All three landed
 together; `32` remains the plan of record and `33`–`35` the per-slice briefs.
 
-33. `32-second-batch.md` — **the current work plan**: permissions, skills, MCP, and Phase 0.
+33. `32-second-batch.md` — **the batch record**: permissions, skills, MCP, and Phase 0.
 34. `33-workstream-permissions.md` — the permission engine, approvals, and the remember store.
 35. `34-workstream-skills.md` — skills, the `AGENTS.md` instruction chain, prompt sections 10–11.
 36. `35-workstream-mcp.md` — the stdio MCP client, tool registration, supervision.
 
-**Third batch — the current work plan.** The three workstreams that turn a
-working batch tool into a daily driver: an interactive TUI, the Lua API
-completed, and the OS sandbox. Read `36` first.
+**Third batch — shipped.** The three workstreams that turn a working batch tool
+into a daily driver: an interactive TUI, the Lua API completed, and the OS
+sandbox. Read `36` first; its §Outcome records what actually landed and the
+three places the plan was wrong.
 
-37. `36-third-batch.md` — **the current work plan**: interactive surface, Lua API, sandbox.
+37. `36-third-batch.md` — **the batch record**: interactive surface, Lua API, sandbox.
 38. `37-workstream-tui.md` — the terminal layer, cell renderer, streaming markdown, the REPL.
-39. `38-workstream-lua-api.md` — the 13 missing entry points, permissions, `/reload`.
-40. `39-workstream-sandbox.md` — restricted token, Landlock, Seatbelt, egress deny.
+39. `38-workstream-lua-api.md` — the missing entry points, permissions, `/reload`.
+40. `39-workstream-sandbox.md` — Low-integrity token, Landlock, Seatbelt, egress deny.
 
 **If you only read three:** `01`, `03`, `21`.
 
-> **Two batches have shipped; the third is in progress.** `26-first-batch.md`
-> and `32-second-batch.md` are the records of what landed and why; `33`–`35`
-> are the second batch's per-slice briefs, and `37`–`39` the third's. `32` still
-> owns the second batch's acceptance criteria and the deviations it resolved —
-> read it before changing a permission default.
+> **Three batches have shipped.** `26-first-batch.md`, `32-second-batch.md` and
+> `36-third-batch.md` are the records of what landed and why; `29`, `33`–`35`
+> are the second batch's per-slice briefs and `37`–`39` the third's. `32` owns
+> the permission defaults and `36` the sandbox's per-platform limits — read the
+> owning doc before changing either.
 >
 > The deviations a reader would otherwise get wrong are in
-> `README.md` §Non-obvious constraints (items 48–59): workspace writes are
+> `README.md` §Non-obvious constraints (items 48–67): workspace writes are
 > `allow` by default, `--yolo` skips questions but not the hard-deny floor, and
 > `--yolo` is not a sandbox.
 

@@ -1,5 +1,9 @@
 # Third Batch — Interactive surface, Lua API, and the OS sandbox
 
+> **Status: shipped.** All three workstreams landed and the batch acceptance
+> run passed. The record of what actually shipped, including the three places
+> the plan was wrong, is in §Outcome below.
+
 > TL;DR: Three workstreams that turn a working batch tool into a daily driver.
 > An **interactive TUI** so you can hold a conversation instead of firing one
 > shot per process; the **Lua API completed** so the "C++ primitives, Lua
@@ -165,6 +169,60 @@ Plus the three properties from the requirement, each asserted:
 
 That second row is the one to build first. It is the only mechanical defence
 against the failure mode this batch exists to fix, and it is cheap.
+
+## Outcome
+
+Shipped. The evidence, all run on Windows/MSVC:
+
+| Gate | Result |
+|---|---|
+| `cmake --build build/Release -- -j 1` | 0 errors |
+| `mcode_tests.exe` | 2322 assertions, 396 test cases, 0 failures |
+| `mcode.exe --smoke` | 141 checks, 0 failures |
+| `mcode.exe eval` | 10 passed, 0 failed |
+| `_clgate.py` | exit 0 |
+| binary / idle RSS | 8.25 MB / 13.4 MB (budgets: ≤25 MB, ≤30 MB) |
+
+### What each workstream delivered
+
+**A — the interactive surface.** `src/mcode/tui/` (tty, cell, theme, frame,
+markdown, diff_view, editor, approval_tui, render) plus `cli/repl`, wired into
+`run_repl`. The loop runs on a worker thread per turn and the renderer pumps on
+the main thread; the bus stays single-threaded because its handlers run on the
+loop thread and push copies into a mutex-guarded queue. Two turns in one
+process carry history — asserted, and confirmed live against the endpoint.
+`mcode exec` is byte-unchanged.
+
+**B — the Lua API.** The declared surface is now real in both directions: the
+declared-vs-implemented test **parses `extensions/mcode.d.luau` at test time**
+rather than comparing against a hand-copied array, and it passes empty.
+
+**C — the OS sandbox.** Windows confines writes via a Low-integrity token
+applied through `CreateProcessAsUserW` plus mandatory-label marking, and
+reports `write_boundary` — writes confined, reads not, because integrity levels
+have no read-down restriction. Linux (Landlock with mandatory ABI detection)
+and macOS (deny-default Seatbelt) are written and compile-checked only; CI is
+their executor.
+
+### Three places the plan was wrong
+
+1. **Windows cannot report `filesystem`.** The plan assumed a restricted token
+   with a synthetic SID. That SID is granted by no DLL, so the second access
+   check kills the child at load. The ladder gained a `write_boundary` rung,
+   and `PROC_THREAD_ATTRIBUTE_TOKEN` — which the earlier code used — **does not
+   exist in the SDK** (5 is `IdealProcessor`), so the token had never been
+   applied at all. Found by a probe, not a review.
+2. **The missing-entry count was 12, not 13.** Diffing the declaration file
+   against `ENTRIES` showed `defer` and `notify` were missing from the
+   worklist entirely, and `cmd.handler` — which the hand-copied test array
+   listed — is a *parameter name* of `on`, not an entry point. The test's
+   mirror was wrong in both directions, which is the argument for parsing the
+   declaration rather than copying it.
+3. **`mcode` with any option was unreachable.** The dispatch rejected every
+   argument that was not a known subcommand, so `--yolo` and every other
+   session flag failed. The plain fallback also discarded every answer and
+   denied every tool call. None of the three had a test; all three were found
+   by the live acceptance run, which is why the batch criteria insist on one.
 
 ## What this batch does not do
 
