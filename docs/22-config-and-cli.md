@@ -74,6 +74,13 @@ config = { default_remote = "origin" }
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allow"]
 enabled = true                    # a new server is DISABLED until this is written
+
+[models."cb/gpt-5.6-sol"]         # prices a model the built-in table lacks
+caching         = "implicit"
+context_window  = 272000
+max_output_tokens = 128000
+price_input     = 5.0             # USD per Mtok
+price_output    = 30.0
 ```
 
 **`[mcp]` declares MCP servers** (`07`). Each `[mcp.servers.<name>]` table is one
@@ -86,6 +93,20 @@ the context spend is visible before it happens. Extensions can declare servers
 too, through `mcode.mcp.register` (`18`); both routes produce the same
 declaration, and neither bypasses consent — the launch command is approved
 explicitly the first time it runs regardless of who wrote it down.
+
+**`[models."<id>"]` prices a model the compiled-in table does not carry** (`15`).
+The id is quoted and written literally — a quoted key segment is taken verbatim,
+so `[models."cb/gpt-5.6-sol"]` is the entry for that exact id, dots and slash
+included. Quoting is required rather than cosmetic, since a bare key rejects
+`/`. An id absent from both the table and this section is refused at resolution
+rather than priced at zero: zero is the success encoding in `cost_usd`, so an
+unpriced model would report `$0.00` spent and turn budget enforcement into a
+silent no-op. An entry that names no price at all is refused for the same
+reason. A model named in both places takes the config's values. `price_input`
+and `price_output` are USD per million tokens; the remaining fields are
+optional and default to the built-in table's values for the id, or the struct
+defaults when the id is new. The refusal message prints the exact section to
+write, because the section is not guessable from the error alone.
 
 Precedence for instruction files (`08`) and permissions (`12`) is defined in those docs; this table defines precedence for *config*. They use the same four scopes so a user reasons about one model.
 
