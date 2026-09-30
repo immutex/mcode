@@ -40,12 +40,20 @@ namespace mcode::platform {
 		const auto* prefix = "mcode: the OS sandbox could not be applied: ";
 		const auto prefix_length = std::char_traits< char >::length( prefix );
 
+		// Every write is checked: glibc marks `write` warn_unused_result, and
+		// this is a -Werror build. A failure to report is not itself
+		// reportable, so the loop simply stops.
 		if ( ::write( STDERR_FILENO, prefix, prefix_length ) < 0 ) {
 			return;
 		}
 
-		(void)::write( STDERR_FILENO, what.data( ), what.size( ) );
-		(void)::write( STDERR_FILENO, "\n", 1 );
+		if ( ::write( STDERR_FILENO, what.data( ), what.size( ) ) < 0 ) {
+			return;
+		}
+
+		if ( ::write( STDERR_FILENO, "\n", 1 ) < 0 ) {
+			return;
+		}
 	}
 
 	struct sandbox_posix_initializer {
