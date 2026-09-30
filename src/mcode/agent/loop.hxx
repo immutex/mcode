@@ -362,6 +362,10 @@ namespace mcode {
 		[[nodiscard]] auto run( const std::string_view user_task ) -> result< turn_outcome >;
 
 		[[nodiscard]] auto budget( ) const noexcept -> const session_budget& { return budget_; }
+
+		// The bus this loop publishes on. The REPL subscribes its render
+		// queue to it; the loop thread stays the only publisher.
+		[[nodiscard]] auto bus( ) const noexcept -> events::bus& { return *bus_; }
 		[[nodiscard]] auto budget( ) noexcept -> session_budget& { return budget_; }
 		[[nodiscard]] auto log( ) const noexcept -> const event_log& { return *log_; }
 

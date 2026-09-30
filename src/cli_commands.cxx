@@ -1,13 +1,24 @@
 // The headless CLI surface. Split from main.cxx, which is the startup smoke test:
 // these are real command handlers, and the smoke test is not.
+#include <atomic>
+#include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
+#include <iostream>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
+#include "mcode/tui/approval_tui.hxx"
+#include "mcode/tui/editor.hxx"
+#include "mcode/tui/frame.hxx"
+#include "mcode/tui/render.hxx"
+#include "mcode/tui/tty.hxx"
 #include "mcode/agent/loop.hxx"
 #include "mcode/cli/exec.hxx"
+#include "mcode/cli/repl.hxx"
 #include "mcode/core/registry.hxx"
 #include "mcode/events/bus.hxx"
 #include "mcode/ext/hooks.hxx"
@@ -177,10 +188,34 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	// in the server set below.
 	auto extension_servers = mcode::ext::mcp_server_store{ };
 
+	// The workspace and its collaborators are opened BEFORE the loader runs:
+	// the surface's `fs.*` entries dispatch through the same tool context the
+	// model's own file tools use, and that context is assembled from these.
+	auto space = mcode::workspace::open( workspace_path );
+
+	if ( !space ) {
+		std::fprintf( stderr, "mcode: %s\n", space.error( ).msg.c_str( ) );
+		stream.emit_run_end( mcode::cli::exit_code::usage_error, space.error( ).msg );
+
+		return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
+	}
+
+	auto reads = mcode::tools::session_reads{ };
+
+	const auto user_data = mcode::platform::app_data_path( mcode::platform::data_kind::config );
+
+	auto user_store = mcode::perm::remember_store{ user_data
+		? *user_data / "permissions.json"
+		: std::filesystem::path{ ".mcode/permissions.json" } };
+
+	auto engine = mcode::perm::permission_engine{ *space, &user_store };
+
 	if ( !parsed->no_extensions ) {
 		auto options = mcode::ext::loader_options{ };
 		options.register_api = mcode::ext::default_register_api( tool_registry,
-			&skills_context.skills, &extension_servers );
+			{ .skills = &skills_context.skills, .servers = &extension_servers,
+				.config = &*config, .space = &*space, .reads = &reads,
+				.permissions = &engine } );
 
 		auto roots = mcode::ext::default_roots( workspace_path );
 
@@ -285,34 +320,13 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		stream.emit_event( value );
 	} );
 
-	auto space = mcode::workspace::open( parsed->working_directory.empty( )
-		? std::filesystem::current_path( )
-		: std::filesystem::path{ parsed->working_directory } );
-
-	if ( !space ) {
-		std::fprintf( stderr, "mcode: %s\n", space.error( ).msg.c_str( ) );
-		stream.emit_run_end( mcode::cli::exit_code::usage_error, space.error( ).msg );
-
-		return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
-	}
-
-	auto reads = mcode::tools::session_reads{ };
-
 	// Two stores, not one. Answers the user gives with `[a]` are remembered in
 	// their own file, which follows them between repositories; the repository's
 	// own `.mcode/permissions.json` is loaded read-only and has every allow
 	// dropped, so a cloned repository cannot grant itself permissions -- and
 	// cannot edit the user's answers either.
-	const auto user_data = mcode::platform::app_data_path( mcode::platform::data_kind::config );
-
-	auto user_store = mcode::perm::remember_store{ user_data
-		? *user_data / "permissions.json"
-		: std::filesystem::path{ ".mcode/permissions.json" } };
-
 	auto project_store = mcode::perm::remember_store{ space->root( ) / ".mcode"
 		/ "permissions.json" };
-
-	auto engine = mcode::perm::permission_engine{ *space, &user_store };
 
 	auto headless_source = mcode::perm::headless_approval_source{ };
 	auto terminal_source = mcode::perm::terminal_approval_source{ };
@@ -322,6 +336,13 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	// terminal -- which is the condition, and asking it through the seam that
 	// already owns that question is better than a second platform branch here.
 	const auto interactive = !parsed->json && mcode::platform::terminal_size( ).has_value( );
+
+	if ( parsed->verbose ) {
+		std::fprintf( stderr, "mcode: sandbox: %s (filesystem %s, network %s)\n",
+			mcode::platform::sandbox_mechanism( ).data( ),
+			mcode::platform::to_string( mcode::platform::sandbox_capability_level( ) ).data( ),
+			mcode::platform::to_string( mcode::platform::sandbox_network_level( ) ).data( ) );
+	}
 
 	{
 		auto engine_options = mcode::perm::permission_engine::options{ };
@@ -533,4 +554,515 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	stream.emit_run_end( code, summary );
 
 	return mcode::cli::to_int( code );
+}
+
+// The loop factory the REPL drives. The same construction order run_exec
+// uses; the parts outlive the loop by declaration order inside the factory's
+// static holder, which keeps one session per process.
+auto build_interactive_loop( const mcode::cli::exec_options& parsed,
+	mcode::perm::approval_source* interactive_approval )
+	-> mcode::result< mcode::agent_loop > {
+	struct session_parts {
+		mcode::model::provider_registry providers;
+		mcode::events::bus bus;
+		mcode::ext::hook_registry hooks;
+		mcode::tool_registry tools;
+		std::optional< mcode::workspace > space;
+		mcode::tools::session_reads reads;
+		std::optional< mcode::perm::remember_store > user_store;
+		std::optional< mcode::perm::remember_store > project_store;
+		std::optional< mcode::perm::permission_engine > engine;
+		mcode::ext::load_result extensions;
+		mcode::ext::mcp_server_store extension_servers;
+		mcode::mcp::server_set mcp_servers;
+		mcode::net::http_client transport;
+		mcode::model::http_model_client client;
+		mcode::event_log log;
+		mcode::session_budget budget;
+		mcode::agent_loop::dependencies loop_deps;
+
+		session_parts( ) : hooks( bus ), client( transport ) { }
+	};
+
+	static auto parts = std::optional< session_parts >{ };
+
+	// One session per process. A second factory call would build an unwired
+	// loop over shared parts -- every tool call would report "no handler
+	// registered" -- so it is refused rather than half-built.
+	if ( parts ) {
+		return std::unexpected( mcode::fail( mcode::errc::config,
+			"an interactive session is already running in this process" ) );
+	}
+
+	parts.emplace( );
+
+	const auto workspace_path = parsed.working_directory.empty( )
+		? std::filesystem::current_path( )
+		: std::filesystem::path{ parsed.working_directory };
+
+	const auto config = mcode::config::load( workspace_path );
+
+	if ( !config ) {
+		return std::unexpected( config.error( ) );
+	}
+
+	const auto provider_name = parsed.model.empty( )
+		? config->get_string( "model.provider" ).value_or( std::string{ } )
+		: parsed.model;
+	const auto model_name = config->get_string( "model.model" ).value_or( std::string{ } );
+	const auto api_key_env = config->get_string( "model.api_key_env" );
+	const auto base_url = config->get_string( "model.base_url" );
+
+	if ( provider_name.empty( ) ) {
+		return std::unexpected( mcode::fail( mcode::errc::config,
+			"no provider configured; set [model] provider in config.toml" ) );
+	}
+
+	if ( model_name.empty( ) ) {
+		return std::unexpected( mcode::fail( mcode::errc::config,
+			"no model configured; set [model] model in config.toml" ) );
+	}
+
+	auto skills_options = mcode::skills::session_context_options{ };
+	skills_options.workspace = workspace_path;
+
+	const auto data_directory = mcode::platform::app_data_path(
+		mcode::platform::data_kind::config );
+	const auto bundled_directory = mcode::platform::executable_directory( );
+
+	if ( data_directory ) {
+		skills_options.user_agents_file = *data_directory / "AGENTS.md";
+		skills_options.user_skills_root = *data_directory / "skills";
+	}
+
+	if ( bundled_directory ) {
+		skills_options.org_agents_file = *bundled_directory / "AGENTS.md";
+		skills_options.extension_roots = { *bundled_directory / "extensions" };
+	}
+
+	auto skills_context = mcode::skills::assemble_session_context( skills_options );
+
+	// The workspace and its collaborators are built BEFORE the loader runs, so
+	// the extension surface's `fs.*` entries dispatch through the same tool
+	// context the model's own file tools use.
+	auto space = mcode::workspace::open( workspace_path );
+
+	if ( !space ) {
+		return std::unexpected( space.error( ) );
+	}
+
+	parts->space = std::move( *space );
+
+	const auto user_data = mcode::platform::app_data_path(
+		mcode::platform::data_kind::config );
+
+	parts->user_store = mcode::perm::remember_store{ user_data
+		? *user_data / "permissions.json"
+		: std::filesystem::path{ ".mcode/permissions.json" } };
+
+	parts->engine = mcode::perm::permission_engine{ *parts->space, &*parts->user_store };
+
+	if ( !parsed.no_extensions ) {
+		auto options = mcode::ext::loader_options{ };
+		options.register_api = mcode::ext::default_register_api( parts->tools,
+			{ .skills = &skills_context.skills, .servers = &parts->extension_servers,
+				.config = &*config, .space = &*parts->space, .reads = &parts->reads,
+				.permissions = &*parts->engine } );
+
+		auto roots = mcode::ext::default_roots( workspace_path );
+
+		if ( bundled_directory ) {
+			roots.push_back( *bundled_directory / "extensions" );
+		}
+
+		parts->extensions = mcode::ext::load_extensions( roots, parts->providers,
+			parts->hooks, options );
+	}
+
+	const auto* descriptor = parts->providers.find( provider_name );
+
+	if ( descriptor == nullptr ) {
+		return std::unexpected( mcode::fail( mcode::errc::config,
+			"no provider named '" + provider_name
+			+ "' is registered; check [model] provider and the loaded extensions" ) );
+	}
+
+	const auto caps = mcode::model::lookup_capabilities( model_name );
+
+	if ( !caps ) {
+		return std::unexpected( mcode::fail( mcode::errc::config,
+			"model '" + model_name
+			+ "' is not in the compiled-in capabilities table; refusing to run unpriced" ) );
+	}
+
+	auto auth = descriptor->auth;
+
+	if ( auth.from == mcode::model::auth_spec::source::environment && api_key_env ) {
+		auth.name = *api_key_env;
+	}
+
+	const auto api_key = mcode::model::resolve_api_key( auth,
+		[ &config ]( const std::string_view key ) { return config->get_string( key ); } );
+
+	if ( !api_key ) {
+		return std::unexpected( api_key.error( ) );
+	}
+
+	parts->project_store = mcode::perm::remember_store{
+		parts->space->root( ) / ".mcode" / "permissions.json" };
+
+	const auto interactive = !parsed.json &&
+		mcode::platform::terminal_size( ).has_value( );
+
+	{
+		auto engine_options = mcode::perm::permission_engine::options{ };
+		engine_options.yolo = parsed.yolo;
+		engine_options.headless = !interactive;
+		engine_options.approval = parsed.approval.empty( )
+			? config->get_string( "sandbox.approval" ).value_or( std::string{ "on-request" } )
+			: parsed.approval;
+
+		if ( parsed.yolo ) {
+			engine_options.approval = "never";
+		}
+
+		parts->engine->set_options( engine_options );
+
+		// The approval source the session actually asks through. Without one
+		// the engine's null-source path denies every ask, which would make
+		// the interactive session refuse every tool call.
+		if ( interactive_approval != nullptr ) {
+			parts->engine->set_approval_source( interactive_approval );
+		}
+
+		for ( const auto& dir : parsed.add_dirs ) {
+			parts->engine->add_root( dir );
+		}
+
+		parts->engine->add_config_rules( mcode::perm::rule_scope::user,
+			config->get_string_array( "permissions.deny" ),
+			config->get_string_array( "permissions.ask" ) );
+
+		if ( const auto loaded = parts->engine->load_store( ); !loaded ) {
+			std::fprintf( stderr, "mcode: %s\n", loaded.error( ).msg.c_str( ) );
+		}
+
+		if ( const auto loaded = parts->engine->load_project_store(
+			*parts->project_store ); !loaded ) {
+			std::fprintf( stderr, "mcode: %s\n", loaded.error( ).msg.c_str( ) );
+		}
+	}
+
+	const auto run_id = std::to_string(
+		static_cast< long long >( mcode::support::epoch_milliseconds( ) ) );
+
+	auto tools_context = mcode::tools::tool_context{ };
+	tools_context.space = &*parts->space;
+	tools_context.reads = &parts->reads;
+	tools_context.permissions = &*parts->engine;
+	tools_context.run_id = run_id;
+	tools_context.headless = parsed.json;
+
+	auto sink = mcode::tools::vector_sink{ };
+
+	const auto registered = mcode::tools::register_core_tools( parts->tools, sink,
+		tools_context );
+
+	if ( !registered ) {
+		return std::unexpected( registered.error( ) );
+	}
+
+	if ( parsed.max_steps > 0 ) {
+		parts->budget.max_steps = parsed.max_steps;
+	}
+
+	if ( parsed.max_budget_usd > 0.0 ) {
+		parts->budget.max_usd = parsed.max_budget_usd;
+	}
+
+	auto provider = *descriptor;
+
+	if ( base_url ) {
+		provider.endpoint = *base_url;
+	}
+
+	parts->loop_deps.registry = &parts->tools;
+	parts->loop_deps.client = &parts->client;
+	parts->loop_deps.log = &parts->log;
+	parts->loop_deps.bus = &parts->bus;
+	parts->loop_deps.budget = parts->budget;
+	parts->loop_deps.model_name = model_name;
+	parts->loop_deps.caps = *caps;
+	parts->loop_deps.provider_name = provider_name;
+	parts->loop_deps.provider = provider;
+	parts->loop_deps.api_key = *api_key;
+	parts->loop_deps.workspace_root = parts->space->root( ).string( );
+	parts->loop_deps.platform_name = std::string{ PLATFORM_NAME };
+	parts->loop_deps.permissions = &*parts->engine;
+	parts->loop_deps.instruction_chain = skills_context.chain.text;
+	parts->loop_deps.skill_index = skills_context.skill_index;
+
+	auto loop = mcode::agent_loop{ parts->loop_deps };
+
+	for ( auto& [ name, handler ] : sink.take( ) ) {
+		loop.register_handler( name, std::move( handler ) );
+	}
+
+	for ( const auto& [ name, owner ] : parts->extensions.tool_owners ) {
+		loop.register_handler( name,
+			[ &extensions = parts->extensions, tool_name = name ](
+				const std::string_view arguments_json ) -> mcode::result< std::string > {
+			return extensions.invoke( tool_name, arguments_json );
+		} );
+	}
+
+	const auto connected = mcode::mcp::connect_servers(
+		mcode::mcp::connect_input{ .config_values = &config->keys( ),
+			.extension_servers = &parts->extension_servers, .registry = &parts->tools,
+			.loop = &loop, .owned = &parts->mcp_servers } );
+
+	if ( !connected ) {
+		return std::unexpected( connected.error( ) );
+	}
+
+	return loop;
+}
+
+// The interactive session. The construction sequence is run_exec's, minus the
+// single-run JSON stream and the single run( ) call: the loop stays alive so
+// consecutive turns share history, the remember store and the session rules.
+// Returns the process exit code.
+// The interactive surface. With a terminal: a tty_session in raw mode, the
+// multi-line editor producing input lines, the render coordinator consuming
+// the event queue the loop's bus handlers feed, and the turn running on a
+// worker thread so a slow tool call cannot freeze the repaint. The loop
+// thread stays the only bus publisher -- its handlers push copies into the
+// queue, and only the render side drains it.
+//
+// Without a terminal, or under MCODE_TUI=plain, the session falls back to
+// the plain line reader: an explicit branch, not a silent degradation.
+auto run_repl( const std::vector< std::string >& arguments ) -> int {
+	const auto* requested = std::getenv( "MCODE_TUI" );
+	const auto plain_requested = requested != nullptr &&
+		std::string_view{ requested } == "plain";
+
+	const auto plain_reader = []( ) -> std::optional< std::string > {
+		auto line = std::string{ };
+
+		if ( !std::getline( std::cin, line ) ) {
+			return std::nullopt;
+		}
+
+		while ( !line.empty( ) && line.back( ) == '\r' ) {
+			line.pop_back( );
+		}
+
+		return line;
+	};
+
+	if ( plain_requested || !mcode::platform::terminal_size( ).has_value( ) ) {
+		return mcode::cli::run_session( arguments, plain_reader, build_interactive_loop );
+	}
+
+	auto session_tty = mcode::tui::tty_session::create( );
+
+	if ( !session_tty ) {
+		// Raw mode unavailable: the plain reader still gives a working
+		// session rather than a broken one.
+		return mcode::cli::run_session( arguments, plain_reader, build_interactive_loop );
+	}
+
+	auto parsed = mcode::cli::parse_exec_options( arguments );
+
+	if ( !parsed || !parsed->unknown_arguments.empty( ) ) {
+		std::fputs( mcode::cli::usage_text( "mcode" ).c_str( ), stderr );
+
+		return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
+	}
+
+	// The approval prompt reads through the same raw-mode line reader the
+	// editor uses, so it works under raw mode where std::getline would
+	// block forever on \r.
+	auto approval = mcode::tui::ui_approval_source{
+		[ &session_tty ]( ) { return session_tty->read_line( 600'000 ); } };
+
+	auto built = build_interactive_loop( *parsed, &approval );
+
+	if ( !built ) {
+		std::fprintf( stderr, "mcode: %s\n", built.error( ).msg.c_str( ) );
+
+		return mcode::cli::to_int( mcode::cli::exit_code_for( built.error( ).code ) );
+	}
+
+	auto& loop = *built;
+	auto turn = mcode::cli::session{ loop };
+
+	auto queue = mcode::tui::event_queue{ };
+	auto coordinator = mcode::tui::render_coordinator{ };
+	coordinator.set_capabilities( session_tty->caps( ) );
+
+	const auto measured = session_tty->size( );
+	coordinator.resize( mcode::tui::LIVE_REGION_ROWS,
+		static_cast< std::size_t >( measured.first ) );
+
+	// The bus handlers run on the loop thread (the worker below) and push
+	// copies into the queue; the render side is the only reader.
+	const auto feed = [&queue]( mcode::tui::event_queue::kind target ) {
+		return [&queue, target]( const mcode::events::event& value ) {
+			auto item = mcode::tui::event_queue::item{ };
+			item.type = target;
+			item.text = value.payload_json;
+
+			queue.push( std::move( item ) );
+		};
+	};
+
+	auto subscriptions = std::vector< mcode::events::bus::subscription_id >{ };
+	subscriptions.push_back( loop.bus( ).subscribe(
+		mcode::events::kind::assistant_delta, feed( mcode::tui::event_queue::kind::assistant_delta ) ) );
+	subscriptions.push_back( loop.bus( ).subscribe(
+		mcode::events::kind::tool_call, feed( mcode::tui::event_queue::kind::tool_start ) ) );
+	subscriptions.push_back( loop.bus( ).subscribe(
+		mcode::events::kind::tool_result, feed( mcode::tui::event_queue::kind::tool_end ) ) );
+	subscriptions.push_back( loop.bus( ).subscribe(
+		mcode::events::kind::turn_start, feed( mcode::tui::event_queue::kind::turn_start ) ) );
+	subscriptions.push_back( loop.bus( ).subscribe(
+		mcode::events::kind::turn_end, feed( mcode::tui::event_queue::kind::turn_end ) ) );
+
+	auto last_code = mcode::cli::exit_code::success;
+	auto turn_done = std::atomic< bool >{ false };
+	auto worker = std::jthread{ };
+
+	auto repaint = [&coordinator, &session_tty]( ) {
+		const auto bytes = coordinator.flush( );
+
+		if ( !bytes.empty( ) ) {
+			session_tty->write( session_tty->caps( ).synchronized_output
+				? mcode::tui::ansi_emitter{ session_tty->caps( ) }.synchronized( bytes )
+				: bytes );
+		}
+	};
+
+	auto pump_until_done = [&]() {
+		while ( !turn_done.load( ) ) {
+			for ( const auto& item : queue.drain( ) ) {
+				coordinator.apply( item );
+			}
+
+			repaint( );
+			std::this_thread::sleep_for( std::chrono::milliseconds( 80 ) );
+		}
+
+		for ( const auto& item : queue.drain( ) ) {
+			coordinator.apply( item );
+		}
+
+		repaint( );
+	};
+
+	auto editor = mcode::tui::input_editor{ };
+
+	while ( true ) {
+		// The editor owns the prompt: keys go through it, so multi-line
+		// editing, the history ring and the ghost-text suggestion are live.
+		// The prompt row renders the pending input between keys.
+		auto submitted = std::optional< std::string >{ };
+
+		while ( !submitted ) {
+			const auto key = session_tty->read_key( 600'000 );
+
+			if ( key.type == mcode::tui::key_event::kind::exit ) {
+				// Ctrl+D ends the session; the editor's exit flag tracks it.
+				break;
+			}
+
+			if ( key.type == mcode::tui::key_event::kind::interrupt ) {
+				// Ctrl+C clears the pending input and returns to the prompt;
+				// the session continues.
+				auto clear = mcode::tui::input_editor::key_event{ };
+				clear.type = mcode::tui::input_editor::key::interrupt;
+				std::ignore = editor.handle( clear );
+
+				continue;
+			}
+
+			if ( key.type == mcode::tui::key_event::kind::enter ) {
+				auto enter = mcode::tui::input_editor::key_event{ };
+				enter.type = mcode::tui::input_editor::key::enter;
+				submitted = editor.handle( enter );
+
+				continue;
+			}
+
+			auto forwarded = mcode::tui::input_editor::key_event{ };
+
+			switch ( key.type ) {
+				case mcode::tui::key_event::kind::character:
+					forwarded.type = mcode::tui::input_editor::key::character;
+					forwarded.text = key.text;
+
+					break;
+				case mcode::tui::key_event::kind::backspace:
+					forwarded.type = mcode::tui::input_editor::key::backspace;
+
+					break;
+				case mcode::tui::key_event::kind::delete_key:
+					forwarded.type = mcode::tui::input_editor::key::delete_key;
+
+					break;
+				case mcode::tui::key_event::kind::left:
+					forwarded.type = mcode::tui::input_editor::key::left;
+
+					break;
+				case mcode::tui::key_event::kind::right:
+					forwarded.type = mcode::tui::input_editor::key::right;
+
+					break;
+				case mcode::tui::key_event::kind::up:
+					forwarded.type = mcode::tui::input_editor::key::up;
+
+					break;
+				case mcode::tui::key_event::kind::down:
+					forwarded.type = mcode::tui::input_editor::key::down;
+
+					break;
+				case mcode::tui::key_event::kind::home:
+					forwarded.type = mcode::tui::input_editor::key::home;
+
+					break;
+				case mcode::tui::key_event::kind::end:
+					forwarded.type = mcode::tui::input_editor::key::end;
+
+					break;
+				default:
+					continue;
+			}
+
+			std::ignore = editor.handle( forwarded );
+		}
+
+		if ( !submitted || submitted->empty( ) ) {
+			if ( !submitted ) {
+				break;
+			}
+
+			continue;
+		}
+
+		turn_done.store( false );
+
+		worker = std::jthread{ [ & ]( ) {
+			last_code = turn.run_turn( *submitted );
+			turn_done.store( true );
+		} };
+
+		pump_until_done( );
+		worker.join( );
+
+		if ( last_code == mcode::cli::exit_code::interrupted ) {
+			continue;
+		}
+	}
+
+	return mcode::cli::to_int( last_code );
 }

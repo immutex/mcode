@@ -9,6 +9,7 @@
 
 #include "mcode/agent/loop.hxx"
 #include "mcode/cli/exec.hxx"
+#include "mcode/cli/repl.hxx"
 #include "mcode/cli/skill_command.hxx"
 #include "mcode/events/bus.hxx"
 #include "mcode/eval/suite.hxx"
@@ -19,6 +20,7 @@
 #include "mcode/fs/workspace.hxx"
 #include "mcode/net/http_client.hxx"
 #include "mcode/net/sse.hxx"
+#include "mcode/platform/seams.hxx"
 #include "mcode/proc/process.hxx"
 #include "mcode/support/json.hxx"
 #include "mcode/support/logging.hxx"
@@ -66,6 +68,14 @@ namespace {
 // At file scope, not in an anonymous namespace -- internal linkage would make the
 // definition in the other translation unit a different function.
 auto run_exec( const std::vector< std::string >& arguments ) -> int;
+
+// Defined in cli_commands.cxx: the interactive session, wired the same way
+// exec is, with the loop kept alive across turns.
+auto run_repl( const std::vector< std::string >& arguments ) -> int;
+
+// The startup smoke test, reachable through --smoke now that the bare
+// invocation starts the interactive session.
+auto run_smoke( ) -> int;
 
 auto main( int argument_count, char** arguments ) -> int {
 	auto argv = std::vector< std::string >{ };
@@ -137,6 +147,10 @@ auto main( int argument_count, char** arguments ) -> int {
 		return 0;
 	}
 
+	if ( !argv.empty( ) && argv.front( ) == "--smoke" ) {
+		return run_smoke( );
+	}
+
 	if ( !argv.empty( ) ) {
 		std::fprintf( stderr, "mcode: unknown command '%s'\n\n", argv.front( ).c_str( ) );
 		std::fputs( mcode::cli::usage_text( "mcode" ).c_str( ), stderr );
@@ -144,6 +158,14 @@ auto main( int argument_count, char** arguments ) -> int {
 		return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
 	}
 
+	// No subcommand: the interactive session. Without a terminal run_repl
+	// falls back to the plain line reader itself.
+	return run_repl( argv );
+}
+
+// The smoke test body, reached only through the `--smoke` flag so the binary
+// keeps its self-check without making the bare invocation ambiguous.
+auto run_smoke( ) -> int {
 	std::printf( "mcode %.*s -- startup smoke test\n", static_cast< int >( mcode::VERSION.size( ) ),
 		mcode::VERSION.data( ) );
 	std::printf( "platform: %.*s | compiler: %.*s | build: %.*s\n",

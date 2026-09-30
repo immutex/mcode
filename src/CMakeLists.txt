@@ -57,6 +57,12 @@ add_library(mcode_core STATIC
     mcode/ext/api_skill.cxx
     mcode/ext/api_mcp.cxx
     mcode/ext/api_mcp_store.cxx
+    mcode/ext/api_gate.cxx
+    mcode/ext/api_fs.cxx
+    mcode/ext/api_cfg.cxx
+    mcode/ext/api_cmd.cxx
+    mcode/ext/api_timer.cxx
+    mcode/ext/api_session.cxx
     mcode/ext/loader.cxx
     mcode/ext/lua_json.cxx
     mcode/ext/manifest.cxx
