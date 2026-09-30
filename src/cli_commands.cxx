@@ -940,7 +940,10 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 
 	auto last_code = mcode::cli::exit_code::success;
 	auto turn_done = std::atomic< bool >{ false };
-	auto worker = std::jthread{ };
+	// `std::thread`, not `std::jthread`: jthread needs `stop_token`, which
+	// libc++ does not provide at every macOS deployment target, and this code
+	// joins explicitly anyway -- so the auto-join was never the reason.
+	auto worker = std::thread{ };
 
 	auto repaint = [&coordinator, &session_tty]( ) {
 		const auto bytes = coordinator.flush( );
@@ -1060,7 +1063,7 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 
 		turn_done.store( false );
 
-		worker = std::jthread{ [ & ]( ) {
+		worker = std::thread{ [ & ]( ) {
 			last_code = turn.run_turn( *submitted );
 			turn_done.store( true );
 		} };

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #if defined( __linux__ )
@@ -25,6 +26,21 @@ namespace mcode::platform {
 	inline constexpr long SYSCALL_LANDLOCK_CREATE_RULESET = __NR_landlock_create_ruleset;
 	inline constexpr long SYSCALL_LANDLOCK_ADD_RULE = __NR_landlock_add_rule;
 	inline constexpr long SYSCALL_LANDLOCK_RESTRICT_SELF = __NR_landlock_restrict_self;
+
+	// The system roots every process needs to load and run: the shell, the
+	// dynamic loader, libc, and the nsswitch/ld.so configuration that name
+	// them. Without these a restricted child cannot exec anything at all --
+	// `LANDLOCK_ACCESS_FS_EXECUTE` is handled, so an ungranted `/bin/sh` is
+	// denied and the spawn fails rather than the command.
+	//
+	// Granted read+execute, never write: this is what makes the sandbox
+	// usable, and it grants nothing the child could not already read as the
+	// invoking user. A path that does not exist is skipped, because the
+	// distributions disagree about `/lib64` and a missing one must not fail
+	// the spawn.
+	inline constexpr std::string_view SYSTEM_READ_ROOTS[] = {
+		"/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc",
+	};
 
 	// LANDLOCK_ACCESS_FS_IOCTL_DEV, which ABI 5 introduced and which the build
 	// headers may not name: they are enum members in linux/landlock.h, not
@@ -129,7 +145,7 @@ namespace mcode::platform {
 
 		auto ruleset = unique_ruleset_linux{ static_cast< int >( ruleset_fd ) };
 
-		for ( const auto& path : profile.read_paths ) {
+		auto grant_read = [ & ]( const std::filesystem::path& path ) -> status {
 			const auto fd = ::open( path.c_str( ), O_PATH | O_CLOEXEC );
 
 			if ( fd < 0 ) {
@@ -152,6 +168,26 @@ namespace mcode::platform {
 				return std::unexpected( mcode::fail( mcode::errc::io,
 					"landlock_add_rule(read " + path.string( ) + ") failed: " +
 					std::strerror( open_error ) ) );
+			}
+
+			return { };
+		};
+
+		for ( const auto root : SYSTEM_READ_ROOTS ) {
+			const auto path = std::filesystem::path{ root };
+
+			if ( !std::filesystem::exists( path ) ) {
+				continue;
+			}
+
+			if ( const auto granted = grant_read( path ); !granted ) {
+				return std::unexpected( granted.error( ) );
+			}
+		}
+
+		for ( const auto& path : profile.read_paths ) {
+			if ( const auto granted = grant_read( path ); !granted ) {
+				return std::unexpected( granted.error( ) );
 			}
 		}
 
