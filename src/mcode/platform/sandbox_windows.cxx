@@ -290,14 +290,15 @@ namespace mcode::platform {
 
 		auto make_pair = [ & ]( const bool child_end_inheritable,
 			const std::wstring& name ) -> result< std::pair< HANDLE, HANDLE > > {
-			const auto direction = child_end_inheritable
+			const auto direction = static_cast< DWORD >( child_end_inheritable
 				? PIPE_ACCESS_INBOUND
-				: PIPE_ACCESS_OUTBOUND;
+				: PIPE_ACCESS_OUTBOUND );
 
 			auto server = ::CreateNamedPipeW( name.c_str( ),
 				direction | FILE_FLAG_OVERLAPPED,
 				PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-				1, PIPE_BUFFER_BYTES, PIPE_BUFFER_BYTES, DWORD{ 0 }, &security );
+				DWORD{ 1 }, PIPE_BUFFER_BYTES, PIPE_BUFFER_BYTES, DWORD{ 0 },
+				&security );
 
 			if ( server == INVALID_HANDLE_VALUE ) {
 				return std::unexpected( fail_win( "CreateNamedPipeW",

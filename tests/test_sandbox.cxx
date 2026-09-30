@@ -7,7 +7,6 @@
 
 #include <chrono>
 #include <filesystem>
-#include <fstream>
 #include <string>
 #include <thread>
 
@@ -25,18 +24,6 @@
 #include "test_scratch.hxx"
 
 using namespace mcode;
-
-namespace {
-
-	auto write_file( const std::filesystem::path& path, const std::string_view text )
-		-> void {
-		std::filesystem::create_directories( path.parent_path( ) );
-
-		auto stream = std::ofstream{ path, std::ios::binary | std::ios::trunc };
-		stream << text;
-	}
-
-}
 
 TEST_CASE( "the capability pair is internally consistent", "[sandbox]" ) {
 	// The two enums must agree: an unavailable filesystem tier cannot claim

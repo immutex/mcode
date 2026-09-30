@@ -108,20 +108,6 @@ namespace mcode {
 
 			return sandbox_spawn_state{ std::move( *token ), std::move( *job ) };
 		}
-
-		// An empty optional and a null profile both yield a no-op initializer,
-		// which the launcher accepts alongside the real one because it defines
-		// none of the hooks.
-		[[nodiscard]] auto sandbox_initializer(
-			const std::optional< sandbox_spawn_state >& state,
-			const platform::sandbox_profile* )
-			-> platform::sandbox_windows_initializer {
-			if ( !state ) {
-				return platform::sandbox_windows_initializer{ };
-			}
-
-			return platform::sandbox_windows_initializer{ state->job.get( ) };
-		}
 #endif
 
 #if defined( __linux__ ) || defined( __APPLE__ )
@@ -375,10 +361,12 @@ namespace mcode {
 			}
 
 			// The child is gone; the stdin write end can go with it.
+#if defined( _WIN32 )
 			if ( sandbox_state && sandbox_state->parent_stdin != nullptr ) {
 				::CloseHandle( static_cast< HANDLE >( sandbox_state->parent_stdin ) );
 				sandbox_state->parent_stdin = nullptr;
 			}
+#endif
 
 			auto wait_error = boost::system::error_code{ };
 			const auto exit_status = child->wait( wait_error );
