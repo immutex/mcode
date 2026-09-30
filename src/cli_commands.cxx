@@ -581,6 +581,11 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 		mcode::session_budget budget;
 		mcode::agent_loop::dependencies loop_deps;
 
+		// The plain-mode prompt source. It reads `std::cin`, which is correct
+		// here because plain mode never puts the console into raw mode; the TUI
+		// path passes its own raw-mode source instead.
+		mcode::perm::terminal_approval_source terminal_source;
+
 		session_parts( ) : hooks( bus ), client( transport ) { }
 	};
 
@@ -730,9 +735,13 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 
 		// The approval source the session actually asks through. Without one
 		// the engine's null-source path denies every ask, which would make
-		// the interactive session refuse every tool call.
+		// the interactive session refuse every tool call. Plain mode with a
+		// terminal is still interactive, so it gets the stdin prompt rather
+		// than a deny: only a genuinely headless run has no one to ask.
 		if ( interactive_approval != nullptr ) {
 			parts->engine->set_approval_source( interactive_approval );
+		} else if ( interactive ) {
+			parts->engine->set_approval_source( &parts->terminal_source );
 		}
 
 		for ( const auto& dir : parsed.add_dirs ) {

@@ -151,7 +151,11 @@ auto main( int argument_count, char** arguments ) -> int {
 		return run_smoke( );
 	}
 
-	if ( !argv.empty( ) ) {
+	// A leading flag belongs to the interactive session, which parses the same
+	// options `exec` does; only a bare word is an unknown subcommand. Rejecting
+	// every argument here made `mcode --yolo` -- and every other session option
+	// -- unreachable.
+	if ( !argv.empty( ) && !argv.front( ).empty( ) && argv.front( ).front( ) != '-' ) {
 		std::fprintf( stderr, "mcode: unknown command '%s'\n\n", argv.front( ).c_str( ) );
 		std::fputs( mcode::cli::usage_text( "mcode" ).c_str( ), stderr );
 

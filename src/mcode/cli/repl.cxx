@@ -5,6 +5,8 @@
 #include <string>
 #include <utility>
 
+#include "mcode/support/json.hxx"
+
 namespace mcode::cli {
 
 	auto session::run_turn( const std::string_view task ) -> cli::exit_code {
@@ -60,6 +62,33 @@ namespace mcode::cli {
 		}
 
 		auto turn = session{ *built };
+
+		// The plain path has no renderer, so the answer is echoed here. Without
+		// this the fallback read input and discarded every response, which is a
+		// session that looks like it works and says nothing.
+		// The bus owns both subscriptions for as long as the loop lives, so the
+		// handles are kept only to make the ownership explicit.
+		[[maybe_unused]] auto echo = built->bus( ).subscribe( events::kind::assistant_delta,
+			[]( const events::event& value ) {
+				// Named `payload` rather than `parsed`: the outer scope holds the
+				// parsed options, and shadowing it is a gate failure.
+				auto payload = json::document::parse( value.payload_json );
+
+				if ( !payload ) {
+					return;
+				}
+
+				if ( const auto text = payload->pointer_string( "/text" ); text ) {
+					std::fputs( text->c_str( ), stdout );
+					std::fflush( stdout );
+				}
+			} );
+
+		[[maybe_unused]] auto newline = built->bus( ).subscribe( events::kind::turn_end,
+			[]( const events::event& ) {
+				std::fputc( '\n', stdout );
+				std::fflush( stdout );
+			} );
 
 		auto last_code = cli::exit_code::success;
 
