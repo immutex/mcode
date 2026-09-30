@@ -48,14 +48,28 @@ namespace mcode::platform {
 
 	// --- 2. Sandbox ---------------------------------------------------------
 	// Three incompatible models: Windows token + Job Object is code, Seatbelt is
-	// a profile, Landlock is syscalls with runtime ABI probing. Only Linux ships
-	// enforcement in M0.
-	enum class sandbox_support {
-		// Enforcement is available and will be applied.
-		enforced,
-		// The interface exists but this platform has no implementation yet.
-		// Callers must fail closed rather than assume isolation.
+	// a profile, Landlock is syscalls with runtime ABI probing. Filesystem
+	// confinement and network denial are two enums, not one: on Windows the
+	// restricted-token tier needs no administrator while a WFP egress deny does,
+	// so a single value claiming "supported" while the network is open would be
+	// exactly the false claim this seam exists to prevent.
+	enum class sandbox_capability {
+		// Nothing is enforced on this platform or runtime. Callers must fail
+		// closed rather than assume isolation.
 		unavailable,
+		// Filesystem confinement (read_paths / write_paths) is enforced.
+		filesystem,
+		// Filesystem confinement and egress denial are both enforced.
+		full,
+	};
+
+	enum class sandbox_network_support {
+		// No egress denial exists.
+		unavailable,
+		// Egress denial is attempted but cannot be guaranteed on this runtime.
+		best_effort,
+		// Egress is denied at the OS layer when allow_network is false.
+		enforced,
 	};
 
 	struct sandbox_profile {
@@ -64,7 +78,8 @@ namespace mcode::platform {
 		bool allow_network = false;
 	};
 
-	[[nodiscard]] auto sandbox_support_level( ) noexcept -> sandbox_support;
+	[[nodiscard]] auto sandbox_capability_level( ) noexcept -> sandbox_capability;
+	[[nodiscard]] auto sandbox_network_level( ) noexcept -> sandbox_network_support;
 	[[nodiscard]] auto sandbox_mechanism( ) noexcept -> std::string_view;
 
 	// Applies the profile to the current process, or to a child at spawn time.

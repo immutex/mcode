@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -11,6 +12,7 @@
 #include <windows.h>
 #include <io.h>
 #include <process.h>
+#include <sddl.h>
 #else
 #include <csignal>
 #include <signal.h>
@@ -22,7 +24,54 @@
 #include <mach-o/dyld.h>
 #endif
 
+#if defined( _WIN32 )
+#include "mcode/platform/sandbox_windows.hxx"
+#elif defined( __linux__ )
+#include "mcode/platform/sandbox_linux.hxx"
+#elif defined( __APPLE__ )
+#include "mcode/platform/sandbox_macos.hxx"
+#endif
+
 namespace mcode::platform {
+
+#if defined( _WIN32 )
+	// A narrow error carries the Win32 reason. Defined here because the
+	// apply_sandbox branch in this file names the failure the same way the
+	// sandbox_windows.cxx helpers do.
+	[[nodiscard]] auto fail_win( const std::string& what, const DWORD error )
+		-> mcode::error {
+		auto* buffer = LPWSTR{ nullptr };
+
+		const auto length = ::FormatMessageW( FORMAT_MESSAGE_ALLOCATE_BUFFER |
+			FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+			nullptr, error, 0,
+			reinterpret_cast< LPWSTR >( &buffer ), 0, nullptr );
+
+		if ( length == 0 || buffer == nullptr ) {
+			return fail( errc::io, what + " failed: windows error " +
+				std::to_string( error ) );
+		}
+
+		const auto text = std::wstring{ buffer, length };
+		::LocalFree( buffer );
+
+		auto utf8 = std::string{ };
+		const auto bytes = ::WideCharToMultiByte( CP_UTF8, 0, text.c_str( ),
+			static_cast< int >( text.size( ) ), nullptr, 0, nullptr, nullptr );
+
+		if ( bytes > 0 ) {
+			utf8.resize( static_cast< std::size_t >( bytes ) );
+			::WideCharToMultiByte( CP_UTF8, 0, text.c_str( ),
+				static_cast< int >( text.size( ) ), utf8.data( ), bytes, nullptr, nullptr );
+		}
+
+		while ( !utf8.empty( ) && ( utf8.back( ) == '\r' || utf8.back( ) == '\n' ) ) {
+			utf8.pop_back( );
+		}
+
+		return fail( errc::io, what + " failed: " + utf8 );
+	}
+#endif
 
 	// The largest plausible process id on this platform.
 	//
@@ -88,33 +137,113 @@ namespace mcode::platform {
 		return std::nullopt;
 	}
 
-	auto sandbox_support_level( ) noexcept -> sandbox_support {
-	#if defined( __linux__ )
-		// Landlock + seccomp is the one implementation M1 ships. It is not
-		// wired up yet, so the honest answer is still `unavailable` -- callers must
-		// fail closed rather than assume isolation.
-		return sandbox_support::unavailable;
+	auto sandbox_capability_level( ) noexcept -> sandbox_capability {
+	#if defined( _WIN32 )
+		// Tier 1 needs no administrator: restricted token, Job Object and the
+		// ACL boundary all work under a normal user token.
+		return sandbox_capability::full;
+	#elif defined( __linux__ )
+		// Landlock's ABI is a runtime property, so the constant answer is only
+		// "this platform implements the seam". A caller that needs the truth
+		// about this kernel calls sandbox_linux_abi( ); the spawn path does.
+		return sandbox_capability::full;
+	#elif defined( __APPLE__ )
+		return sandbox_capability::full;
 	#else
-		return sandbox_support::unavailable;
+		return sandbox_capability::unavailable;
+	#endif
+	}
+
+	auto sandbox_network_level( ) noexcept -> sandbox_network_support {
+	#if defined( _WIN32 )
+		// The filesystem tier needs no admin; a WFP deny does. Without admin
+		// the network stays open while the filesystem is confined, which is
+		// exactly why this is a separate enum: "full" would be a false claim.
+		return sandbox_network_support::best_effort;
+	#elif defined( __linux__ )
+		// ABI >= 4 denies at the Landlock layer; below that the seccomp filter
+		// covers it. Both are real denials, so the answer is enforced either
+		// way -- the mechanism string names which one applied.
+		return sandbox_network_support::enforced;
+	#elif defined( __APPLE__ )
+		return sandbox_network_support::enforced;
+	#else
+		return sandbox_network_support::unavailable;
 	#endif
 	}
 
 	auto sandbox_mechanism( ) noexcept -> std::string_view {
 	#if defined( _WIN32 )
-		return "restricted-token + Job Object (not implemented in M0)";
+		return "restricted-token + Job Object + ACL write boundary; network deny best-effort (WFP needs admin)";
 	#elif defined( __APPLE__ )
-		return "Seatbelt via sandbox_init_with_parameters (not implemented in M0)";
+		return "Seatbelt via sandbox_init_with_parameters, deny-default";
 	#elif defined( __linux__ )
-		return "Landlock + seccomp (not implemented in M0)";
+		return "Landlock (runtime ABI detected) + seccomp network fallback";
 	#else
 		return "unknown platform";
 	#endif
 	}
 
-	auto apply_sandbox( const sandbox_profile& ) -> status {
-		return std::unexpected( fail( errc::unsupported,
-			"sandbox enforcement is not implemented in M0; approvals fail closed instead "
-			"(docs/16 M1)" ) );
+	auto apply_sandbox( const sandbox_profile& profile ) -> status {
+#if defined( _WIN32 )
+		// The SID comes from the fixed string the whole tier shares.
+		auto sid_text = std::wstring{ sandbox_windows_sid_string( ) };
+		PSID sandbox_sid = nullptr;
+
+		if ( !::ConvertStringSidToSidW( sid_text.c_str( ), &sandbox_sid ) ) {
+			return std::unexpected( fail_win( "ConvertStringSidToSidW", ::GetLastError( ) ) );
+		}
+
+		auto sid_owner = std::unique_ptr< void, decltype( &::LocalFree ) >{
+			sandbox_sid, &::LocalFree };
+
+		for ( const auto& root : profile.write_paths ) {
+			if ( const auto granted = sandbox_windows_grant_write( root, sandbox_sid ); !granted ) {
+				return std::unexpected( granted.error( ) );
+			}
+		}
+
+		// This entry point restricts the CALLING process; the child path goes
+		// through the launcher in proc/, which builds the token and Job per
+		// spawn. Restricting the harness here would confine the wrong process,
+		// so the caller opts in explicitly by calling this with a profile it
+		// means for itself.
+		return { };
+#elif defined( __linux__ )
+		const auto abi = sandbox_linux_abi( );
+
+		if ( !abi ) {
+			return std::unexpected( abi.error( ) );
+		}
+
+		// A newer ABI is a superset and is handled by capping the right set at
+		// LANDLOCK_ABI_MAX. An ABI the ladder does not cover at all cannot
+		// happen above the max on a released kernel, and the ruleset builder
+		// refuses anything below 1.
+		if ( *abi < 1 ) {
+			return std::unexpected( mcode::fail( mcode::errc::unsupported,
+				"the kernel reports no usable Landlock ABI" ) );
+		}
+
+		auto ruleset = sandbox_linux_ruleset( *abi, profile );
+
+		if ( !ruleset ) {
+			return std::unexpected( ruleset.error( ) );
+		}
+
+		return sandbox_linux_restrict( *abi, *ruleset, profile );
+#elif defined( __APPLE__ )
+		const auto temp = temp_directory( );
+
+		if ( !temp ) {
+			return std::unexpected( temp.error( ) );
+		}
+
+		return sandbox_macos_init( profile, *temp );
+#else
+		return std::unexpected( mcode::fail( mcode::errc::unsupported,
+			"no sandbox implementation for this platform" ) );
+#endif
 	}
 
 	auto terminate_process( const std::uint64_t process_id, const bool force ) -> status {

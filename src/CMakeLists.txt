@@ -33,6 +33,9 @@ add_library(mcode_core STATIC
     mcode/model/http_client.cxx
 
     mcode/platform/seams.cxx
+    mcode/platform/sandbox_windows.cxx
+    mcode/platform/sandbox_linux.cxx
+    mcode/platform/sandbox_macos.cxx
 
     mcode/events/bus.cxx
 
@@ -101,6 +104,18 @@ add_library(mcode_core STATIC
     mcode/agent/loop.cxx
     mcode/agent/loop_tools.cxx
     mcode/agent/loop_context.cxx
+
+    mcode/tui/cell.cxx
+    mcode/tui/tty.cxx
+    mcode/tui/frame.cxx
+    mcode/tui/theme.cxx
+    mcode/tui/markdown.cxx
+    mcode/tui/diff_view.cxx
+    mcode/tui/editor.cxx
+    mcode/tui/approval_tui.cxx
+    mcode/tui/render.cxx
+
+    mcode/cli/repl.cxx
 )
 
 target_include_directories(mcode_core

@@ -131,7 +131,7 @@ namespace loop_test {
 		int emitted_calls_ = 0;
 	};
 
-	auto state_names( const std::vector< loop_state >& states ) -> std::string {
+	inline auto state_names( const std::vector< loop_state >& states ) -> std::string {
 		auto out = std::string{ };
 
 		for ( const auto value : states ) {
@@ -202,14 +202,14 @@ namespace loop_test {
 		}
 	};
 
-	auto text_response( const std::string_view text ) -> scripted_client::response {
+	inline auto text_response( const std::string_view text ) -> scripted_client::response {
 		auto value = scripted_client::response{ };
 		value.text = std::string{ text };
 
 		return value;
 	}
 
-	auto call_response( const std::string_view name, const std::string_view args )
+	inline auto call_response( const std::string_view name, const std::string_view args )
 		-> scripted_client::response {
 		auto value = scripted_client::response{ };
 		value.calls.push_back(

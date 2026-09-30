@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "mcode/core/error.hxx"
+#include "mcode/platform/seams.hxx"
 
 namespace mcode {
 
@@ -22,6 +23,12 @@ namespace mcode {
 		bool scrub_environment = true;
 		std::chrono::milliseconds timeout{ 60'000 };
 		std::size_t max_output_bytes = DEFAULT_MAX_OUTPUT_BYTES;
+
+		// When set, the child runs under this sandbox profile: restricted
+		// token + Job Object on Windows, Landlock + seccomp on Linux, Seatbelt
+		// on macOS. Null spawns unsandboxed, which is what every existing
+		// caller keeps meaning.
+		const mcode::platform::sandbox_profile* sandbox = nullptr;
 	};
 
 	struct process_result {

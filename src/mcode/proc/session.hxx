@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "mcode/core/error.hxx"
+#include "mcode/platform/seams.hxx"
 
 namespace mcode::proc {
 
@@ -32,6 +33,9 @@ namespace mcode::proc {
 		std::string executable;
 		std::vector< std::string > args;
 		std::string working_directory;
+
+		// Same contract as process_options::sandbox: null spawns unsandboxed.
+		const mcode::platform::sandbox_profile* sandbox = nullptr;
 	};
 
 	enum class read_kind { data, eof, timeout };

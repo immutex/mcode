@@ -283,14 +283,26 @@ TEST_CASE( "the seven platform seams exist and report honestly", "[platform]" ) 
 		}
 	}
 
-	// 2. Sandbox: not enforced yet, and the level says so rather than the caller
-	// assuming isolation.
-	REQUIRE( platform::sandbox_support_level( ) == platform::sandbox_support::unavailable );
+	// 2. Sandbox: the seam reports per capability, not one merged claim. On a
+	// platform with no implementation both answers are `unavailable`, and the
+	// operations refuse rather than pretending. Where an implementation exists
+	// the numbers are asserted in test_sandbox.cxx against probes, because a
+	// capability claim without a probe behind it is the defect this seam exists
+	// to prevent.
 	REQUIRE_FALSE( platform::sandbox_mechanism( ).empty( ) );
 
 	auto applied = platform::apply_sandbox( { } );
-	REQUIRE_FALSE( static_cast< bool >( applied ) );
-	REQUIRE( applied.error( ).code == errc::unsupported );
+
+	if ( platform::sandbox_capability_level( ) == platform::sandbox_capability::unavailable ) {
+		REQUIRE( platform::sandbox_network_level( ) == platform::sandbox_network_support::unavailable );
+		REQUIRE_FALSE( static_cast< bool >( applied ) );
+		REQUIRE( applied.error( ).code == errc::unsupported );
+	} else {
+		// A claimed filesystem tier must either apply or name the refusal.
+		if ( !applied ) {
+			REQUIRE_FALSE( applied.error( ).msg.empty( ) );
+		}
+	}
 
 	// 3. Termination.
 	//
