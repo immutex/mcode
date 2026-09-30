@@ -106,7 +106,13 @@ reason. A model named in both places takes the config's values. `price_input`
 and `price_output` are USD per million tokens; the remaining fields are
 optional and default to the built-in table's values for the id, or the struct
 defaults when the id is new. The refusal message prints the exact section to
-write, because the section is not guessable from the error alone.
+write, because the section is not guessable from the error alone. A **combo**
+(`combo/<slug>`) is a router-side alias that picks one member per request, so it
+has a price *range*, not a price. Price it at the top of that range: the highest
+figure any member can charge is the only one that cannot under-estimate, and an
+under-estimate makes a budget stop late. A combo's members are not listed by
+`GET /v1/models` — infer them by re-asking with `x-ignore-upstream` set to the
+prefix that answered, and read each member's published price.
 
 Precedence for instruction files (`08`) and permissions (`12`) is defined in those docs; this table defines precedence for *config*. They use the same four scopes so a user reasons about one model.
 
