@@ -149,9 +149,6 @@ namespace mcode::tui {
 			if ( !blocks_.empty( ) && blocks_.back( ).open &&
 				blocks_.back( ).type == md_block::kind::fenced_code ) {
 				auto& block = blocks_.back( );
-				auto code_style = style{ };
-				code_style.foreground = token::text;
-				code_style.background = token::code_bg;
 
 				block.lines.push_back( { { std::string{ body }, token::text, token::code_bg } } );
 				changed.push_back( block );
@@ -170,9 +167,6 @@ namespace mcode::tui {
 				start_block( md_block::kind::heading, level, { } );
 
 				auto& block = blocks_.back( );
-				auto heading_style = style{ };
-				heading_style.foreground = token::accent;
-				heading_style.bold = true;
 
 				auto line_spans = styled_line{ };
 				line_spans.push_back( { std::string{ heading_text( body, level ) },

@@ -455,9 +455,13 @@ namespace mcode::tui {
 			FD_ZERO( &read_set );
 			FD_SET( STDIN_FILENO, &read_set );
 
+			// Cast to each member's own type: `tv_sec` is `time_t` and
+			// `tv_usec` is `suseconds_t`, which is `long` on Linux and `int`
+			// on Darwin, so naming either one explicitly is wrong on the other.
 			auto timeout = timeval{ };
-			timeout.tv_sec = static_cast< long >( wait_ms / 1000 );
-			timeout.tv_usec = static_cast< long >( ( wait_ms % 1000 ) * 1000 );
+			timeout.tv_sec = static_cast< decltype( timeout.tv_sec ) >( wait_ms / 1000 );
+			timeout.tv_usec = static_cast< decltype( timeout.tv_usec ) >(
+				( wait_ms % 1000 ) * 1000 );
 
 			const auto ready = ::select( STDIN_FILENO + 1, &read_set, nullptr, nullptr,
 				&timeout );
@@ -515,8 +519,9 @@ namespace mcode::tui {
 		FD_SET( STDIN_FILENO, &read_set );
 
 		auto timeout = timeval{ };
-		timeout.tv_sec = static_cast< long >( wait_ms / 1000 );
-		timeout.tv_usec = static_cast< long >( ( wait_ms % 1000 ) * 1000 );
+		timeout.tv_sec = static_cast< decltype( timeout.tv_sec ) >( wait_ms / 1000 );
+		timeout.tv_usec = static_cast< decltype( timeout.tv_usec ) >(
+			( wait_ms % 1000 ) * 1000 );
 
 		const auto ready = ::select( STDIN_FILENO + 1, &read_set, nullptr, nullptr,
 			&timeout );
