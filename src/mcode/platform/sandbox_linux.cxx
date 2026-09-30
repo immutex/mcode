@@ -26,6 +26,12 @@ namespace mcode::platform {
 	inline constexpr long SYSCALL_LANDLOCK_ADD_RULE = __NR_landlock_add_rule;
 	inline constexpr long SYSCALL_LANDLOCK_RESTRICT_SELF = __NR_landlock_restrict_self;
 
+	// LANDLOCK_ACCESS_FS_IOCTL_DEV, which ABI 5 introduced and which the build
+	// headers may not name: they are enum members in linux/landlock.h, not
+	// macros, so a missing one cannot be detected with #ifdef. The value is
+	// fixed by the kernel ABI, and the ABI itself is probed at runtime.
+	inline constexpr std::uint64_t LANDLOCK_ACCESS_FS_IOCTL_DEV_RIGHT = 1ULL << 15;
+
 	// Filesystem rights per ABI, accumulated up the ladder. ABI 1 has no
 	// REFER, which means every cross-directory rename and link is denied
 	// under the ruleset; that is the documented cost of the oldest floor.
@@ -55,7 +61,7 @@ namespace mcode::platform {
 		}
 
 		if ( abi >= 5 ) {
-			rights |= LANDLOCK_ACCESS_FS_IOCTL_DEV;
+			rights |= LANDLOCK_ACCESS_FS_IOCTL_DEV_RIGHT;
 		}
 
 		return rights;
@@ -112,7 +118,6 @@ namespace mcode::platform {
 		auto attr = landlock_ruleset_attr{ };
 		attr.handled_access_fs = handled_fs;
 		attr.handled_access_net = profile.allow_network ? std::uint64_t{ 0 } : handled_net;
-		attr.scoped = 0;
 
 		const auto ruleset_fd = ::syscall( SYSCALL_LANDLOCK_CREATE_RULESET, &attr,
 			sizeof( attr ), 0U );
@@ -122,7 +127,7 @@ namespace mcode::platform {
 				std::string{ "landlock_create_ruleset failed: " } + std::strerror( errno ) ) );
 		}
 
-		auto ruleset = unique_ruleset_linux{ ruleset_fd };
+		auto ruleset = unique_ruleset_linux{ static_cast< int >( ruleset_fd ) };
 
 		for ( const auto& path : profile.read_paths ) {
 			const auto fd = ::open( path.c_str( ), O_PATH | O_CLOEXEC );

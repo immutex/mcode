@@ -112,12 +112,13 @@ namespace mcode {
 
 #if defined( __linux__ ) || defined( __APPLE__ )
 		// The POSIX form: the profile pointer drives the fork-exec hook, and
-		// null spawns unsandboxed.
-		[[nodiscard]] auto sandbox_initializer(
-			const std::optional< sandbox_spawn_state >&,
+		// null spawns unsandboxed. `sandbox_spawn_state` is Windows-only -- it
+		// holds a token and a Job handle -- so this overload ignores it and
+		// takes the state by value rather than naming a type it cannot see.
+		[[nodiscard]] auto sandbox_initializer( const std::optional< int >&,
 			const platform::sandbox_profile* profile )
-			-> sandbox_posix_initializer {
-			return sandbox_posix_initializer{ profile };
+			-> platform::sandbox_posix_initializer {
+			return platform::sandbox_posix_initializer{ profile };
 		}
 #endif
 
@@ -198,6 +199,7 @@ namespace mcode {
 
 			auto environment = process::process_environment{ std::move( environment_strings ) };
 
+#if defined( _WIN32 )
 			// The sandbox state must outlive the spawn call: the Job handle is
 			// what kills the child when this process dies, and the attribute
 			// list must stay valid until CreateProcessW has consumed it.
@@ -212,6 +214,12 @@ namespace mcode {
 
 				sandbox_state = std::move( *state );
 			}
+#else
+			// POSIX applies the profile in the child after fork, so the parent
+			// keeps nothing: the initializer carries the pointer and the
+			// platform layer does the rest.
+			auto sandbox_state = std::optional< int >{ };
+#endif
 
 #if defined( _WIN32 )
 			std::optional< process::process > child{ };
