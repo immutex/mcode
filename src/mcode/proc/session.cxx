@@ -17,7 +17,6 @@
 #include <utility>
 
 #if defined( _WIN32 )
-#include <sddl.h>
 #include "mcode/platform/sandbox_windows.hxx"
 #else
 #include "mcode/platform/sandbox_launcher.hxx"
@@ -62,7 +61,10 @@ namespace mcode::proc {
 
 #if defined( _WIN32 )
 		// Held for the child's lifetime: kill-on-close is what guarantees the
-		// server process does not outlive the session.
+		// server process does not outlive the session. The token handle is
+		// held too because CreateProcessAsUserW's token must outlive the call
+		// in some bookkeeping paths, and keeping both together is simpler.
+		platform::unique_job_windows token;
 		platform::unique_job_windows job;
 #endif
 
@@ -140,9 +142,10 @@ namespace mcode::proc {
 			// directly, is the only arrangement where all three pipes bind.
 #if defined( _WIN32 )
 			// The MCP server child is sandboxed when a profile is supplied:
-			// restricted token, Job Object, ACL boundary, same as run_process.
+			// Low integrity token, Job Object, mandatory-label boundary, same
+			// as run_process.
 			if ( options.sandbox != nullptr ) {
-				auto token = platform::sandbox_windows_restricted_token( );
+				auto token = platform::sandbox_windows_child_token( );
 
 				if ( !token ) {
 					return std::unexpected( token.error( ) );
@@ -154,27 +157,15 @@ namespace mcode::proc {
 					return std::unexpected( job.error( ) );
 				}
 
-				auto sid_text = std::wstring{ platform::sandbox_windows_sid_string( ) };
-				PSID sandbox_sid = nullptr;
-
-				if ( !::ConvertStringSidToSidW( sid_text.c_str( ), &sandbox_sid ) ) {
-					return std::unexpected( fail( errc::io,
-						"ConvertStringSidToSidW failed: " + std::to_string( ::GetLastError( ) ) ) );
+				if ( const auto marked = platform::sandbox_windows_mark_write_paths(
+					options.sandbox->write_paths, options.sandbox->deny_paths ); !marked ) {
+					return std::unexpected( marked.error( ) );
 				}
 
-				auto sid_owner = std::unique_ptr< void, decltype( &::LocalFree ) >{
-					sandbox_sid, &::LocalFree };
-
-				for ( const auto& root : options.sandbox->write_paths ) {
-					if ( const auto granted = platform::sandbox_windows_grant_write( root, sandbox_sid );
-						!granted ) {
-						return std::unexpected( granted.error( ) );
-					}
-				}
-
+				owned.state_->token = std::move( *token );
 				owned.state_->job = std::move( *job );
 
-				auto initializer = platform::sandbox_windows_initializer{ ( *token ).get( ),
+				auto initializer = platform::sandbox_windows_initializer{
 					owned.state_->job.get( ) };
 
 				child = process::default_process_launcher( )( context, options.executable,

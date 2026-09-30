@@ -73,21 +73,16 @@ namespace mcode {
 		}
 
 #if defined( _WIN32 )
-		using mcode::platform::PROC_THREAD_ATTRIBUTE_TOKEN_NUMBER;
-		using mcode::platform::PROC_THREAD_ATTRIBUTE_JOB_LIST_NUMBER;
-		using mcode::platform::PROC_THREAD_ATTRIBUTE_INPUT_FLAG;
-
-
 		// Everything one sandboxed child needs, held until the spawn returns
 		// and the Job handle takes over ownership of the child's lifetime.
 		struct sandbox_spawn_state {
-			platform::unique_token_windows token;
+			platform::unique_job_windows token;
 			platform::unique_job_windows job;
 		};
 
 		[[nodiscard]] auto make_sandbox_spawn_state( const platform::sandbox_profile& profile )
 			-> result< sandbox_spawn_state > {
-			auto token = platform::sandbox_windows_restricted_token( );
+			auto token = platform::sandbox_windows_child_token( );
 
 			if ( !token ) {
 				return std::unexpected( token.error( ) );
@@ -99,25 +94,12 @@ namespace mcode {
 				return std::unexpected( job.error( ) );
 			}
 
-			// The write boundary is enforced by the token's restricting SID
-			// intersected with the DACLs on the write roots; grant before the
-			// child can touch anything.
-			auto sid_text = std::wstring{ platform::sandbox_windows_sid_string( ) };
-			PSID sandbox_sid = nullptr;
-
-			if ( !::ConvertStringSidToSidW( sid_text.c_str( ), &sandbox_sid ) ) {
-				return std::unexpected( fail( errc::io,
-					"ConvertStringSidToSidW failed: " + std::to_string( ::GetLastError( ) ) ) );
-			}
-
-			auto sid_owner = std::unique_ptr< void, decltype( &::LocalFree ) >{
-				sandbox_sid, &::LocalFree };
-
-			for ( const auto& root : profile.write_paths ) {
-				if ( const auto granted = platform::sandbox_windows_grant_write( root, sandbox_sid );
-					!granted ) {
-					return std::unexpected( granted.error( ) );
-				}
+			// The write boundary is the mandatory integrity label: write paths
+			// are lowered to Low IL so the child can write them, deny paths
+			// stay Medium so it cannot.
+			if ( const auto marked = platform::sandbox_windows_mark_write_paths(
+				profile.write_paths, profile.deny_paths ); !marked ) {
+				return std::unexpected( marked.error( ) );
 			}
 
 			return sandbox_spawn_state{ std::move( *token ), std::move( *job ) };
@@ -134,12 +116,8 @@ namespace mcode {
 				return platform::sandbox_windows_initializer{ };
 			}
 
-			return platform::sandbox_windows_initializer{ state->token.get( ), state->job.get( ) };
+			return platform::sandbox_windows_initializer{ state->job.get( ) };
 		}
-#endif
-
-#if defined( __linux__ ) || defined( __APPLE__ )
-
 #endif
 
 #if defined( __linux__ ) || defined( __APPLE__ )

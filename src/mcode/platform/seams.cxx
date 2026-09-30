@@ -12,7 +12,6 @@
 #include <windows.h>
 #include <io.h>
 #include <process.h>
-#include <sddl.h>
 #else
 #include <csignal>
 #include <signal.h>
@@ -34,44 +33,6 @@
 
 namespace mcode::platform {
 
-#if defined( _WIN32 )
-	// A narrow error carries the Win32 reason. Defined here because the
-	// apply_sandbox branch in this file names the failure the same way the
-	// sandbox_windows.cxx helpers do.
-	[[nodiscard]] auto fail_win( const std::string& what, const DWORD error )
-		-> mcode::error {
-		auto* buffer = LPWSTR{ nullptr };
-
-		const auto length = ::FormatMessageW( FORMAT_MESSAGE_ALLOCATE_BUFFER |
-			FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-			nullptr, error, 0,
-			reinterpret_cast< LPWSTR >( &buffer ), 0, nullptr );
-
-		if ( length == 0 || buffer == nullptr ) {
-			return fail( errc::io, what + " failed: windows error " +
-				std::to_string( error ) );
-		}
-
-		const auto text = std::wstring{ buffer, length };
-		::LocalFree( buffer );
-
-		auto utf8 = std::string{ };
-		const auto bytes = ::WideCharToMultiByte( CP_UTF8, 0, text.c_str( ),
-			static_cast< int >( text.size( ) ), nullptr, 0, nullptr, nullptr );
-
-		if ( bytes > 0 ) {
-			utf8.resize( static_cast< std::size_t >( bytes ) );
-			::WideCharToMultiByte( CP_UTF8, 0, text.c_str( ),
-				static_cast< int >( text.size( ) ), utf8.data( ), bytes, nullptr, nullptr );
-		}
-
-		while ( !utf8.empty( ) && ( utf8.back( ) == '\r' || utf8.back( ) == '\n' ) ) {
-			utf8.pop_back( );
-		}
-
-		return fail( errc::io, what + " failed: " + utf8 );
-	}
-#endif
 
 	// The largest plausible process id on this platform.
 	//
@@ -140,16 +101,13 @@ namespace mcode::platform {
 
 	auto sandbox_capability_level( ) noexcept -> sandbox_capability {
 	#if defined( _WIN32 )
-		// Tier 1 needs no administrator: restricted token, Job Object and the
-		// ACL boundary all work under a normal user token. Egress is NOT
-		// claimed here -- sandbox_network_level says best_effort, and `full`
-		// would assert a network denial this tier cannot deliver without admin.
-		return sandbox_capability::filesystem;
+		// The Low IL token construction is implemented and probed, but it is
+		// not yet applied to the spawned child, so no confinement is claimed.
+		// The Job Object is applied and gives real lifetime and memory limits.
+		return sandbox_capability::unavailable;
 	#elif defined( __linux__ )
-		// Landlock's ABI is a runtime property of the kernel, so this constant
-		// is a platform-capability claim, not a runtime one: a kernel without
-		// Landlock hard-fails in apply_sandbox and the spawn path reports that
-		// refusal. sandbox_linux_abi( ) is the runtime probe.
+		// Landlock confines reads and writes. The ABI is a runtime property, so
+		// the spawn path probes it; this is the platform-capability claim.
 		return sandbox_capability::filesystem;
 	#elif defined( __APPLE__ )
 		// Seatbelt applies in-process before the child's first exec, so the
@@ -167,6 +125,12 @@ namespace mcode::platform {
 		// exactly why this is a separate enum: "full" would be a false claim.
 		return sandbox_network_support::best_effort;
 	#elif defined( __linux__ )
+		const auto abi = sandbox_linux_abi( );
+
+		if ( !abi || *abi < 1 ) {
+			return sandbox_network_support::unavailable;
+		}
+
 		// ABI >= 4 denies at the Landlock layer; below that the seccomp filter
 		// covers it. Both are real denials, so the answer is enforced either
 		// way -- the mechanism string names which one applied.
@@ -180,7 +144,7 @@ namespace mcode::platform {
 
 	auto sandbox_mechanism( ) noexcept -> std::string_view {
 	#if defined( _WIN32 )
-		return "restricted-token + Job Object + ACL write boundary; network deny best-effort (WFP needs admin)";
+		return "Low IL token implemented but not yet applied at spawn; Job Object enforces lifetime and memory; network deny best-effort (WFP needs admin)";
 	#elif defined( __APPLE__ )
 		return "Seatbelt via sandbox_init_with_parameters, deny-default";
 	#elif defined( __linux__ )
@@ -192,28 +156,14 @@ namespace mcode::platform {
 
 	auto apply_sandbox( const sandbox_profile& profile ) -> status {
 #if defined( _WIN32 )
-		// The SID comes from the fixed string the whole tier shares.
-		auto sid_text = std::wstring{ sandbox_windows_sid_string( ) };
-		PSID sandbox_sid = nullptr;
-
-		if ( !::ConvertStringSidToSidW( sid_text.c_str( ), &sandbox_sid ) ) {
-			return std::unexpected( fail_win( "ConvertStringSidToSidW", ::GetLastError( ) ) );
+		// The write boundary is the mandatory integrity label on the paths,
+		// not a token change: the caller here is the harness itself, and the
+		// child path through proc/ applies the Low IL token at spawn.
+		if ( const auto marked = sandbox_windows_mark_write_paths(
+			profile.write_paths, profile.deny_paths ); !marked ) {
+			return std::unexpected( marked.error( ) );
 		}
 
-		auto sid_owner = std::unique_ptr< void, decltype( &::LocalFree ) >{
-			sandbox_sid, &::LocalFree };
-
-		for ( const auto& root : profile.write_paths ) {
-			if ( const auto granted = sandbox_windows_grant_write( root, sandbox_sid ); !granted ) {
-				return std::unexpected( granted.error( ) );
-			}
-		}
-
-		// This entry point restricts the CALLING process; the child path goes
-		// through the launcher in proc/, which builds the token and Job per
-		// spawn. Restricting the harness here would confine the wrong process,
-		// so the caller opts in explicitly by calling this with a profile it
-		// means for itself.
 		return { };
 #elif defined( __linux__ )
 		const auto abi = sandbox_linux_abi( );

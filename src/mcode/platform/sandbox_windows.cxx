@@ -1,12 +1,9 @@
 #include "mcode/platform/sandbox_windows.hxx"
 
-#include <map>
-#include <memory>
 #include <string>
 #include <utility>
 
 #if defined( _WIN32 )
-#include <windows.h>
 #include <sddl.h>
 #include <aclapi.h>
 #endif
@@ -15,36 +12,15 @@ namespace mcode::platform {
 
 #if defined( _WIN32 )
 
-	// A deterministic sandbox SID. One identity per machine keeps the ACL
-	// boundary and any WFP filters addressable across runs without persisting
-	// anything; it grants nothing by itself and is deny-only everywhere the
-	// child looks.
-	inline constexpr wchar_t SANDBOX_SID_STRING[] = L"S-1-5-21-3054197826-2915010853-3457101329-8173";
-
-	[[nodiscard]] auto sandbox_windows_sid_string( ) -> std::wstring {
-		return std::wstring{ SANDBOX_SID_STRING };
-	}
-
-	// Every limit the tier sets. Bounded by the same reasoning as the rest of
-	// the file: the child is an untrusted command, so a quota is a guard, not a
-	// policy knob.
+	// Every limit the tier sets. The child is an untrusted command, so a
+	// quota is a guard, not a policy knob.
 	inline constexpr auto JOB_ACTIVE_PROCESS_LIMIT = std::uint32_t{ 32 };
 	inline constexpr auto JOB_MEMORY_LIMIT_BYTES = std::uint64_t{ 2u * 1024u * 1024u * 1024u };
 
-	// CloseHandle is not in the gate's list, but the header windows.h provides
-	// it and the clang pass parses this file with _WIN32 defined; the POSIX leg
-	// never compiles it. The deleter keeps every early error path leak-free.
-	struct handle_deleter {
-		auto operator( )( HANDLE value ) const -> void {
-			if ( value != nullptr && value != INVALID_HANDLE_VALUE ) {
-				::CloseHandle( value );
-			}
-		}
-	};
-
-	using unique_handle = std::unique_ptr< void, handle_deleter >;
-
-	namespace {
+	// The SDDL for a Low integrity label with the no-write-up policy, and for
+	// a Medium label restoring the default on deny subtrees.
+	inline constexpr wchar_t LOW_IL_SDDL[] = L"S:(ML;;NW;;;LW)";
+	inline constexpr wchar_t MEDIUM_IL_SDDL[] = L"S:(ML;;NW;;;ME)";
 
 	[[nodiscard]] auto last_error_message( const DWORD error ) -> std::string {
 		auto* buffer = LPWSTR{ nullptr };
@@ -78,124 +54,88 @@ namespace mcode::platform {
 		return utf8;
 	}
 
-	// A narrow error carries the Win32 reason. File-local: seams.cxx defines
-	// its own copy because the two translation units must not share a symbol.
-	[[nodiscard]] auto fail_win( const std::string& what, const DWORD error )
-		-> mcode::error {
-		return mcode::fail( mcode::errc::io,
-			what + " failed: " + last_error_message( error ) );
-	}
+	namespace {
 
-	// A well-formed DACL is built, not parsed. The deny ACE for the sandbox SID
-	// comes first: canonical order puts explicit denies ahead of allows, and a
-	// deny that sorts after an allow is not a deny.
-	[[nodiscard]] auto build_boundary_descriptor( const PSID sandbox_sid )
-		-> std::wstring {
-		auto sid_text = LPWSTR{ nullptr };
-
-		if ( !::ConvertSidToStringSidW( sandbox_sid, &sid_text ) || sid_text == nullptr ) {
-			return { };
+		[[nodiscard]] auto fail_win( const std::string& what, const DWORD error )
+			-> mcode::error {
+			return mcode::fail( mcode::errc::io,
+				what + " failed: " + last_error_message( error ) );
 		}
 
-		const auto sid = std::wstring{ sid_text };
-		::LocalFree( sid_text );
+	} 
 
-		// Deny everything to the sandbox SID; the allow ACEs the caller grafts
-		// onto write roots are separate descriptors that intersect with this
-		// one. Everyone else keeps whatever they had.
-		auto sddl = std::wstring{ L"D:" };
-		sddl += L"(D;OICI;GA;;;" + sid + L")";
-
-		return sddl;
-	}
 #endif
 
-	}
-
-	auto sandbox_windows_restricted_token( ) -> result< unique_token_windows > {
+	auto sandbox_windows_child_token( )
+		-> result< unique_job_windows > {
 #if defined( _WIN32 )
-		auto process_token = unique_handle{ nullptr };
+		auto process_token = unique_job_windows{ nullptr };
 
 		if ( !::OpenProcessToken( ::GetCurrentProcess( ), TOKEN_DUPLICATE | TOKEN_QUERY,
 			reinterpret_cast< HANDLE* >( &process_token ) ) ) {
 			return std::unexpected( fail_win( "OpenProcessToken", ::GetLastError( ) ) );
 		}
 
+		auto primary = unique_job_windows{ nullptr };
+
+		if ( !::DuplicateTokenEx( process_token.get( ), MAXIMUM_ALLOWED, nullptr,
+			SecurityImpersonation, TokenPrimary,
+			reinterpret_cast< HANDLE* >( &primary ) ) ) {
+			return std::unexpected( fail_win( "DuplicateTokenEx", ::GetLastError( ) ) );
+		}
+
+		// Strip every privilege. SE_PRIVILEGE_REMOVED is the documented way to
+		// delete rather than disable: a disabled privilege can be re-enabled,
+		// a removed one cannot.
 		DWORD returned = 0;
-		(void)::GetTokenInformation( process_token.get( ), TokenGroups, nullptr, 0, &returned );
+		(void)::GetTokenInformation( primary.get( ), TokenPrivileges, nullptr, 0, &returned );
 
-		if ( returned == 0 ) {
-			return std::unexpected( fail_win( "GetTokenInformation(TokenGroups) size",
-				::GetLastError( ) ) );
-		}
+		auto priv_buffer = std::vector< unsigned char >( returned );
+		auto* privileges = reinterpret_cast< TOKEN_PRIVILEGES* >( priv_buffer.data( ) );
 
-		auto groups_buffer = std::vector< unsigned char >( returned );
-		const auto* groups = reinterpret_cast< const TOKEN_GROUPS* >( groups_buffer.data( ) );
-
-		if ( !::GetTokenInformation( process_token.get( ), TokenGroups, groups_buffer.data( ),
+		if ( !::GetTokenInformation( primary.get( ), TokenPrivileges, priv_buffer.data( ),
 			returned, &returned ) ) {
-			return std::unexpected( fail_win( "GetTokenInformation(TokenGroups)",
+			return std::unexpected( fail_win( "GetTokenInformation(TokenPrivileges)",
 				::GetLastError( ) ) );
 		}
 
-		// The logon SID identifies this logon session. Making it the sole
-		// restricting SID is what makes the token restricted at all: a
-		// restricted token with no restricting SID grants the intersection of
-		// nothing with nothing, which is no restriction but reads like one.
-		const SID_AND_ATTRIBUTES* logon_sid = nullptr;
-
-		for ( DWORD index = 0; index < groups->GroupCount; ++index ) {
-			if ( ( groups->Groups[ index ].Attributes & SE_GROUP_LOGON_ID ) != 0 ) {
-				logon_sid = &groups->Groups[ index ];
-
-				break;
-			}
+		for ( DWORD index = 0; index < privileges->PrivilegeCount; ++index ) {
+			privileges->Privileges[ index ].Attributes = SE_PRIVILEGE_REMOVED;
 		}
 
-		if ( logon_sid == nullptr ) {
-			return std::unexpected( mcode::fail( mcode::errc::io,
-				"no logon SID in the process token; cannot restrict" ) );
+		if ( !::AdjustTokenPrivileges( primary.get( ), FALSE, privileges, returned,
+			nullptr, nullptr ) ) {
+			return std::unexpected( fail_win( "AdjustTokenPrivileges", ::GetLastError( ) ) );
 		}
 
-		// Every other group becomes deny-only. The user SID itself stays
-		// enabled: the access check runs against the restricting SIDs, and
-		// denying the user's own SID would break the profile's own allow ACEs.
-		auto deny_buffer = std::vector< unsigned char >(
-			sizeof( SID_AND_ATTRIBUTES ) * ( static_cast< std::size_t >( groups->GroupCount ) + 1 ) + 64 );
+		// Low integrity. A Low IL process cannot write to a Medium IL object
+		// (no write-up) but can read it, which is exactly the write boundary
+		// this tier claims.
+		SID_IDENTIFIER_AUTHORITY mandatory_authority = { { 0, 0, 0, 0, 0, 16 } };
 
-		auto* deny_groups = reinterpret_cast< TOKEN_GROUPS* >( deny_buffer.data( ) );
-		deny_groups->GroupCount = 0;
+		auto sid_buffer = std::vector< unsigned char >( SECURITY_MAX_SID_SIZE );
+		auto* low_sid = reinterpret_cast< SID* >( sid_buffer.data( ) );
 
-		for ( DWORD index = 0; index < groups->GroupCount; ++index ) {
-			const auto& source = groups->Groups[ index ];
-
-			if ( ( source.Attributes & SE_GROUP_LOGON_ID ) != 0 ) {
-				continue;
-			}
-
-			deny_groups->Groups[ deny_groups->GroupCount ].Sid = source.Sid;
-			deny_groups->Groups[ deny_groups->GroupCount ].Attributes = SE_GROUP_USE_FOR_DENY_ONLY;
-			++deny_groups->GroupCount;
+		if ( !::InitializeSid( low_sid, &mandatory_authority, 1 ) ) {
+			return std::unexpected( fail_win( "InitializeSid", ::GetLastError( ) ) );
 		}
 
-		auto restricted = unique_handle{ nullptr };
+		*::GetSidSubAuthority( low_sid, 0 ) = SECURITY_MANDATORY_LOW_RID;
 
-		auto restrict_sids = SID_AND_ATTRIBUTES{ };
-		restrict_sids.Sid = logon_sid->Sid;
-		restrict_sids.Attributes = 0;
+		auto label = TOKEN_MANDATORY_LABEL{ };
+		label.Label.Sid = low_sid;
+		label.Label.Attributes = TOKEN_MANDATORY_POLICY_NO_WRITE_UP;
 
-		if ( !::CreateRestrictedToken( process_token.get( ), DISABLE_MAX_PRIVILEGE,
-			deny_groups->GroupCount, deny_groups->Groups,
-			0, nullptr,
-			1, &restrict_sids,
-			reinterpret_cast< PHANDLE >( &restricted ) ) ) {
-			return std::unexpected( fail_win( "CreateRestrictedToken", ::GetLastError( ) ) );
+		if ( !::SetTokenInformation( primary.get( ), TokenIntegrityLevel, &label,
+			sizeof( label ) + ::GetLengthSid( low_sid ) ) ) {
+			return std::unexpected( fail_win( "SetTokenInformation(TokenIntegrityLevel)",
+				::GetLastError( ) ) );
 		}
 
-		return result< unique_token_windows >{ unique_token_windows{ restricted.release( ) } };
+		return primary;
 #else
 		return std::unexpected( mcode::fail( mcode::errc::unsupported,
-			"the restricted token exists only on Windows" ) );
+			"the child token exists only on Windows" ) );
 #endif
 	}
 
@@ -240,128 +180,73 @@ namespace mcode::platform {
 #endif
 	}
 
-	auto sandbox_windows_denied_everywhere( const PSID sandbox_sid )
-		-> result< unique_descriptor_windows > {
+	namespace {
+
+		// Applies one mandatory label to one path.
+		[[nodiscard]] auto mark_integrity_level( const std::filesystem::path& path,
+			const wchar_t* sddl ) -> status {
 #if defined( _WIN32 )
-		if ( sandbox_sid == nullptr ) {
-			return std::unexpected( mcode::fail( mcode::errc::io,
-				"no sandbox SID for the boundary descriptor" ) );
-		}
+			auto* descriptor = PSECURITY_DESCRIPTOR{ nullptr };
 
-		const auto sddl = build_boundary_descriptor( sandbox_sid );
+			if ( !::ConvertStringSecurityDescriptorToSecurityDescriptorW( sddl,
+				SDDL_REVISION_1, &descriptor, nullptr ) ) {
+				return std::unexpected( fail_win( "ConvertStringSecurityDescriptorToSecurityDescriptor",
+					::GetLastError( ) ) );
+			}
 
-		if ( sddl.empty( ) ) {
-			return std::unexpected( fail_win( "ConvertSidToStringSidW", ::GetLastError( ) ) );
-		}
+			auto guard = unique_job_windows{ descriptor };
 
-		auto* descriptor = PSECURITY_DESCRIPTOR{ nullptr };
+			auto* sacl = PACL{ nullptr };
+			auto present = BOOL{ FALSE };
+			auto defaulted = BOOL{ FALSE };
 
-		if ( !::ConvertStringSecurityDescriptorToSecurityDescriptorW(
-			sddl.c_str( ), SDDL_REVISION_1, &descriptor, nullptr ) ) {
-			return std::unexpected( fail_win( "ConvertStringSecurityDescriptorToSecurityDescriptor",
-				::GetLastError( ) ) );
-		}
+			if ( !::GetSecurityDescriptorSacl( guard.get( ), &present, &sacl, &defaulted ) ||
+				!present || sacl == nullptr ) {
+				return std::unexpected( mcode::fail( mcode::errc::io,
+					"the label descriptor has no SACL: " + path.string( ) ) );
+			}
 
-		return unique_descriptor_windows{ descriptor };
+			const auto set = ::SetNamedSecurityInfoW(
+				const_cast< LPWSTR >( path.c_str( ) ), SE_FILE_OBJECT,
+				LABEL_SECURITY_INFORMATION,
+				nullptr, nullptr, nullptr, sacl );
+
+			if ( set != ERROR_SUCCESS ) {
+				return std::unexpected( fail_win( "SetNamedSecurityInfoW", set ) );
+			}
+
+			return { };
 #else
-		return std::unexpected( mcode::fail( mcode::errc::unsupported,
-			"the boundary descriptor exists only on Windows" ) );
+			return std::unexpected( mcode::fail( mcode::errc::unsupported,
+				"integrity labels exist only on Windows" ) );
 #endif
+		}
+
 	}
 
-	auto sandbox_windows_grant_write( const std::filesystem::path& root,
-		const void* sandbox_sid ) -> status {
+	auto sandbox_windows_mark_write_paths(
+		const std::vector< std::filesystem::path >& write_paths,
+		const std::vector< std::filesystem::path >& deny_paths ) -> status {
 #if defined( _WIN32 )
-		if ( sandbox_sid == nullptr ) {
-			return std::unexpected( mcode::fail( mcode::errc::io,
-				"no sandbox SID for the write grant" ) );
-		}
-
-		auto* sid = static_cast< PSID >( const_cast< void* >( sandbox_sid ) );
-
-		auto* existing = PSECURITY_DESCRIPTOR{ nullptr };
-
-		const auto query = ::GetNamedSecurityInfoW( root.c_str( ), SE_FILE_OBJECT,
-			DACL_SECURITY_INFORMATION, nullptr, nullptr,
-			reinterpret_cast< PACL* >( &existing ), nullptr, &existing );
-
-		if ( query != ERROR_SUCCESS || existing == nullptr ) {
-			return std::unexpected( fail_win( "GetNamedSecurityInfoW", query ) );
-		}
-
-		auto guard = unique_descriptor_windows{ existing };
-
-		ACL* dacl = nullptr;
-		auto present = BOOL{ FALSE };
-		auto defaulted = BOOL{ FALSE };
-
-		if ( !::GetSecurityDescriptorDacl( guard.get( ), &present, &dacl, &defaulted ) ||
-			!present || dacl == nullptr ) {
-			return std::unexpected( mcode::fail( mcode::errc::io,
-				"the write root has no DACL to extend: " + root.string( ) ) );
-		}
-
-		auto info = ACL_SIZE_INFORMATION{ };
-
-		if ( !::GetAclInformation( dacl, &info, sizeof( info ), AclSizeInformation ) ) {
-			return std::unexpected( fail_win( "GetAclInformation", ::GetLastError( ) ) );
-		}
-
-		const auto ace_bytes = sizeof( ACCESS_ALLOWED_ACE ) - sizeof( DWORD ) +
-			::GetLengthSid( sid );
-		const auto new_size = info.AclBytesInUse + ace_bytes + sizeof( DWORD );
-
-		auto new_dacl_buffer = std::vector< unsigned char >( new_size );
-
-		if ( !::InitializeAcl( reinterpret_cast< ACL* >( new_dacl_buffer.data( ) ),
-			static_cast< DWORD >( new_size ), ACL_REVISION_DS ) ) {
-			return std::unexpected( fail_win( "InitializeAcl", ::GetLastError( ) ) );
-		}
-
-		auto* new_dacl = reinterpret_cast< ACL* >( new_dacl_buffer.data( ) );
-
-		// The grant goes FIRST, ahead of the copied ACEs: the sandbox SID has no
-		// ACE in the root's DACL, so order decides, and the allow must win on
-		// the subtree the profile names.
-		if ( !::AddAccessAllowedAceEx( new_dacl, ACL_REVISION_DS,
-			CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE,
-			GENERIC_WRITE | GENERIC_READ | GENERIC_EXECUTE | DELETE,
-			sid ) ) {
-			return std::unexpected( fail_win( "AddAccessAllowedAceEx", ::GetLastError( ) ) );
-		}
-
-		for ( DWORD ace_index = 0; ace_index < info.AceCount; ++ace_index ) {
-			void* ace = nullptr;
-
-			if ( !::GetAce( dacl, ace_index, &ace ) ) {
-				return std::unexpected( fail_win( "GetAce", ::GetLastError( ) ) );
-			}
-
-			const auto* header = static_cast< const ACE_HEADER* >( ace );
-
-			if ( !::AddAce( new_dacl, ACL_REVISION_DS, MAXDWORD,
-				const_cast< LPVOID >( static_cast< const void* >( ace ) ),
-				header->AceSize ) ) {
-				return std::unexpected( fail_win( "AddAce", ::GetLastError( ) ) );
+		for ( const auto& path : write_paths ) {
+			if ( const auto marked = mark_integrity_level( path, LOW_IL_SDDL ); !marked ) {
+				return std::unexpected( marked.error( ) );
 			}
 		}
 
-		// The descriptor was only the vehicle for the original DACL; the new one
-		// is applied directly to the object. PROTECTED_DACL keeps the
-		// inheritable deny from the parent out of the way of the grant.
-		const auto set = ::SetNamedSecurityInfoW(
-			const_cast< LPWSTR >( root.c_str( ) ), SE_FILE_OBJECT,
-			DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-			nullptr, nullptr, new_dacl, nullptr );
-
-		if ( set != ERROR_SUCCESS ) {
-			return std::unexpected( fail_win( "SetNamedSecurityInfoW", set ) );
+		for ( const auto& path : deny_paths ) {
+			// Medium IL restores the default: a Low child is denied write-up,
+			// which is what the deny means. Marking High would also deny
+			// reads-by-registry tools; Medium denies exactly writes.
+			if ( const auto marked = mark_integrity_level( path, MEDIUM_IL_SDDL ); !marked ) {
+				return std::unexpected( marked.error( ) );
+			}
 		}
 
 		return { };
 #else
 		return std::unexpected( mcode::fail( mcode::errc::unsupported,
-			"the write grant exists only on Windows" ) );
+			"integrity labels exist only on Windows" ) );
 #endif
 	}
 

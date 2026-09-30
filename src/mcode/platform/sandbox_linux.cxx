@@ -26,13 +26,6 @@ namespace mcode::platform {
 	inline constexpr long SYSCALL_LANDLOCK_ADD_RULE = __NR_landlock_add_rule;
 	inline constexpr long SYSCALL_LANDLOCK_RESTRICT_SELF = __NR_landlock_restrict_self;
 
-	// The ABI ladder this code knows. A kernel reporting a version above
-	// LANDLOCK_ABI_MAX is handled: newer ABIs are supersets, so the newest
-	// known feature set is safe. A kernel reporting a version the code has
-	// never seen is NOT assumed -- it hard-fails, because "never seen" is
-	// exactly what a partial ruleset looks like from inside.
-	inline constexpr int LANDLOCK_ABI_MAX = 5;
-
 	// Filesystem rights per ABI, accumulated up the ladder. ABI 1 has no
 	// REFER, which means every cross-directory rename and link is denied
 	// under the ruleset; that is the documented cost of the oldest floor.

@@ -29,6 +29,21 @@ namespace mcode::platform {
 	// The ruleset fd from landlock_create_ruleset. Rules are added while it is
 	// open; restrict_self consumes it.
 	using unique_ruleset_linux = std::unique_ptr< int, ruleset_closer >;
+
+	// The ABI ladder this code knows. A kernel reporting a version above
+	// LANDLOCK_ABI_MAX is handled: newer ABIs are supersets, so the newest
+	// known feature set is applied. The cost of that choice is real and
+	// accepted here: a future ABI that ADDS a filesystem right this code does
+	// not know leaves that right unhandled, and unhandled means NOT
+	// RESTRICTED -- the sandbox is complete for every right the code knows
+	// and silently permissive for any it does not. A kernel reporting a
+	// version the code has never seen is NOT assumed -- it hard-fails, because
+	// "never seen" is exactly what a partial ruleset looks like from inside.
+	inline constexpr int LANDLOCK_ABI_MAX = 5;
+
+	// The first ABI that can express the network rights (NET_BIND_TCP /
+	// NET_CONNECT_TCP). Below it the seccomp filter is the network deny.
+	inline constexpr int LANDLOCK_NETWORK_ABI = 4;
 #endif
 
 	// A placeholder on other platforms so the declarations below parse; the

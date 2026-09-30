@@ -267,7 +267,8 @@ namespace mcode::cli {
 		out += "  --add-dir <path>       add an extra workspace root for this run\n";
 		out += "  --no-extensions        disable every extension\n";
 		out += "  --yolo                 skip approval prompts; the hard-deny floor and\n";
-		out += "                         permissions.deny still apply (no OS sandbox exists yet)\n";
+		out += "                         permissions.deny still apply; spawned commands run\n";
+		out += "                         under the OS sandbox where the platform supports it\n";
 		out += "  -v, --verbose          more diagnostics on stderr\n";
 		out += "\nexit codes:\n";
 		out += "  0 completed   1 verification failed   2 usage error\n";

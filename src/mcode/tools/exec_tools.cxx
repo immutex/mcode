@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "mcode/perm/argv.hxx"
+#include "mcode/platform/seams.hxx"
 #include "mcode/proc/process.hxx"
 #include "mcode/tools/errors.hxx"
 #include "mcode/tools/truncate.hxx"
@@ -179,6 +180,30 @@ namespace mcode::tools {
 		options.timeout = std::chrono::milliseconds{ timeout_ms };
 		options.scrub_environment = true;
 
+		// The profile: read and write the workspace and the temp directory,
+		// nothing else, no network. The OS boundary is what makes an
+		// auto-allowed exec safe; the permission engine is a gate, not
+		// isolation. The platform reports what it can actually enforce, and a
+		// refusal to apply is loud rather than a silent downgrade to the
+		// engine alone.
+		auto profile = platform::sandbox_profile{ };
+		profile.read_paths.push_back( context.space->root( ) );
+		profile.write_paths.push_back( context.space->root( ) );
+
+		// The protected subtrees. The write grant on the workspace root would
+		// otherwise cover them, and the harness's own rule is that no actor
+		// but the harness writes .git or .mcode.
+		profile.deny_paths.push_back( context.space->root( ) / ".git" );
+		profile.deny_paths.push_back( context.space->root( ) / ".mcode" );
+
+		if ( const auto temp = platform::temp_directory( ) ) {
+			profile.read_paths.push_back( *temp );
+			profile.write_paths.push_back( *temp );
+		}
+
+		profile.allow_network = false;
+		options.sandbox = &profile;
+
 		const auto program_path = find_executable( tokens->front( ) );
 
 		if ( !program_path ) {
@@ -194,7 +219,9 @@ namespace mcode::tools {
 
 		if ( !outcome ) {
 			return error_result( "failed to spawn: " + outcome.error( ).msg,
-				"check the command exists on PATH; the spawn itself failed, not the command",
+				"check the command exists on PATH; the spawn itself failed, not the command -- "
+				"if the message names the sandbox, the platform refused the profile and the run "
+				"proceeds with the permission engine alone",
 				false );
 		}
 

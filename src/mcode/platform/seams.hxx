@@ -57,9 +57,10 @@ namespace mcode::platform {
 		// Nothing is enforced on this platform or runtime. Callers must fail
 		// closed rather than assume isolation.
 		unavailable,
-		// Filesystem confinement (read_paths / write_paths) is enforced.
-		// Egress denial is NOT claimed here even when the platform could do
-		// it; sandbox_network_level owns that answer.
+		// The child cannot write outside write_paths (and deny_paths). Reads
+		// are NOT confined. Windows integrity levels provide exactly this.
+		write_boundary,
+		// Reads and writes are both confined to the profile's paths.
 		filesystem,
 		// Filesystem confinement and egress denial are both enforced, and the
 		// two answers agree that they are.
@@ -78,12 +79,41 @@ namespace mcode::platform {
 	struct sandbox_profile {
 		std::vector< std::filesystem::path > read_paths;
 		std::vector< std::filesystem::path > write_paths;
+
+		// Subtrees inside the write paths that stay denied. The deny is
+		// explicit because a grant on a parent directory covers the whole
+		// subtree: without this, a workspace write grant would include .git.
+		std::vector< std::filesystem::path > deny_paths;
+
 		bool allow_network = false;
 	};
 
 	[[nodiscard]] auto sandbox_capability_level( ) noexcept -> sandbox_capability;
 	[[nodiscard]] auto sandbox_network_level( ) noexcept -> sandbox_network_support;
 	[[nodiscard]] auto sandbox_mechanism( ) noexcept -> std::string_view;
+
+	[[nodiscard]] constexpr auto to_string( const sandbox_capability value ) noexcept
+		-> std::string_view {
+		switch ( value ) {
+			case sandbox_capability::unavailable: return "unavailable";
+			case sandbox_capability::write_boundary: return "write-boundary";
+			case sandbox_capability::filesystem: return "filesystem";
+			case sandbox_capability::full: return "full";
+		}
+
+		return "unavailable";
+	}
+
+	[[nodiscard]] constexpr auto to_string( const sandbox_network_support value ) noexcept
+		-> std::string_view {
+		switch ( value ) {
+			case sandbox_network_support::unavailable: return "unavailable";
+			case sandbox_network_support::best_effort: return "best-effort";
+			case sandbox_network_support::enforced: return "enforced";
+		}
+
+		return "unavailable";
+	}
 
 	// Applies the profile to the current process, or to a child at spawn time.
 	[[nodiscard]] auto apply_sandbox( const sandbox_profile& profile ) -> status;
