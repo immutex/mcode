@@ -283,9 +283,12 @@ namespace mcode {
 					process::process_stdio{ in, out.pipe, err.pipe }, environment );
 			}
 #else
-			auto child = process::process{ context, options.executable, options.args,
+			// An optional, like the Windows branch: the drain loop below is
+			// shared and reaches the child through `child->`.
+			auto child = std::optional< process::process >{ };
+			child.emplace( context, options.executable, options.args,
 				process::process_stdio{ in, out.pipe, err.pipe }, environment,
-				sandbox_initializer( sandbox_state, options.sandbox ) };
+				sandbox_initializer( sandbox_state, options.sandbox ) );
 #endif
 
 #if defined( _WIN32 )

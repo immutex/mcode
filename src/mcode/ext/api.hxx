@@ -89,7 +89,10 @@ namespace mcode::ext {
 			tool_registry& registry;
 			model::provider_registry& providers;
 			hook_registry& hooks;
-			const manifest& details;
+			// Qualified: `api_surface::manifest()` puts that name in the
+			// enclosing class scope, and GCC rejects an unqualified use of the
+			// type before the accessor is declared (-Wchanges-meaning).
+			const mcode::ext::manifest& details;
 
 			// The discovered skills, for `mcode.skill.read` / `mcode.skill.list`.
 			// Null when discovery did not run; the entries then read as empty.
