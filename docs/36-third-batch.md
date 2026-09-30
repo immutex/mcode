@@ -50,7 +50,7 @@ Three testable properties, one per slice:
    `extensions/mcode.d.luau` either works or is not declared. An extension can
    register a command, schedule a timer, read config, read and write a file,
    and snapshot the session — without recompiling the harness.
-3. **The sandbox is not a claim.** `sandbox_support_level()` reports what this
+3. **The sandbox is not a claim.** `sandbox_capability_level()` reports what this
    machine actually enforces, `apply_sandbox` restricts a spawned child on all
    three platforms, and the help text, the README and the seam all agree.
 
@@ -98,7 +98,7 @@ rather than indicative.
 | `extensions/mcode.d.luau` | B | the declaration file must match the surface exactly |
 | `tests/test_api_*.cxx` | B | |
 | `src/mcode/platform/sandbox_{windows,linux,macos}.cxx` | C | |
-| `src/mcode/platform/seams.{hxx,cxx}` | C | `apply_sandbox`, `sandbox_support_level`, `sandbox_mechanism` |
+| `src/mcode/platform/seams.{hxx,cxx}` | C | `apply_sandbox`, `sandbox_capability_level`, `sandbox_network_level`, `sandbox_mechanism` |
 | `src/mcode/proc/**` | C | spawn with a profile applied |
 | `src/mcode/tools/exec_tools.cxx` | C | the sandboxed exec path |
 | `tests/test_sandbox.cxx` | C | |
@@ -161,7 +161,7 @@ Plus the three properties from the requirement, each asserted:
 |---|---|
 | A conversation is possible | The REPL runs two turns in one process, history intact, and a follow-up sees the first turn's tool results |
 | The declared surface is real | A test walks `mcode.d.luau`'s declarations and fails if any is missing from `ENTRIES` — the check that would have caught the 13-entry gap |
-| The sandbox is not a claim | `sandbox_support_level()` matches what a probe actually observes: a denied write is denied, an allowed write succeeds |
+| The sandbox is not a claim | `sandbox_capability_level()` matches what a probe actually observes: a denied write is denied, an allowed write succeeds |
 
 That second row is the one to build first. It is the only mechanical defence
 against the failure mode this batch exists to fix, and it is cheap.
@@ -193,7 +193,7 @@ Stated so it is not mistaken for an oversight:
 | A renderer cannot be verified without a terminal | Silent breakage | Render to a buffer, assert on the emitted ANSI byte stream, and keep a `--render-to` debug flag so the output is diffable in CI |
 | Linux and macOS sandbox code cannot be run on the build machine | Shipping unverified code | C implements Windows first and fully verifies it; Linux and macOS are compile-verified by the gate and CI-run, and C reports explicitly what it could not execute |
 | Landlock ABI detection is mandatory, not optional | A wrong ABI silently no-ops | Runtime detection with a hard failure when the kernel reports an ABI the code does not handle; never assume |
-| Seatbelt has no supported replacement and profiles are easy to make escapable | A false security claim | `(deny default)` only; `sandbox_support_level()` reports the truth and the seam already fails closed |
+| Seatbelt has no supported replacement and profiles are easy to make escapable | A false security claim | `(deny default)` only; `sandbox_capability_level()` reports the truth and the seam already fails closed |
 | Three slices appending to two `CMakeLists.txt` | A merge conflict for no benefit | Append-only contiguous blocks, fixed anchor points, stated in every brief |
 | The declared-surface test is written last | The gap it guards reappears | It is the first thing B builds |
 

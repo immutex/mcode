@@ -265,7 +265,7 @@ trap, and today `--yolo` is exactly that, because the sandbox does not exist yet
 
 **This is not hypothetical — the shipped help text already makes the false
 claim.** `cli/exec.cxx:246` prints `--yolo  skip approval prompts (still
-sandboxed)`, while `platform/seams.cxx` reports `sandbox_support::unavailable`
+sandboxed)`, while `platform/seams.cxx` reports `sandbox_capability::unavailable`
 and `apply_sandbox` returns `unsupported` on all three platforms. So the binary
 tells the user a security property holds that does not. **Fixing that string is
 part of this slice, not a documentation nicety** — it is the one place the code

@@ -16,7 +16,7 @@ has been honest about the gap since the first batch:
 | Claim | Reality |
 |---|---|
 | `apply_sandbox( profile )` exists | Yes, and returns `unsupported` on all three platforms |
-| `sandbox_support_level()` reports honestly | Yes — it says `unavailable`, which is the one part that already works |
+| `sandbox_capability_level()` reports honestly | Yes — it says `unavailable`, which is the one part that already works |
 | `--yolo` still sandboxes | **It does not.** The help text said so until the second batch fixed the string |
 | A spawned command is confined | No. `bash` runs with the user's full rights |
 | Network egress is controlled | No. Nothing polices it |
@@ -62,7 +62,7 @@ a list, and a list is defeated by anything not on it.
 shape is sufficient and should not change. What changes is that the three
 `#if` branches stop returning `unsupported`.
 
-**`sandbox_support_level()` must keep telling the truth per platform and per
+**`sandbox_capability_level()` must keep telling the truth per platform and per
 runtime.** It is the only thing standing between a user and a false belief, and
 it already reports `unavailable`. After this slice it reports what is *actually
 enforced on this machine* — which is not a constant, because Landlock's ABI is
@@ -121,7 +121,7 @@ Per platform, scoped to the sandbox identity, denying by default when
 `allow_network` is false:
 
 - Windows: WFP filters scoped to the sandbox SID. **Needs admin to install** —
-  so `sandbox_support_level()` must report network denial as a *separate*
+  so `sandbox_capability_level()` must report network denial as a *separate*
   capability from filesystem confinement, because on Windows they have different
   privilege requirements. One enum cannot express "confined but reachable".
 - Linux: Landlock's network rules where the ABI supports them; otherwise a
@@ -136,7 +136,7 @@ false claim, and this slice exists to remove those.
 
 Three places must agree, and a test should assert the first two:
 
-1. `sandbox_support_level()` / `sandbox_mechanism()` — what is enforced
+1. `sandbox_capability_level()` / `sandbox_mechanism()` — what is enforced
 2. `--yolo`'s help text and `README` §Non-obvious constraints — what the flag
    means now that a sandbox exists
 3. The docs that describe the boundary
@@ -178,19 +178,24 @@ the enum rather than in a footnote.
 
 ## Acceptance
 
-- `sandbox_support_level()` and `sandbox_mechanism()` report what a **probe**
-  observes on each platform: a denied write is denied, an allowed write
-  succeeds. A capability claim with no probe behind it is the defect this slice
-  removes.
-- A spawned child cannot write outside the profile's `write_paths`.
-- A spawned child cannot read outside its `read_paths`.
+- `sandbox_capability_level()`, `sandbox_network_level()` and
+  `sandbox_mechanism()` report what a **probe** observes on each platform: a
+  denied write is denied, an allowed write succeeds. A capability claim with no
+  probe behind it is the defect this slice removes.
+- A spawned child cannot write outside the profile's `write_paths` — asserted
+  wherever the capability is above `unavailable`.
+- A spawned child cannot read outside its `read_paths` — asserted **only where
+  the capability claims `filesystem`**. Windows confines writes with integrity
+  levels, which have no read-down restriction, so it reports `write_boundary`
+  and the read assertion does not apply. The test asserts the capability first
+  and the behaviour that matches it.
 - `allow_network = false` blocks egress where the platform supports it, and the
   capability enum says so where it does not.
 - No child process survives the harness: kill the parent, assert the child is
   gone.
 - **Landlock ABI detection**: with a stubbed ABI the code does not know, the
   call hard-fails rather than applying a partial ruleset.
-- The `--yolo` help text, the README, and `sandbox_support_level()` agree —
+- The `--yolo` help text, the README, and `sandbox_capability_level()` agree —
   asserted, not reviewed.
 - On a platform where the sandbox is unavailable, the failure is **loud and
   named**, and the run proceeds with the permission engine alone rather than
