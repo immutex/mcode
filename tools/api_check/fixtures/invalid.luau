@@ -6,7 +6,7 @@
 
 mcode.tool.register({ name = 42 })
 mcode.fs.read(123)
-mcode.spawn({ "ls" }, { timeout_ms = "soon" })
+mcode.net.get(42)
 mcode.not_a_real_function()
 mcode.notify()
 local bad: string = mcode.api_version

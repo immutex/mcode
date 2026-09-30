@@ -18,17 +18,52 @@ namespace mcode::platform {
 
 #if defined( __linux__ )
 
-	struct ruleset_closer {
-		auto operator( )( int value ) const -> void {
-			if ( value >= 0 ) {
-				::close( value );
-			}
-		}
-	};
-
 	// The ruleset fd from landlock_create_ruleset. Rules are added while it is
 	// open; restrict_self consumes it.
-	using unique_ruleset_linux = std::unique_ptr< int, ruleset_closer >;
+	//
+	// A named type rather than a `unique_ptr<int>`: the fd is the value, not a
+	// pointer to one, and every consumer passes it straight to `syscall`, which
+	// takes an `int`. A `unique_ptr<int>` would also require its deleter to be
+	// invocable with an `int*`, which an fd-holding deleter is not.
+	class unique_ruleset_linux {
+	public:
+		unique_ruleset_linux( ) = default;
+
+		explicit unique_ruleset_linux( const int descriptor ) noexcept
+			: descriptor_( descriptor ) { }
+
+		~unique_ruleset_linux( ) {
+			if ( descriptor_ >= 0 ) {
+				::close( descriptor_ );
+			}
+		}
+
+		unique_ruleset_linux( const unique_ruleset_linux& ) = delete;
+		auto operator=( const unique_ruleset_linux& ) -> unique_ruleset_linux& = delete;
+
+		unique_ruleset_linux( unique_ruleset_linux&& other ) noexcept
+			: descriptor_( other.descriptor_ ) {
+			other.descriptor_ = -1;
+		}
+
+		auto operator=( unique_ruleset_linux&& other ) noexcept -> unique_ruleset_linux& {
+			if ( this != &other ) {
+				if ( descriptor_ >= 0 ) {
+					::close( descriptor_ );
+				}
+
+				descriptor_ = other.descriptor_;
+				other.descriptor_ = -1;
+			}
+
+			return *this;
+		}
+
+		[[nodiscard]] auto get( ) const noexcept -> int { return descriptor_; }
+
+	private:
+		int descriptor_ = -1;
+	};
 
 	// The ABI ladder this code knows. A kernel reporting a version above
 	// LANDLOCK_ABI_MAX is handled: newer ABIs are supersets, so the newest

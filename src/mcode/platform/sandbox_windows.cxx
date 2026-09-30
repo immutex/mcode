@@ -182,12 +182,13 @@ namespace mcode::platform {
 #endif
 	}
 
+#if defined( _WIN32 )
+
 	namespace {
 
 		// Applies one mandatory label to one path.
 		[[nodiscard]] auto mark_integrity_level( const std::filesystem::path& path,
 			const wchar_t* sddl ) -> status {
-#if defined( _WIN32 )
 			auto* descriptor = PSECURITY_DESCRIPTOR{ nullptr };
 
 			if ( !::ConvertStringSecurityDescriptorToSecurityDescriptorW( sddl,
@@ -218,17 +219,20 @@ namespace mcode::platform {
 			}
 
 			return { };
-#else
-			return std::unexpected( mcode::fail( mcode::errc::unsupported,
-				"integrity labels exist only on Windows" ) );
-#endif
 		}
 
 	}
 
+#endif
+
 	auto sandbox_windows_mark_write_paths(
 		const std::vector< std::filesystem::path >& write_paths,
 		const std::vector< std::filesystem::path >& deny_paths ) -> status {
+#if !defined( _WIN32 )
+		(void)write_paths;
+		(void)deny_paths;
+#endif
+
 #if defined( _WIN32 )
 		for ( const auto& path : write_paths ) {
 			if ( !std::filesystem::exists( path ) ) {
@@ -382,6 +386,18 @@ namespace mcode::platform {
 		const std::map< std::string, std::string, std::less<> >& environment,
 		const void* stdin_read, const void* stdout_write, const void* stderr_write,
 		void* job, const void* token ) -> result< sandbox_spawn_windows > {
+#if !defined( _WIN32 )
+		(void)executable;
+		(void)arguments;
+		(void)working_directory;
+		(void)environment;
+		(void)stdin_read;
+		(void)stdout_write;
+		(void)stderr_write;
+		(void)job;
+		(void)token;
+#endif
+
 #if defined( _WIN32 )
 		// The stdio handles the caller owns may have been consumed by an IOCP
 		// association that altered their inheritability. Duplicate them for

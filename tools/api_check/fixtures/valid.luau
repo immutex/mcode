@@ -11,21 +11,21 @@ local tool_id = mcode.tool.register({
 	description = "Show the working tree status",
 	schema = { type = "object", properties = {} },
 	run = function(args, context)
-		local result, err = mcode.spawn({ "git", "status", "--short" }, { timeout_ms = 5000 })
+		local status, err = mcode.fs.read("git-status.txt")
 
-		if not result then
+		if not status then
 			return nil, err
 		end
 
-		return result.stdout, nil
+		return status, nil
 	end,
 })
 
 mcode.cmd.register("gst", function(rest)
-	local result = mcode.spawn({ "git", "status" }, {})
+	local status = mcode.fs.read("git-status.txt")
 
-	if result then
-		mcode.notify(result.stdout, "info")
+	if status then
+		mcode.notify(status, "info")
 	end
 end, { description = "git status" })
 

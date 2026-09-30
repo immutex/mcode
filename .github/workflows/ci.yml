@@ -151,12 +151,15 @@ jobs:
       - name: Unit tests
         run: ctest --preset ${{ matrix.preset }} --output-on-failure
 
+      # The bare invocation starts the interactive session, so the self-check
+      # lives behind `--smoke`. Stdin is closed so a mistake here fails fast
+      # instead of hanging on a prompt.
       - name: Startup smoke test
         shell: bash
         run: |
           executable="build/Release/bin/mcode"
           [ -f "$executable" ] || executable="build/Release/bin/mcode.exe"
-          "$executable"
+          "$executable" --smoke < /dev/null
 
       # docs/26 E6/E7. Ten deterministic tasks against the fixture repo. No model
       # involved, so a failure is always a real regression rather than sampling

@@ -38,6 +38,18 @@ namespace mcode::platform {
 	// job terminates every process inside it.
 	using unique_job_windows = std::unique_ptr< void, handle_closer >;
 
+#endif
+
+	// A placeholder on other platforms so the declarations below parse: this
+	// file's translation unit is compiled everywhere, and the definitions are
+	// stubs returning `unsupported` off Windows. Never constructed anywhere.
+#if !defined( _WIN32 )
+	struct unique_job_windows_placeholder { };
+	using unique_job_windows = unique_job_windows_placeholder;
+#endif
+
+#if defined( _WIN32 )
+
 	// The attribute-list number for the Job. The Low IL token is NOT applied
 	// through the attribute list yet: nothing in the spawn path calls
 	// CreateProcessAsUserW, so the child currently receives the caller's full
