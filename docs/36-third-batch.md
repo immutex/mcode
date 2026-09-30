@@ -182,6 +182,16 @@ Shipped. The evidence, all run on Windows/MSVC:
 | `mcode.exe eval` | 10 passed, 0 failed |
 | `_clgate.py` | exit 0 |
 | binary / idle RSS | 8.25 MB / 13.4 MB (budgets: ≤25 MB, ≤30 MB) |
+| **CI: Linux GCC 14, macOS arm64, Windows MSVC** | **all green** |
+
+The POSIX legs are the ones worth noting. They were red for fifteen CI cycles
+after the Windows build was green, because `_clgate.py` compiles with `_WIN32`
+defined and this machine has no POSIX toolchain — every defect below the
+platform seam surfaced one run at a time. The last four were real product bugs
+that had never executed anywhere: `sandbox_init` receiving a profile as a
+filename, Seatbelt not resolving the `/private` symlinks, Landlock refusing a
+rule for a character device and failing the whole ruleset, and POSIX `exec` not
+searching `PATH`.
 
 ### What each workstream delivered
 
@@ -201,8 +211,9 @@ rather than comparing against a hand-copied array, and it passes empty.
 applied through `CreateProcessAsUserW` plus mandatory-label marking, and
 reports `write_boundary` — writes confined, reads not, because integrity levels
 have no read-down restriction. Linux (Landlock with mandatory ABI detection)
-and macOS (deny-default Seatbelt) are written and compile-checked only; CI is
-their executor.
+and macOS (deny-default Seatbelt) are **verified by CI on every push**: both
+legs run the full suite, so a POSIX regression fails the build rather than
+waiting for a release.
 
 ### Three places the plan was wrong
 

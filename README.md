@@ -566,6 +566,51 @@ code comments.
     because the check compared a stale copy against the implementation. The
     test now parses the `.luau` at test time.
 
+68. **The local gate compiles with `_WIN32` defined, so POSIX branches are never
+    parsed on this machine.** `_clgate.py` catches the whole warning set for the
+    Windows path and nothing at all for the others. There is no POSIX toolchain
+    here — WSL2 is the bare `docker-desktop` distro — so Linux and macOS defects
+    surface one CI cycle at a time, about 13 minutes each. Budget for it: this
+    batch spent roughly fifteen cycles on errors that a single `g++` run would
+    have listed at once. Writing the POSIX branch and believing it compiles is
+    not a plan.
+
+69. **`sandbox_init_with_parameters` takes the profile text only when flags are
+    zero.** Passing `SANDBOX_NAMED_EXTERNAL` (0x0003) declares the first
+    argument to be a *path to a profile file*, so the call tries to `open()` a
+    kilobyte of policy text as a filename and fails with `ENAMETOOLONG`. Every
+    macOS sandboxed spawn had been failing this way — Seatbelt had never applied
+    to a single child — and the launcher reported only "File name too long".
+
+70. **Seatbelt matches resolved paths, and `/dev` is a symlink to
+    `/private/dev`.** `(subpath "/dev")` does not cover `/dev/null`, whose real
+    path is `/private/dev/null`, so a shell could not open a redirect target and
+    `bash` failed. `/etc` and `/tmp` have the same shape.
+
+71. **A Landlock path-beneath rule cannot be added for a character device.**
+    Granting write on `/dev/null` is refused, and the refusal fails the whole
+    ruleset rather than that one rule — so every sandboxed command stopped
+    spawning, not just the ones touching `/dev/null`. Read on `/dev` is fine and
+    is what `grep x /dev/null` needs; write on a device has to be a different
+    mechanism.
+
+72. **A Landlock profile that grants only the workspace cannot execute
+    anything.** `LANDLOCK_ACCESS_FS_EXECUTE` is handled, so an ungranted
+    `/bin/sh` is denied and the spawn fails. The platform layer grants
+    read+execute on the system roots (`/usr`, `/bin`, `/sbin`, `/lib`, `/lib64`,
+    `/etc`, `/dev`) because that is what any process needs to load and run, and
+    `exec_tools` should not have to know it.
+
+73. **POSIX `exec` does not search `PATH`.** A bare `"sh"` fails with `ENOENT`
+    even when a shell exists; Windows `CreateProcess` does search, which hides
+    the difference on one platform. Resolve the executable before spawning.
+
+74. **`apply_sandbox` restricts the calling process, irreversibly.** Neither
+    Landlock nor Seatbelt can be undone, so a test that calls it in-process
+    sandboxes its own runner and every later assertion fails on a denied
+    `getcwd`. Enforcement belongs on the spawn path; `test_config_and_platform`
+    asserts only the capability and mechanism.
+
 ## Building
 
 ```bash
