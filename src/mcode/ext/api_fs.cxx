@@ -1,0 +1,162 @@
+#include "mcode/ext/api_fs.hxx"
+
+#include "lua.h"
+
+#include "mcode/ext/api_gate.hxx"
+#include "mcode/ext/api_internal.hxx"
+#include "mcode/support/json.hxx"
+#include "mcode/tools/file_tools.hxx"
+#include "mcode/tools/tool_args.hxx"
+
+namespace mcode::ext {
+
+	namespace {
+
+		// `handle_read` returns a JSON result object on success and the error
+		// contract (`ok:false`) on failure. The extension API returns plain
+		// values, so the JSON is decoded here: `read` yields the rendered text,
+		// `write` yields its receipt. Both failures surface as `nil, err`.
+		[[nodiscard]] auto result_field( const std::string& rendered,
+			const char* key ) -> std::optional< std::string >;
+
+	}
+
+	auto handle_fs_read( lua_State* state ) -> int {
+		auto* self = surface_from( state );
+
+		if ( lua_type( state, 1 ) != LUA_TSTRING ) {
+			lua_pushliteral( state, "mcode.fs.read expects a path string" );
+			lua_error( state );
+		}
+
+		if ( !manifest_allows( *self, "fs_read" ) ) {
+			return deny_permission( state, "fs_read", "mcode.fs.read" );
+		}
+
+		auto length = std::size_t{ 0 };
+		const auto* text = lua_tolstring( state, 1, &length );
+		const auto path = std::string{ text != nullptr ? text : "", length };
+
+		auto arguments = std::string{ "{\"path\":" };
+		mcode::json::append_escaped( arguments, path );
+		arguments += "}";
+
+		auto parsed = mcode::tools::tool_args::parse( arguments );
+
+		if ( !parsed ) {
+			lua_pushnil( state );
+			lua_pushlstring( state, parsed.error( ).msg.data( ), parsed.error( ).msg.size( ) );
+
+			return 2;
+		}
+
+		auto outcome = self->file_context( )
+			? mcode::tools::handle_read( *parsed, *self->file_context( ) )
+			: std::unexpected( mcode::fail( mcode::errc::config,
+				"no file context was installed with this surface" ) );
+
+		if ( !outcome ) {
+			lua_pushnil( state );
+			lua_pushlstring( state, outcome.error( ).msg.data( ), outcome.error( ).msg.size( ) );
+
+			return 2;
+		}
+
+		const auto body = result_field( *outcome, "text" );
+
+		if ( !body ) {
+			lua_pushnil( state );
+			lua_pushliteral( state, "the read result carried no text" );
+
+			return 2;
+		}
+
+		lua_pushlstring( state, body->data( ), body->size( ) );
+
+		return 1;
+	}
+
+	auto handle_fs_write( lua_State* state ) -> int {
+		auto* self = surface_from( state );
+
+		if ( lua_type( state, 1 ) != LUA_TSTRING ) {
+			lua_pushliteral( state, "mcode.fs.write expects a path string" );
+			lua_error( state );
+		}
+
+		if ( lua_type( state, 2 ) != LUA_TSTRING ) {
+			lua_pushliteral( state, "mcode.fs.write expects content as a string" );
+			lua_error( state );
+		}
+
+		if ( !manifest_allows( *self, "fs_write" ) ) {
+			return deny_permission( state, "fs_write", "mcode.fs.write" );
+		}
+
+		auto length = std::size_t{ 0 };
+		const auto* path_text = lua_tolstring( state, 1, &length );
+		const auto path = std::string{ path_text != nullptr ? path_text : "", length };
+
+		length = 0;
+		const auto* data_text = lua_tolstring( state, 2, &length );
+		const auto data = std::string{ data_text != nullptr ? data_text : "", length };
+
+		auto arguments = std::string{ "{\"path\":" };
+		mcode::json::append_escaped( arguments, path );
+		arguments += ",\"content\":";
+
+		mcode::json::append_escaped( arguments, data );
+		arguments += "}";
+
+		auto parsed = mcode::tools::tool_args::parse( arguments );
+
+		if ( !parsed ) {
+			lua_pushnil( state );
+			lua_pushlstring( state, parsed.error( ).msg.data( ), parsed.error( ).msg.size( ) );
+
+			return 2;
+		}
+
+		auto outcome = self->file_context( )
+			? mcode::tools::handle_write( *parsed, *self->file_context( ) )
+			: std::unexpected( mcode::fail( mcode::errc::config,
+				"no file context was installed with this surface" ) );
+
+		if ( !outcome ) {
+			lua_pushnil( state );
+			lua_pushlstring( state, outcome.error( ).msg.data( ), outcome.error( ).msg.size( ) );
+
+			return 2;
+		}
+
+		lua_pushboolean( state, 1 );
+
+		return 1;
+	}
+
+}
+
+namespace mcode::ext {
+
+	namespace {
+
+		auto result_field( const std::string& rendered, const char* key )
+			-> std::optional< std::string > {
+			auto parsed = mcode::json::document::parse( rendered );
+
+			if ( !parsed ) {
+				return std::nullopt;
+			}
+
+			auto value = parsed->get_string( key );
+
+			if ( !value ) {
+				return std::nullopt;
+			}
+
+			return *value;
+		}
+
+	}
+
+}

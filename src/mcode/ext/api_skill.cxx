@@ -2,6 +2,7 @@
 #include "mcode/ext/api_internal.hxx"
 
 #include <algorithm>
+#include <filesystem>
 
 #include "lua.h"
 
@@ -96,6 +97,79 @@ namespace mcode::ext {
 		}
 
 		return 1;
+	}
+
+	auto api_surface::handle_skill_register( lua_State* state ) -> int {
+		auto* self = surface_from( state );
+
+		if ( lua_type( state, 1 ) != LUA_TTABLE ) {
+			lua_pushliteral( state, "mcode.skill.register expects a definition table" );
+			lua_error( state );
+		}
+
+		const auto definition = lua_absindex( state, 1 );
+
+		auto entry = mcode::skills::skill_entry{ };
+		entry.name = read_field_string( state, definition, "name" );
+		entry.description = read_field_string( state, definition, "description" );
+		entry.origin = mcode::skills::skill_origin::extension;
+
+		auto length = std::size_t{ 0 };
+		lua_getfield( state, definition, "body" );
+
+		if ( lua_type( state, -1 ) == LUA_TSTRING ) {
+			const auto* text = lua_tolstring( state, -1, &length );
+			entry.file = std::filesystem::path{ std::string_view{ text != nullptr ? text : "",
+				length } };
+		}
+
+		lua_pop( state, 1 );
+
+		if ( entry.name.empty( ) || entry.description.empty( ) || entry.file.empty( ) ) {
+			lua_pushnil( state );
+			lua_pushliteral( state,
+				"a skill definition needs a name, a description and a body" );
+
+			return 2;
+		}
+
+		// A name collision with a discovered skill is refused, not overwritten:
+		// discovery precedence is project-first, and an extension must not shadow
+		// what the user already has.
+		const auto& discovered = skills_of( *self );
+
+		const auto collides = std::find_if( discovered.begin( ), discovered.end( ),
+			[ & ]( const mcode::skills::skill_entry& other ) {
+				return other.name == entry.name;
+			} );
+
+		if ( collides != discovered.end( ) ) {
+			lua_pushnil( state );
+			lua_pushliteral( state, "a skill with that name already exists" );
+
+			return 2;
+		}
+
+		if ( self->skill_sink( ) == nullptr ) {
+			lua_pushnil( state );
+			lua_pushliteral( state, "no skill sink was installed with this surface" );
+
+			return 2;
+		}
+
+		const auto body = std::string_view{ entry.file.string( ) };
+
+		if ( const auto registered = ( *self->skill_sink( ) )( entry, body ); !registered ) {
+			lua_pushnil( state );
+			lua_pushlstring( state, registered.error( ).msg.data( ),
+				registered.error( ).msg.size( ) );
+
+			return 2;
+		} else {
+			lua_pushinteger( state, static_cast< lua_Integer >( *registered ) );
+
+			return 1;
+		}
 	}
 
 }

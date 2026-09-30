@@ -1,6 +1,15 @@
 #include "mcode/ext/api.hxx"
+#include "mcode/ext/api_cfg.hxx"
+#include "mcode/ext/api_cmd.hxx"
+#include "mcode/ext/api_context.hxx"
+#include "mcode/ext/api_fs.hxx"
 #include "mcode/ext/api_internal.hxx"
+#include "mcode/ext/api_net.hxx"
+#include "mcode/ext/api_timer.hxx"
+#include "mcode/ext/defer.hxx"
+#include "mcode/ext/notify.hxx"
 
+#include <chrono>
 #include <cstdio>
 #include <string>
 #include <utility>
@@ -478,8 +487,64 @@ namespace mcode::ext {
 			return surface_from( state )->handle_skill_list( state );
 		}
 
+		auto lua_skill_register( lua_State* state ) -> int {
+			return surface_from( state )->handle_skill_register( state );
+		}
+
 		auto lua_mcp_register( lua_State* state ) -> int {
 			return surface_from( state )->handle_mcp_register( state );
+		}
+
+		auto lua_fs_read( lua_State* state ) -> int {
+			return handle_fs_read( state );
+		}
+
+		auto lua_fs_write( lua_State* state ) -> int {
+			return handle_fs_write( state );
+		}
+
+		auto lua_cfg_get( lua_State* state ) -> int {
+			return handle_cfg_get( state );
+		}
+
+		auto lua_session_snapshot( lua_State* state ) -> int {
+			return handle_session_snapshot( state );
+		}
+
+		auto lua_session_fork( lua_State* state ) -> int {
+			return handle_session_fork( state );
+		}
+
+		auto lua_defer( lua_State* state ) -> int {
+			return handle_defer( state );
+		}
+
+		auto lua_notify( lua_State* state ) -> int {
+			return handle_notify( state );
+		}
+
+		auto lua_net_get( lua_State* state ) -> int {
+			return handle_net_get( state );
+		}
+
+		auto lua_net_search( lua_State* state ) -> int {
+			return handle_net_search( state );
+		}
+
+		auto lua_context_add_instructions( lua_State* state ) -> int {
+			return handle_context_add_instructions( state );
+		}
+
+		auto lua_cmd_register( lua_State* state ) -> int {
+			return handle_cmd_register( state );
+		}
+
+		auto lua_timer_at( lua_State* state ) -> int {
+			return handle_timer_at( state );
+		}
+
+		auto lua_timer_every( lua_State* state ) -> int {
+			return handle_timer_every( state );
 		}
 
 	}
@@ -494,6 +559,74 @@ namespace mcode::ext {
 		manifest_ = request.details;
 		skills_ = request.skills;
 		servers_ = request.servers;
+		config_ = request.config;
+		commands_ = request.commands;
+
+		if ( request.session_state ) {
+			session_state_ = std::make_unique<
+				std::function< mcode::ext::session_state( ) > >(
+				*request.session_state );
+		}
+
+		if ( request.session_forker ) {
+			session_forker_ = std::make_unique<
+				std::function< result< mcode::ext::fork_result >( std::uint64_t,
+					const std::string& ) > >( *request.session_forker );
+		}
+
+		// The manifest's declared net hosts, copied at install so the check
+		// reads a snapshot rather than re-parsing the manifest per call.
+		// Declared in the manifest as `net_hosts = ["host", ...]`.
+		net_hosts_ = request.net_hosts;
+		http_client_ = request.http_client;
+
+		if ( request.web_searcher ) {
+			web_searcher_ = std::make_unique<
+				std::function< mcode::ext::search_result( const std::string& ) > >(
+				*request.web_searcher );
+		}
+
+		if ( request.notifier ) {
+			notifier_ = std::make_unique<
+				std::function< void( const std::string&, const std::string&,
+					const std::string& ) > >( *request.notifier );
+		}
+
+		if ( request.deferred ) {
+			deferred_ = std::make_unique< std::vector< int > >( *request.deferred );
+		}
+
+		if ( request.instruction_sink ) {
+			instruction_sink_ = std::make_unique<
+				std::function< void( const std::string&, const std::string& ) > >(
+				*request.instruction_sink );
+		}
+
+		if ( request.skill_sink ) {
+			skill_sink_ = std::make_unique<
+				std::function< result< std::uint64_t >( const mcode::skills::skill_entry&,
+					std::string_view ) > >( *request.skill_sink );
+		}
+
+		// The timer pump runs the closures through this surface's own VM, on
+		// whatever thread the host's loop pumps from. One registry per surface:
+		// when the surface dies the timers die with it.
+		timers_ = std::make_unique< timer_registry >(
+			[ this ]( ) { pump_timers_once( ); } );
+
+		// The file context is assembled here, from the borrowed pointers the
+		// request carries, so `fs.read` / `fs.write` dispatch through the same
+		// tool handlers the model's own calls use.
+		if ( request.files != nullptr ) {
+			auto context = std::make_unique< tools::tool_context >( );
+			context->space = request.files;
+			context->reads = request.file_reads;
+			context->permissions = request.file_permissions;
+			context->run_id = "ext-" + request.details.name;
+			context->headless = true;
+
+			file_context_ = std::move( context );
+		}
 
 		// Identity first: `mcode.ext.name` is read by tools and by the log prefix,
 		// and the definition file declares it as a field rather than a call.
@@ -523,7 +656,21 @@ namespace mcode::ext {
 			{ "log.error", lua_log_error },
 			{ "skill.read", lua_skill_read },
 			{ "skill.list", lua_skill_list },
+			{ "skill.register", lua_skill_register },
 			{ "mcp.register", lua_mcp_register },
+			{ "fs.read", lua_fs_read },
+			{ "fs.write", lua_fs_write },
+			{ "cfg.get", lua_cfg_get },
+			{ "cmd.register", lua_cmd_register },
+			{ "timer.at", lua_timer_at },
+			{ "timer.every", lua_timer_every },
+			{ "session.snapshot", lua_session_snapshot },
+			{ "session.fork", lua_session_fork },
+			{ "defer", lua_defer },
+			{ "notify", lua_notify },
+			{ "net.get", lua_net_get },
+			{ "net.search", lua_net_search },
+			{ "context.add_instructions", lua_context_add_instructions },
 		};
 
 		for ( const auto& entry : ENTRIES ) {

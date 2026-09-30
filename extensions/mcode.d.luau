@@ -136,21 +136,17 @@ declare mcode: {
 		fork: (at_seq: number, label: string) -> (number?, string?),
 	},
 
-	-- Runs a subprocess. Requires the `spawn` permission.
-	-- Bounded by `opts.timeout_ms`; the child is killed on expiry.
-	spawn: (argv: { string }, opts: {
-		cwd: string?,
-		timeout_ms: number?,
-		stdin: string?,
-	}) -> ({
-		exit_code: number,
-		stdout: string,
-		stderr: string,
-		timed_out: boolean,
-	}?, string?),
+	-- Deliberately absent: `spawn`. It is a manifest PERMISSION, not a declared
+	-- function: `bash` and `cmd` cover the need, and a raw process-spawn API is
+	-- a separate decision with its own security surface. A declared-and-absent
+	-- name is the failure the surface test exists to fix, so it is removed
+	-- rather than left as an aspiration.
 
 	net: {
-		-- Gated HTTP through the egress proxy. Requires the `net` permission.
+		-- API-level host allowlist: an extension may reach only the hosts its
+		-- manifest declares. This is NOT the M6 egress proxy -- that is a
+		-- process-level control; this is a policy on what extension code may
+		-- ask for. Requires the `net` permission.
 		get: (url: string, opts: {
 			headers: { [string]: string }?,
 			timeout_ms: number?,

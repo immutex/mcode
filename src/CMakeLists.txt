@@ -63,6 +63,10 @@ add_library(mcode_core STATIC
     mcode/ext/api_cmd.cxx
     mcode/ext/api_timer.cxx
     mcode/ext/api_session.cxx
+    mcode/ext/api_net.cxx
+    mcode/ext/api_context.cxx
+    mcode/ext/defer.cxx
+    mcode/ext/notify.cxx
     mcode/ext/loader.cxx
     mcode/ext/lua_json.cxx
     mcode/ext/manifest.cxx

@@ -17,6 +17,8 @@
 #include "mcode/skills/discovery.hxx"
 #include "mcode/ext/lua_host.hxx"
 #include "mcode/ext/manifest.hxx"
+#include "mcode/support/config.hxx"
+#include "mcode/tools/session_reads.hxx"
 
 namespace mcode::ext {
 
@@ -138,11 +140,27 @@ namespace mcode::ext {
 	// declares through `mcode.mcp.register`. The host process owns it and must
 	// outlive every loaded extension, for the same reason the skills report does.
 	//
+	// The merged config, when given, backs `mcode.cfg.get`. The workspace and
+	// its read-recording and permission collaborators, when given, are what
+	// `fs.read` / `fs.write` dispatch through -- the same handlers the model's
+	// own file tools run, so a null here is reported rather than worked around.
+	// All of these are borrowed and must outlive every loaded extension.
+	//
 	// Providers and hooks arrive per call, because the caller owns them and a
 	// second reference would be a second source of truth.
+	struct register_context {
+		const skills::discovery_report* skills = nullptr;
+		mcp_server_store* servers = nullptr;
+		const mcode::config::merged_config* config = nullptr;
+		// Non-const: the file-tool context the `fs.*` entries build holds a
+		// mutable workspace, and the loader hands this straight through.
+		mcode::workspace* space = nullptr;
+		tools::session_reads* reads = nullptr;
+		perm::permission_engine* permissions = nullptr;
+	};
+
 	[[nodiscard]] auto default_register_api( tool_registry& registry,
-		const skills::discovery_report* skills = nullptr,
-		mcp_server_store* servers = nullptr )
+		const register_context& context = { } )
 		-> std::function< status( const registration& ) >;
 
 	// The extension roots, in precedence order: project, then user. Project
