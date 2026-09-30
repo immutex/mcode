@@ -1,5 +1,7 @@
 #include "mcode/platform/sandbox_windows.hxx"
 
+#include <atomic>
+#include <map>
 #include <string>
 #include <utility>
 
@@ -229,12 +231,25 @@ namespace mcode::platform {
 		const std::vector< std::filesystem::path >& deny_paths ) -> status {
 #if defined( _WIN32 )
 		for ( const auto& path : write_paths ) {
+			if ( !std::filesystem::exists( path ) ) {
+				continue;
+			}
+
 			if ( const auto marked = mark_integrity_level( path, LOW_IL_SDDL ); !marked ) {
 				return std::unexpected( marked.error( ) );
 			}
 		}
 
 		for ( const auto& path : deny_paths ) {
+			if ( !std::filesystem::exists( path ) ) {
+				// A protected path that does not exist cannot be labelled, and
+				// a Low-IL child can therefore create it. That is a narrower
+				// hole than failing every spawn: the engine still gates the
+				// command, and a directory that does not exist has no contents
+				// to corrupt.
+				continue;
+			}
+
 			// Medium IL restores the default: a Low child is denied write-up,
 			// which is what the deny means. Marking High would also deny
 			// reads-by-registry tools; Medium denies exactly writes.
@@ -247,6 +262,240 @@ namespace mcode::platform {
 #else
 		return std::unexpected( mcode::fail( mcode::errc::unsupported,
 			"integrity labels exist only on Windows" ) );
+#endif
+	}
+
+	auto sandbox_windows_make_pipes( ) -> result< sandbox_raw_pipes > {
+#if defined( _WIN32 )
+		auto security = SECURITY_ATTRIBUTES{ };
+		security.nLength = sizeof( security );
+		security.bInheritHandle = TRUE;
+		security.lpSecurityDescriptor = nullptr;
+
+		// Anonymous pipes cannot carry FILE_FLAG_OVERLAPPED, and the IOCP
+		// handle service refuses a synchronous handle. Named pipes with the
+		// overlapped flag on the parent ends are the documented equivalent.
+		constexpr DWORD PIPE_BUFFER_BYTES = 0;
+
+		// A per-call name: a fixed name collides with the previous spawn's
+		// still-open handles, and "all pipe instances are busy" is the result.
+		static std::atomic< std::uint64_t > pipe_sequence{ 0 };
+		const auto sequence = pipe_sequence.fetch_add( 1 );
+
+		auto pipe_name = [ & ]( const wchar_t* suffix ) -> std::wstring {
+			return std::wstring{ L"\\\\.\\pipe\\mcode-sandbox-" }
+				+ std::to_wstring( ::GetCurrentProcessId( ) ) + L"-"
+				+ std::to_wstring( sequence ) + suffix;
+		};
+
+		auto make_pair = [ & ]( const bool child_end_inheritable,
+			const std::wstring& name ) -> result< std::pair< HANDLE, HANDLE > > {
+			const auto direction = child_end_inheritable
+				? PIPE_ACCESS_INBOUND
+				: PIPE_ACCESS_OUTBOUND;
+
+			auto server = ::CreateNamedPipeW( name.c_str( ),
+				direction | FILE_FLAG_OVERLAPPED,
+				PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+				1, PIPE_BUFFER_BYTES, PIPE_BUFFER_BYTES, DWORD{ 0 }, &security );
+
+			if ( server == INVALID_HANDLE_VALUE ) {
+				return std::unexpected( fail_win( "CreateNamedPipeW",
+					::GetLastError( ) ) );
+			}
+
+			const auto access = child_end_inheritable
+				? GENERIC_WRITE
+				: GENERIC_READ;
+
+			auto client = ::CreateFileW( name.c_str( ), access, 0, &security,
+				OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr );
+
+			if ( client == INVALID_HANDLE_VALUE ) {
+				const auto error = ::GetLastError( );
+				::CloseHandle( server );
+				return std::unexpected( fail_win( "CreateFileW(pipe)", error ) );
+			}
+
+			// The end the CHILD uses must be inheritable; the parent's end
+			// must not be, so the child cannot wait on itself.
+			const auto child_end = child_end_inheritable ? server : client;
+			const auto parent_end = child_end_inheritable ? client : server;
+
+			if ( !::SetHandleInformation( child_end, HANDLE_FLAG_INHERIT,
+				HANDLE_FLAG_INHERIT ) ) {
+				return std::unexpected( fail_win( "SetHandleInformation",
+					::GetLastError( ) ) );
+			}
+
+			if ( !::SetHandleInformation( parent_end, HANDLE_FLAG_INHERIT, 0 ) ) {
+				return std::unexpected( fail_win( "SetHandleInformation",
+					::GetLastError( ) ) );
+			}
+
+			return std::pair< HANDLE, HANDLE >{ child_end, parent_end };
+		};
+
+		auto pipes = sandbox_raw_pipes{ };
+
+		// stdin: child reads, parent writes.
+		auto stdin_pair = make_pair( true, pipe_name( L"-stdin" ) );
+
+		if ( !stdin_pair ) {
+			return std::unexpected( stdin_pair.error( ) );
+		}
+
+		pipes.child_stdin = stdin_pair->first;
+		pipes.parent_stdin = stdin_pair->second;
+
+		// stdout: child writes, parent reads.
+		auto stdout_pair = make_pair( false, pipe_name( L"-stdout" ) );
+
+		if ( !stdout_pair ) {
+			return std::unexpected( stdout_pair.error( ) );
+		}
+
+		pipes.child_stdout = stdout_pair->first;
+		pipes.parent_stdout = stdout_pair->second;
+
+		// stderr: child writes, parent reads.
+		auto stderr_pair = make_pair( false, pipe_name( L"-stderr" ) );
+
+		if ( !stderr_pair ) {
+			return std::unexpected( stderr_pair.error( ) );
+		}
+
+		pipes.child_stderr = stderr_pair->first;
+		pipes.parent_stderr = stderr_pair->second;
+
+		return pipes;
+#else
+		return std::unexpected( mcode::fail( mcode::errc::unsupported,
+			"the raw pipes exist only on Windows" ) );
+#endif
+	}
+
+	auto sandbox_windows_spawn( const std::filesystem::path& executable,
+		const std::vector< std::string >& arguments,
+		const std::filesystem::path& working_directory,
+		const std::map< std::string, std::string, std::less<> >& environment,
+		const void* stdin_read, const void* stdout_write, const void* stderr_write,
+		void* job, const void* token ) -> result< sandbox_spawn_windows > {
+#if defined( _WIN32 )
+		// The command line: quoted executable plus quoted arguments, the way
+		// the CRT re-parses them. No shell anywhere in this path.
+		auto quote = []( const std::wstring& value ) -> std::wstring {
+			auto out = std::wstring{ L"\"" };
+			for ( const auto character : value ) {
+				if ( character == L'"' ) {
+					out += L"\\\"";
+				} else {
+					out += character;
+				}
+			}
+
+			out += L"\"";
+			return out;
+		};
+
+		auto command_line = quote( executable.wstring( ) );
+
+		for ( const auto& argument : arguments ) {
+			auto wide = std::wstring{ };
+			const auto bytes = ::MultiByteToWideChar( CP_UTF8, 0, argument.c_str( ),
+				static_cast< int >( argument.size( ) ), nullptr, 0 );
+			wide.resize( static_cast< std::size_t >( bytes ) );
+			::MultiByteToWideChar( CP_UTF8, 0, argument.c_str( ),
+				static_cast< int >( argument.size( ) ), wide.data( ), bytes );
+
+			command_line += L" ";
+			command_line += quote( wide );
+		}
+
+		// The environment block: sorted, double-NUL terminated, UTF-16.
+		auto sorted = std::map< std::wstring, std::wstring, std::less<> >{ };
+		for ( const auto& [ key, value ] : environment ) {
+			auto to_wide = []( const std::string& narrow ) -> std::wstring {
+				const auto bytes = ::MultiByteToWideChar( CP_UTF8, 0, narrow.c_str( ),
+					static_cast< int >( narrow.size( ) ), nullptr, 0 );
+				auto wide = std::wstring( static_cast< std::size_t >( bytes ), L'\0' );
+				::MultiByteToWideChar( CP_UTF8, 0, narrow.c_str( ),
+					static_cast< int >( narrow.size( ) ), wide.data( ), bytes );
+				return wide;
+			};
+
+			sorted.emplace( to_wide( key ), to_wide( value ) );
+		}
+
+		auto env_block = std::wstring{ };
+		for ( const auto& [ key, value ] : sorted ) {
+			env_block += key + L"=" + value + L"\0";
+		}
+
+		if ( env_block.empty( ) ) {
+			env_block += L"\0";
+		}
+
+		env_block += L"\0";
+
+		// Inheritable stdio: the three handles must be inheritable, which the
+		// pipe creation in the caller already arranged via SECURITY_ATTRIBUTES.
+		STARTUPINFOEXW startup_info{ };
+		startup_info.StartupInfo.cb = sizeof( startup_info );
+		startup_info.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+		startup_info.StartupInfo.hStdInput = static_cast< HANDLE >(
+			const_cast< void* >( stdin_read ) );
+		startup_info.StartupInfo.hStdOutput = static_cast< HANDLE >(
+			const_cast< void* >( stdout_write ) );
+		startup_info.StartupInfo.hStdError = static_cast< HANDLE >(
+			const_cast< void* >( stderr_write ) );
+
+		auto size = SIZE_T{ 0 };
+		(void)::InitializeProcThreadAttributeList( nullptr, 1, 0, &size );
+
+		auto storage = std::vector< unsigned char >( size );
+		startup_info.lpAttributeList = reinterpret_cast< LPPROC_THREAD_ATTRIBUTE_LIST >(
+			storage.data( ) );
+
+		if ( !::InitializeProcThreadAttributeList( startup_info.lpAttributeList, 1, 0, &size ) ) {
+			return std::unexpected( fail_win( "InitializeProcThreadAttributeList",
+				::GetLastError( ) ) );
+		}
+
+		if ( !::UpdateProcThreadAttribute( startup_info.lpAttributeList, 0,
+			static_cast< DWORD_PTR >( PROC_THREAD_ATTRIBUTE_JOB_LIST_NUMBER ) |
+				static_cast< DWORD_PTR >( PROC_THREAD_ATTRIBUTE_INPUT_FLAG ),
+			&job, sizeof( job ), nullptr, nullptr ) ) {
+			return std::unexpected( fail_win( "UpdateProcThreadAttribute", ::GetLastError( ) ) );
+		}
+
+		auto process_information = PROCESS_INFORMATION{ };
+
+		const auto created = ::CreateProcessAsUserW(
+			static_cast< HANDLE >( const_cast< void* >( token ) ),
+			executable.empty( ) ? nullptr : executable.c_str( ),
+			command_line.data( ),
+			nullptr, nullptr,
+			TRUE,
+			EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
+			env_block.data( ),
+			working_directory.empty( ) ? nullptr : working_directory.c_str( ),
+			&startup_info.StartupInfo,
+			&process_information );
+
+		::DeleteProcThreadAttributeList( startup_info.lpAttributeList );
+
+		if ( created == 0 ) {
+			return std::unexpected( fail_win( "CreateProcessAsUserW", ::GetLastError( ) ) );
+		}
+
+		::CloseHandle( process_information.hThread );
+
+		return sandbox_spawn_windows{ process_information.dwProcessId,
+			process_information.hProcess };
+#else
+		return std::unexpected( mcode::fail( mcode::errc::unsupported,
+			"the raw spawn exists only on Windows" ) );
 #endif
 	}
 

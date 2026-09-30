@@ -101,10 +101,11 @@ namespace mcode::platform {
 
 	auto sandbox_capability_level( ) noexcept -> sandbox_capability {
 	#if defined( _WIN32 )
-		// The Low IL token construction is implemented and probed, but it is
-		// not yet applied to the spawned child, so no confinement is claimed.
-		// The Job Object is applied and gives real lifetime and memory limits.
-		return sandbox_capability::unavailable;
+		// Writes are confined by the Low IL token plus mandatory labels on the
+		// write and deny paths, applied through CreateProcessAsUserW on the
+		// exec path. Reads are not confined -- integrity levels have no
+		// read-down restriction. The MCP spawn path gets the Job Object only.
+		return sandbox_capability::write_boundary;
 	#elif defined( __linux__ )
 		// Landlock confines reads and writes. The ABI is a runtime property, so
 		// the spawn path probes it; this is the platform-capability claim.
@@ -144,7 +145,7 @@ namespace mcode::platform {
 
 	auto sandbox_mechanism( ) noexcept -> std::string_view {
 	#if defined( _WIN32 )
-		return "Low IL token implemented but not yet applied at spawn; Job Object enforces lifetime and memory; network deny best-effort (WFP needs admin)";
+		return "Low IL token via CreateProcessAsUserW on the exec path; MCP server children get the Job Object only; network deny best-effort (WFP needs admin)";
 	#elif defined( __APPLE__ )
 		return "Seatbelt via sandbox_init_with_parameters, deny-default";
 	#elif defined( __linux__ )

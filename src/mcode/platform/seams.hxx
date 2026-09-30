@@ -83,6 +83,10 @@ namespace mcode::platform {
 		// Subtrees inside the write paths that stay denied. The deny is
 		// explicit because a grant on a parent directory covers the whole
 		// subtree: without this, a workspace write grant would include .git.
+		// A deny path that does not exist yet is skipped, not fatal -- which
+		// means a sandboxed child can create it before any label exists. The
+		// permission engine still gates the command; this residual is recorded
+		// rather than hidden.
 		std::vector< std::filesystem::path > deny_paths;
 
 		bool allow_network = false;

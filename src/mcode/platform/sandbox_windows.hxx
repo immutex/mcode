@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -102,7 +103,7 @@ namespace mcode::platform {
 			}
 		}
 
-		std::vector< unsigned char > storage;
+		std::vector< unsigned char > storage = { };
 		LPPROC_THREAD_ATTRIBUTE_LIST attribute_list = nullptr;
 	};
 
@@ -126,5 +127,38 @@ namespace mcode::platform {
 	[[nodiscard]] auto sandbox_windows_mark_write_paths(
 		const std::vector< std::filesystem::path >& write_paths,
 		const std::vector< std::filesystem::path >& deny_paths ) -> status;
+
+	// One set of stdio pipes for the raw spawn: the child ends are
+	// inheritable, the parent ends are owned by the caller and assigned to
+	// its asio pipes. Null after handover.
+	struct sandbox_raw_pipes {
+		void* child_stdin = nullptr;
+		void* child_stdout = nullptr;
+		void* child_stderr = nullptr;
+		void* parent_stdin = nullptr;
+		void* parent_stdout = nullptr;
+		void* parent_stderr = nullptr;
+	};
+
+	[[nodiscard]] auto sandbox_windows_make_pipes( ) -> result< sandbox_raw_pipes >;
+
+	// One spawned sandboxed child: the pid and the raw process handle. The
+	// caller wraps them in its own process object; the Job handle stays with
+	// the caller and kill-on-close does the rest.
+	struct sandbox_spawn_windows {
+		std::uint32_t process_id = 0;
+		void* process_handle = nullptr;
+	};
+
+	// Spawns the executable with the Low IL token through
+	// CreateProcessAsUserW, with the given stdio handles inherited. The
+	// attribute list assigns the Job at creation. argv is quoted the way the
+	// CRT expects; no shell is involved.
+	[[nodiscard]] auto sandbox_windows_spawn( const std::filesystem::path& executable,
+		const std::vector< std::string >& arguments,
+		const std::filesystem::path& working_directory,
+		const std::map< std::string, std::string, std::less<> >& environment,
+		const void* stdin_read, const void* stdout_write, const void* stderr_write,
+		void* job, const void* token ) -> result< sandbox_spawn_windows >;
 
 }

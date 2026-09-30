@@ -92,6 +92,11 @@ namespace mcode::platform {
 
 	auto sandbox_linux_ruleset( const int abi, const sandbox_profile& profile )
 		-> result< unique_ruleset_linux > {
+#if !defined( __linux__ )
+		(void)abi;
+		(void)profile;
+#endif
+
 #if defined( __linux__ )
 		if ( abi < 1 ) {
 			return std::unexpected( mcode::fail( mcode::errc::unsupported,
@@ -181,6 +186,12 @@ namespace mcode::platform {
 
 	auto sandbox_linux_restrict( const int abi, const unique_ruleset_linux& ruleset,
 		const sandbox_profile& profile ) -> status {
+#if !defined( __linux__ )
+		(void)abi;
+		(void)ruleset;
+		(void)profile;
+#endif
+
 #if defined( __linux__ )
 		// no_new_privs before restrict_self: without it the kernel rejects the
 		// restriction for an unprivileged caller, and the call that looks like

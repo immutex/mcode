@@ -77,6 +77,11 @@ namespace mcode::platform {
 
 	auto sandbox_macos_init( const sandbox_profile& profile,
 		const std::filesystem::path& temp_dir ) -> status {
+#if !defined( __APPLE__ )
+		(void)profile;
+		(void)temp_dir;
+#endif
+
 #if defined( __APPLE__ )
 		void* system_lib = ::dlopen( nullptr, RTLD_NOW );
 
