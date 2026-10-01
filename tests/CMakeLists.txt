@@ -18,10 +18,12 @@ add_executable(mcode_tests
     test_dogfood_providers.cxx
     test_render.cxx
     test_model_client.cxx
+    test_capabilities.cxx
     test_config_and_platform.cxx
     test_mcp_config.cxx
     test_event_log.cxx
     test_loop.cxx
+    test_loop_events.cxx
     test_loop_e2e.cxx
     test_events.cxx
     test_eval.cxx

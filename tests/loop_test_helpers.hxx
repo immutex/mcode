@@ -149,6 +149,11 @@ namespace loop_test {
 		scripted_client client;
 		tool_registry registry;
 		event_log log;
+
+		// The loop publishes here. A test that asserts on an event subscribes
+		// to this; the loop owns nothing it is handed.
+		events::bus bus;
+
 		agent_loop::dependencies deps;
 		std::unique_ptr< agent_loop > loop;
 
@@ -156,6 +161,7 @@ namespace loop_test {
 			deps.client = &client;
 			deps.registry = &registry;
 			deps.log = &log;
+			deps.bus = &bus;
 			deps.model_name = "test-model";
 			deps.caps.context_window = TEST_CONTEXT_WINDOW;
 			deps.caps.price_input = 1.0;

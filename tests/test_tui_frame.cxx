@@ -376,6 +376,55 @@ TEST_CASE( "every escape the emitter writes is well formed", "[tui][render]" ) {
 	CHECK( sequences > 0 );
 }
 
+TEST_CASE( "an active tool row names the tool and runs its clock", "[tui][render]" ) {
+	// Two defects on one row. `elapsed_ms` and `spinner_frame` were written
+	// once at `tool_start` and never advanced, so a running call showed a
+	// frozen spinner and `0.0s` for its whole life; and the verb came from a
+	// `tool_call` payload that had already been moved into the event log, so
+	// the row read `\u280b   0.0s` with no tool name at all.
+	auto coordinator = render_coordinator{ };
+
+	auto caps = capabilities{ };
+	caps.depth = capabilities::color_depth::none;
+	coordinator.set_capabilities( caps );
+	coordinator.resize( 24, 40 );
+
+	auto start = event_queue::item{ };
+	start.type = event_queue::kind::tool_start;
+	start.text = "bash";
+	start.stamp_ms = 1'000;
+	coordinator.apply( start );
+
+	// The producer's stamp is the call's start, so four seconds later the row
+	// must read 4.0s rather than 0.0s.
+	coordinator.advance_tools( 5'000 );
+
+	CHECK( coordinator.state( ).tools.size( ) == 1 );
+	CHECK( coordinator.state( ).tools.front( ).verb == "bash" );
+	CHECK( coordinator.state( ).tools.front( ).elapsed_ms == 4'000 );
+
+	const auto first_frame = coordinator.state( ).tools.front( ).spinner_frame;
+
+	coordinator.advance_tools( 5'000 + SPINNER_INTERVAL_MS * 3 );
+
+	CHECK( coordinator.state( ).tools.front( ).elapsed_ms == 4'000 + SPINNER_INTERVAL_MS * 3 );
+	CHECK( coordinator.state( ).tools.front( ).spinner_frame != first_frame );
+
+	// A stamp of zero means the producer supplied none, which leaves the row
+	// at its initial value rather than inventing a start time.
+	auto unstamped = render_coordinator{ };
+	unstamped.set_capabilities( caps );
+	unstamped.resize( 24, 40 );
+
+	auto unknown = event_queue::item{ };
+	unknown.type = event_queue::kind::tool_start;
+	unknown.text = "read";
+	unstamped.apply( unknown );
+	unstamped.advance_tools( 9'999'999 );
+
+	CHECK( unstamped.state( ).tools.front( ).elapsed_ms == 0 );
+}
+
 TEST_CASE( "a finished tool call is written to scrollback", "[tui][render]" ) {
 	// Tool results were collected into a member nothing rendered, so the
 	// transcript showed the spinner and then nothing at all.
