@@ -664,6 +664,33 @@ code comments.
     `tty_session` now sets `CP_UTF8` for the session and restores the previous
     page on the way out, alongside the console modes.
 
+81. **`turn_end` must fire on every exit path.** It sat after `run_state_machine`'s
+    loop, but `handoff`, `done` and `failed` all `return` from inside that loop,
+    so it was never published at all. The TUI commits a turn's answer on
+    `turn_end`, so every reply was cleared with the live region and never
+    reached the transcript -- the session looked like it had answered and then
+    forgotten. It is now a destructor guard, which cannot be skipped.
+
+82. **The live region addresses relatively, from a parked cursor.** Committing
+    scrolls the region clear and then re-parks; nothing may address an absolute
+    row, because a committed line changes how many rows are above the region.
+    One column is reserved in `resize` so a full row cannot wrap and desync the
+    relative addressing, and `commit` scrolls by the region's full height
+    whatever the text's length -- scrolling by the text's own line count left
+    the first committed lines exactly where the region redraws.
+
+83. **`ReadConsoleInputA` consumes every record it reports.** The decoder
+    returned on the first key and dropped the rest of the batch, so typing
+    faster than the poll interval lost keystrokes, and a split escape sequence
+    could end the session. It now decodes the whole batch into
+    `tty_session::pending_`, and honours `wRepeatCount` so a held key repeats.
+
+84. **The POSIX key reader must buffer partial sequences.** It compared each
+    read against whole escape strings and fell through to "control byte" --
+    which is `exit` -- so a paste or a split arrow key ended the session. The
+    tail now stays in `carry_` until a complete sequence or UTF-8 character
+    arrives.
+
 ## Building
 
 ```bash
