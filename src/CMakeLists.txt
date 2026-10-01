@@ -33,6 +33,7 @@ add_library(mcode_core STATIC
     mcode/model/http_client.cxx
 
     mcode/platform/seams.cxx
+    mcode/platform/file_watcher.cxx
     mcode/platform/sandbox_windows.cxx
     mcode/platform/sandbox_linux.cxx
     mcode/platform/sandbox_macos.cxx
@@ -52,6 +53,7 @@ add_library(mcode_core STATIC
     mcode/eval/suite.cxx
 
     mcode/ext/api.cxx
+    mcode/ext/api_events.cxx
     mcode/ext/api_invoke.cxx
     mcode/ext/api_internal.cxx
     mcode/ext/api_skill.cxx
@@ -134,6 +136,12 @@ target_include_directories(mcode_core
         ${CMAKE_CURRENT_BINARY_DIR}
 )
 
+if(WIN32)
+    target_sources(mcode_core PRIVATE mcode/tui/tty_windows.cxx)
+else()
+    target_sources(mcode_core PRIVATE mcode/tui/tty_posix.cxx)
+endif()
+
 if(APPLE)
     set(MCODE_PLATFORM "macos-${CMAKE_SYSTEM_PROCESSOR}")
 elseif(WIN32)
@@ -183,7 +191,7 @@ endif()
 
 set(MCODE_BUNDLED_EXT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../extensions")
 
-add_executable(mcode main.cxx cli_commands.cxx smoke_cli_extensions.cxx smoke_luau.cxx)
+add_executable(mcode main.cxx cli_commands.cxx cli_repl.cxx cli_session.cxx smoke_cli_extensions.cxx smoke_luau.cxx)
 target_link_libraries(mcode PRIVATE mcode_core)
 
 # The binary cannot live at `src/mcode`: that path is the SOURCE DIRECTORY, and on

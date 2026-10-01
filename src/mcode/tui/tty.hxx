@@ -68,6 +68,14 @@ namespace mcode::tui {
 		std::string text;
 	};
 
+	// Milliseconds from a monotonic clock, for a wait deadline. One definition,
+	// because the timeout arithmetic has to be identical on every platform.
+	[[nodiscard]] auto monotonic_ms( ) -> std::uint64_t;
+
+	// The value of an environment variable, or empty when it is unset. A
+	// platform unit reads TERM and COLORTERM through this.
+	[[nodiscard]] auto tty_environment( const char* name ) -> std::string_view;
+
 	// The tty session. Owns raw mode and the VT state transitions; the guard
 	// restores the console on every exit path, including a throw.
 	//

@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include "cli_session.hxx"
 #include "mcode/agent/loop.hxx"
 #include "mcode/cli/exec.hxx"
 #include "mcode/cli/repl.hxx"
@@ -67,11 +68,9 @@ namespace {
 // smoke check, and keeping it out of this file keeps the smoke test readable.
 // At file scope, not in an anonymous namespace -- internal linkage would make the
 // definition in the other translation unit a different function.
-auto run_exec( const std::vector< std::string >& arguments ) -> int;
 
 // Defined in cli_commands.cxx: the interactive session, wired the same way
 // exec is, with the loop kept alive across turns.
-auto run_repl( const std::vector< std::string >& arguments ) -> int;
 
 // The startup smoke test, reachable through --smoke now that the bare
 // invocation starts the interactive session.
