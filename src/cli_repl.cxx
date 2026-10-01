@@ -114,11 +114,54 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 
 	auto approval_active = std::atomic< bool >{ false };
 
+	// The prompt block's height, shared with the answer reader. The question is
+	// drawn from the parked row upwards, so it is the rows plus the row the
+	// answer is typed on.
+	auto approval_rows = std::size_t{ 0 };
+
 	auto approval = mcode::tui::ui_approval_source{
-		[ &session_tty ]( ) { return session_tty->read_line( 600'000 ); },
-		[ &session_tty, &approval_active, &coordinator ](
+		// The answer is read, and then the question is cleared. Both halves sit
+		// here rather than in the presenter because the presenter runs BEFORE
+		// the read: drawing and clearing it there erased the question before
+		// the user could see what they were being asked to approve.
+		//
+		// Clearing is what stops the next commit from scrolling the block above
+		// the live region, where the region's fixed-height clear cannot reach
+		// it and the previous question stays on screen above the new one.
+		//
+		// A re-prompting answer ("?" or anything unrecognised) leaves the block
+		// up, because `ask` loops and reads again without re-presenting.
+		[ &session_tty, &approval_active, &coordinator, &approval_rows ]( ) {
+			auto answer = session_tty->read_line( 600'000 );
+
+			const auto settled = answer && answer->size( ) == 1 &&
+				( *answer == "y" || *answer == "a" || *answer == "n" || *answer == "d" );
+
+			// An unrecognised answer and "?" both re-prompt inside `ask`, which
+			// reads again without re-presenting -- so the block stays up for
+			// those. Everything else ends the ask, including closed input,
+			// which resolves to refused; leaving the block up there would
+			// freeze the pump for the rest of the turn.
+			if ( answer && !settled ) {
+				return answer;
+			}
+
+			session_tty->write(
+				mcode::tui::ansi_emitter{ session_tty->caps( ) }
+					.clear_region( approval_rows ) +
+				coordinator.park( ) );
+
+			// The pump repaints again from here. Holding this until the turn
+			// ended left the answer invisible for the rest of the turn, because
+			// the pump is what draws the streaming text.
+			approval_active.store( false );
+
+			return answer;
+		},
+		[ &session_tty, &approval_active, &coordinator, &approval_rows ](
 			const std::vector< std::string >& rows ) {
 			approval_active.store( true );
+			approval_rows = rows.size( ) + 1;
 
 			// The live region is cleared so the question has the screen to
 			// itself; the pump restores it once the answer arrives. The
@@ -139,13 +182,6 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 
 			out += "> ";
 			session_tty->write( out );
-
-			// The answer was read through the line reader, which echoed
-			// nothing, so the row the user typed on is cleared, and the cursor
-			// is returned to the parked row. Without the park the next clear
-			// started from wherever the prompt text ended -- one row too high
-			// per prompt -- and the previous question stayed on screen.
-			session_tty->write( std::string{ "\r\x1b[2K" } + coordinator.park( ) );
 		} };
 
 	auto built = build_interactive_loop( *parsed, &approval );
