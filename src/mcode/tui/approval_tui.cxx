@@ -7,8 +7,8 @@ namespace mcode::tui {
 	ui_approval_source::ui_approval_source( answer_queue& answers )
 		: answers_( &answers ) { }
 
-	ui_approval_source::ui_approval_source( answer_source source )
-		: source_( std::move( source ) ) { }
+	ui_approval_source::ui_approval_source( answer_source source, presenter present )
+		: source_( std::move( source ) ), present_( std::move( present ) ) { }
 
 	auto ui_approval_source::render( const perm::approval_request& request ) const
 		-> std::vector< std::string > {
@@ -26,7 +26,13 @@ namespace mcode::tui {
 	auto ui_approval_source::ask( const perm::approval_request& request,
 		const std::function< std::string( ) >& detail ) -> perm::approval_outcome {
 		++asks_;
-		std::ignore = request;
+
+		// Show the request before blocking on it. The answer is read from the
+		// terminal, so a prompt that is never drawn is a session that appears
+		// to hang.
+		if ( present_ ) {
+			present_( render( request ) );
+		}
 
 		// Closed input is `refused`, never a guess. The engine resolves it as
 		// deny, which is the fail-closed contract the whole permission layer

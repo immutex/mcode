@@ -101,6 +101,12 @@ namespace mcode::tui {
 		std::vector< cell > cells_;
 	};
 
+	// The ambiguous-width policy: East Asian ambiguous characters count as one
+	// column or two. A terminal that renders them double-width needs 2; a
+	// mismatch mis-measures every line containing one, so the frame builder and
+	// the caret must read the same value.
+	inline constexpr std::size_t AMBIGUOUS_WIDTH = 1;
+
 	// Display width of one code point. `ambiguous_width` is 1 or 2, the
 	// MCODE_AMBIGUOUS_WIDTH policy.
 	[[nodiscard]] auto codepoint_width( char32_t value, std::size_t ambiguous_width ) noexcept

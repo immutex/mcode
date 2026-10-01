@@ -308,6 +308,18 @@ namespace mcode {
 
 		publish( events::kind::turn_start, "{}" );
 
+		// `turn_end` fires on EVERY exit, including the early returns below.
+		//
+		// It used to sit after the loop, and every terminal state returns from
+		// inside it -- so it was never published at all. A subscriber that
+		// commits the turn's answer on it (the TUI) therefore never committed
+		// anything, and the reply vanished with the live region.
+		struct turn_end_guard {
+			agent_loop* self;
+
+			~turn_end_guard( ) { self->publish( events::kind::turn_end, "{}" ); }
+		} const guard{ this };
+
 		while ( true ) {
 			publish( events::kind::step_start, std::string{ "{\"state\":\"" }
 				+ std::string{ to_string( state_ ) } + "\"}" );
@@ -570,7 +582,6 @@ namespace mcode {
 			}
 		}
 
-		publish( events::kind::turn_end, "{}" );
 	}
 
 } // namespace mcode

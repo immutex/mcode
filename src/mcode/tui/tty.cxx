@@ -17,6 +17,18 @@
 
 namespace mcode::tui {
 
+	namespace {
+
+		// Milliseconds from a monotonic clock, for the wait deadline. Shared by
+		// both branches so their timeout arithmetic cannot drift apart.
+		auto monotonic_ms( ) -> std::uint64_t {
+			return static_cast< std::uint64_t >(
+				std::chrono::duration_cast< std::chrono::milliseconds >(
+					std::chrono::steady_clock::now( ).time_since_epoch( ) ).count( ) );
+		}
+
+	}
+
 	auto probe_capabilities( const std::string_view colorterm, const std::string_view term,
 		const bool no_color, const bool has_tty ) -> capabilities {
 		auto out = capabilities{ };
@@ -252,6 +264,16 @@ namespace mcode::tui {
 					continue;
 				}
 
+				if ( key.uChar.AsciiChar == '\b' ) {
+					// Backspace edits the line, so a typo can be corrected
+					// before Enter commits it.
+					if ( !line.empty( ) ) {
+						line.pop_back( );
+					}
+
+					continue;
+				}
+
 				line.push_back( key.uChar.AsciiChar );
 			}
 		}
@@ -269,7 +291,92 @@ namespace mcode::tui {
 		return platform::terminal_size_changed( );
 	}
 
+	namespace {
+
+		// One console record to zero or more keys.
+		//
+		// A record carries `wRepeatCount`, which is how Windows reports a held
+		// key: ONE record standing for N presses. Ignoring it made a held key
+		// fire once.
+		auto decode_windows_key( const KEY_EVENT_RECORD& key ) -> std::vector< key_event > {
+			auto out = std::vector< key_event >{ };
+			auto event = key_event{ };
+
+			switch ( key.wVirtualKeyCode ) {
+				case VK_RETURN: event.type = key_event::kind::enter; break;
+				case VK_BACK: event.type = key_event::kind::backspace; break;
+				case VK_DELETE: event.type = key_event::kind::delete_key; break;
+				case VK_LEFT: event.type = key_event::kind::left; break;
+				case VK_RIGHT: event.type = key_event::kind::right; break;
+				case VK_UP: event.type = key_event::kind::up; break;
+				case VK_DOWN: event.type = key_event::kind::down; break;
+				case VK_HOME: event.type = key_event::kind::home; break;
+				case VK_END: event.type = key_event::kind::end; break;
+				case VK_ESCAPE: event.type = key_event::kind::escape; break;
+				default: break;
+			}
+
+			if ( event.type != key_event::kind::character ) {
+				out.push_back( event );
+
+				return out;
+			}
+
+			const auto character = key.uChar.AsciiChar;
+
+			// Ctrl+C and Ctrl+D first: some hosts report them with a zero
+			// `AsciiChar` and only the virtual key, so the character test alone
+			// dropped them.
+			if ( character == '\x03' ||
+				( character == 0 && key.wVirtualKeyCode == 'C' &&
+					( key.dwControlKeyState & ( LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED ) ) != 0 ) ) {
+				event.type = key_event::kind::interrupt;
+
+				out.push_back( event );
+
+				return out;
+			}
+
+			if ( character == '\x04' ||
+				( character == 0 && key.wVirtualKeyCode == 'D' &&
+					( key.dwControlKeyState & ( LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED ) ) != 0 ) ) {
+				event.type = key_event::kind::exit;
+
+				out.push_back( event );
+
+				return out;
+			}
+
+			if ( character == 0 ) {
+				return out;
+			}
+
+			event.type = key_event::kind::character;
+			event.text.assign( 1, character );
+
+			// A held key reports its repeats in one record.
+			const auto repeats = key.wRepeatCount == 0 ? 1u : key.wRepeatCount;
+
+			for ( auto index = static_cast< unsigned int >( 0 ); index < repeats; ++index ) {
+				out.push_back( event );
+			}
+
+			return out;
+		}
+
+	}
+
 	auto tty_session::read_key( const std::uint32_t wait_ms ) -> key_event {
+		// Keys decoded from an earlier read that the caller has not asked for
+		// yet. One console read returns several records, and this returns one
+		// key, so the surplus waits here instead of being dropped.
+		if ( !pending_.empty( ) ) {
+			auto event = pending_.front( );
+			pending_.erase( pending_.begin( ) );
+
+			return event;
+		}
+
 		auto event = key_event{ };
 
 		if ( !attached_ ) {
@@ -304,7 +411,7 @@ namespace mcode::tui {
 				continue;
 			}
 
-			auto records = std::array< INPUT_RECORD, 8 >{ };
+			auto records = std::array< INPUT_RECORD, 32 >{ };
 			auto count = static_cast< unsigned long >( 0 );
 
 			if ( ReadConsoleInputA( input_handle_, records.data( ),
@@ -314,6 +421,10 @@ namespace mcode::tui {
 				return event;
 			}
 
+			// `ReadConsoleInputA` REMOVES every record it reports, so anything
+			// decoded here and not returned is lost. The whole batch is decoded
+			// into `pending_` and the first key is returned, which is what
+			// stopped fast typing from dropping characters.
 			for ( auto index = static_cast< unsigned long >( 0 ); index < count; ++index ) {
 				const auto& record = records[ index ];
 
@@ -322,45 +433,26 @@ namespace mcode::tui {
 					continue;
 				}
 
-				const auto& key = record.Event.KeyEvent;
-
-				switch ( key.wVirtualKeyCode ) {
-					case VK_RETURN: event.type = key_event::kind::enter; return event;
-					case VK_BACK: event.type = key_event::kind::backspace; return event;
-					case VK_DELETE: event.type = key_event::kind::delete_key; return event;
-					case VK_LEFT: event.type = key_event::kind::left; return event;
-					case VK_RIGHT: event.type = key_event::kind::right; return event;
-					case VK_UP: event.type = key_event::kind::up; return event;
-					case VK_DOWN: event.type = key_event::kind::down; return event;
-					case VK_HOME: event.type = key_event::kind::home; return event;
-					case VK_END: event.type = key_event::kind::end; return event;
-					case VK_ESCAPE: event.type = key_event::kind::exit; return event;
-					default: break;
+				for ( auto& decoded : decode_windows_key( record.Event.KeyEvent ) ) {
+					pending_.push_back( std::move( decoded ) );
 				}
-
-				const auto character = key.uChar.AsciiChar;
-
-				if ( character == '\x03' ) {
-					event.type = key_event::kind::interrupt;
-
-					return event;
-				}
-
-				if ( character == '\x04' ) {
-					event.type = key_event::kind::exit;
-
-					return event;
-				}
-
-				if ( character == 0 ) {
-					continue;
-				}
-
-				event.type = key_event::kind::character;
-				event.text.assign( 1, character );
-
-				return event;
 			}
+
+			if ( pending_.empty( ) ) {
+				// Only releases, mouse or resize records: not a key.
+				if ( GetTickCount64( ) >= deadline ) {
+					event.type = key_event::kind::timeout;
+
+					return event;
+				}
+
+				continue;
+			}
+
+			auto first = pending_.front( );
+			pending_.erase( pending_.begin( ) );
+
+			return first;
 		}
 	}
 
@@ -475,7 +567,20 @@ namespace mcode::tui {
 		auto got_enter = false;
 		auto got_eof = false;
 
+		// One deadline for the whole line, not one per byte: re-arming the wait
+		// on every byte meant a slow typist could never time out, and a prompt
+		// that had been answered still waited on the next key.
+		const auto deadline = monotonic_ms( ) + wait_ms;
+
 		while ( !got_enter && !got_eof ) {
+			const auto now = monotonic_ms( );
+
+			if ( now >= deadline ) {
+				return std::nullopt;
+			}
+
+			const auto remaining = deadline - now;
+
 			auto read_set = fd_set{ };
 			FD_ZERO( &read_set );
 			FD_SET( STDIN_FILENO, &read_set );
@@ -484,9 +589,9 @@ namespace mcode::tui {
 			// `tv_usec` is `suseconds_t`, which is `long` on Linux and `int`
 			// on Darwin, so naming either one explicitly is wrong on the other.
 			auto timeout = timeval{ };
-			timeout.tv_sec = static_cast< decltype( timeout.tv_sec ) >( wait_ms / 1000 );
+			timeout.tv_sec = static_cast< decltype( timeout.tv_sec ) >( remaining / 1000 );
 			timeout.tv_usec = static_cast< decltype( timeout.tv_usec ) >(
-				( wait_ms % 1000 ) * 1000 );
+				( remaining % 1000 ) * 1000 );
 
 			const auto ready = ::select( STDIN_FILENO + 1, &read_set, nullptr, nullptr,
 				&timeout );
@@ -510,6 +615,22 @@ namespace mcode::tui {
 				break;
 			}
 
+			// Backspace edits the line. Without this a typo in an approval
+			// answer could not be corrected -- 0x7F was appended as a literal
+			// byte and the answer never matched.
+			if ( byte == 0x7F || byte == 0x08 ) {
+				if ( !line.empty( ) ) {
+					line.pop_back( );
+				}
+
+				continue;
+			}
+
+			// A control byte is not an answer; ignoring it beats storing it.
+			if ( static_cast< unsigned char >( byte ) < 0x20 ) {
+				continue;
+			}
+
 			line.push_back( byte );
 		}
 
@@ -530,7 +651,226 @@ namespace mcode::tui {
 		return platform::terminal_size_changed( );
 	}
 
+	namespace {
+
+		// How many bytes the UTF-8 sequence starting with `lead` occupies.
+		// Zero for a continuation byte, which cannot start one.
+		auto utf8_length( const unsigned char lead ) -> std::size_t {
+			if ( ( lead & 0x80 ) == 0 ) {
+				return 1;
+			}
+
+			if ( ( lead & 0xE0 ) == 0xC0 ) {
+				return 2;
+			}
+
+			if ( ( lead & 0xF0 ) == 0xE0 ) {
+				return 3;
+			}
+
+			if ( ( lead & 0xF8 ) == 0xF0 ) {
+				return 4;
+			}
+
+			return 0;
+		}
+
+#if !defined( _WIN32 )
+
+		struct escape_result {
+			key_event event;
+			std::size_t consumed = 0;
+		};
+
+		// One escape sequence from the front of `text`.
+		//
+		// `consumed == 0` means the text is a prefix of a sequence that needs
+		// more bytes, so the caller keeps it and reads on. Returning a bogus
+		// key instead is what made a split arrow key end the session.
+		auto decode_escape( const std::string_view text ) -> escape_result {
+			struct mapping {
+				std::string_view sequence;
+				key_event::kind kind;
+			};
+
+			static constexpr mapping MAPPINGS[] = {
+				{ "\x1b[A", key_event::kind::up },
+				{ "\x1b[B", key_event::kind::down },
+				{ "\x1b[C", key_event::kind::right },
+				{ "\x1b[D", key_event::kind::left },
+				{ "\x1b[H", key_event::kind::home },
+				{ "\x1b[F", key_event::kind::end },
+				{ "\x1b[1~", key_event::kind::home },
+				{ "\x1b[4~", key_event::kind::end },
+				{ "\x1b[3~", key_event::kind::delete_key },
+				{ "\x1bOA", key_event::kind::up },
+				{ "\x1bOB", key_event::kind::down },
+				{ "\x1bOC", key_event::kind::right },
+				{ "\x1bOD", key_event::kind::left },
+			};
+
+			auto result = escape_result{ };
+
+			for ( const auto& candidate : MAPPINGS ) {
+				if ( text.starts_with( candidate.sequence ) ) {
+					result.event.type = candidate.kind;
+					result.consumed = candidate.sequence.size( );
+
+					return result;
+				}
+			}
+
+			// Still a prefix of something longer: wait for the rest. A lone
+			// ESC is only "exit" once nothing follows it.
+			for ( const auto& candidate : MAPPINGS ) {
+				if ( candidate.sequence.starts_with( text ) ) {
+					return result;
+				}
+			}
+
+			if ( text.size( ) == 1 ) {
+				// A bare ESC, with nothing after it.
+				result.event.type = key_event::kind::escape;
+				result.consumed = 1;
+
+				return result;
+			}
+
+			// An unrecognized sequence: consume it rather than emitting its
+			// bytes as text.
+			result.event.type = key_event::kind::timeout;
+			result.consumed = text.size( );
+
+			return result;
+		}
+
+		// Splits a raw read into whole keys.
+		//
+		// The previous version compared the ENTIRE read against exact escape
+		// strings and returned at most one key, so any read that was not
+		// exactly one known sequence fell through to "control byte" and quit
+		// the session. Fast typing or a paste delivered several keys in one
+		// read and ended the session.
+		auto decode_posix_bytes( const std::string_view text,
+			std::string& carry, std::vector< key_event >& out ) -> void {
+			carry.append( text );
+
+			auto cursor = std::size_t{ 0 };
+
+			while ( cursor < carry.size( ) ) {
+				const auto first = static_cast< unsigned char >( carry[ cursor ] );
+
+				if ( first == 0x1B ) {
+					// A sequence needs its final byte before it can be named.
+					// Without one buffered, the next read completes it.
+					const auto parsed = decode_escape( std::string_view{ carry }.substr( cursor ) );
+
+					if ( parsed.consumed == 0 ) {
+						break;
+					}
+
+					cursor += parsed.consumed;
+
+					// An unrecognized sequence is swallowed rather than
+					// delivered: `timeout` here means "nothing to report", and
+					// pushing it would make the caller repaint for a key the
+					// user never pressed.
+					if ( parsed.event.type != key_event::kind::timeout ) {
+						out.push_back( parsed.event );
+					}
+
+					continue;
+				}
+
+				if ( first == '\r' || first == '\n' ) {
+					auto event = key_event{ };
+					event.type = key_event::kind::enter;
+
+					out.push_back( event );
+					++cursor;
+
+					continue;
+				}
+
+				if ( first == 0x7F || first == 0x08 ) {
+					auto event = key_event{ };
+					event.type = key_event::kind::backspace;
+
+					out.push_back( event );
+					++cursor;
+
+					continue;
+				}
+
+				if ( first == 0x03 ) {
+					auto event = key_event{ };
+					event.type = key_event::kind::interrupt;
+
+					out.push_back( event );
+					++cursor;
+
+					continue;
+				}
+
+				if ( first == 0x04 ) {
+					auto event = key_event{ };
+					event.type = key_event::kind::exit;
+
+					out.push_back( event );
+					++cursor;
+
+					continue;
+				}
+
+				// A UTF-8 character: take the whole sequence, and wait for the
+				// rest if this read split it. Emitting the raw bytes as one
+				// "character" was fine for ASCII and wrong for everything else.
+				const auto length = utf8_length( first );
+
+				if ( length == 0 ) {
+					// A stray continuation byte: drop it rather than insert
+					// half a character.
+					++cursor;
+
+					continue;
+				}
+
+				if ( cursor + length > carry.size( ) ) {
+					break;
+				}
+
+				if ( length == 1 && first < 0x20 ) {
+					// An unhandled control byte is not text; ignoring it is
+					// better than ending the session, which is what the old
+					// fall-through did.
+					++cursor;
+
+					continue;
+				}
+
+				auto event = key_event{ };
+				event.type = key_event::kind::character;
+				event.text.assign( carry, cursor, length );
+
+				out.push_back( std::move( event ) );
+				cursor += length;
+			}
+
+			carry.erase( 0, cursor );
+		}
+
+#endif
+
+	}
+
 	auto tty_session::read_key( const std::uint32_t wait_ms ) -> key_event {
+		if ( !pending_.empty( ) ) {
+			auto event = pending_.front( );
+			pending_.erase( pending_.begin( ) );
+
+			return event;
+		}
+
 		auto event = key_event{ };
 
 		if ( !attached_ ) {
@@ -539,143 +879,65 @@ namespace mcode::tui {
 			return event;
 		}
 
-		auto read_set = fd_set{ };
-		FD_ZERO( &read_set );
-		FD_SET( STDIN_FILENO, &read_set );
+		const auto deadline = monotonic_ms( ) + wait_ms;
 
-		auto timeout = timeval{ };
-		timeout.tv_sec = static_cast< decltype( timeout.tv_sec ) >( wait_ms / 1000 );
-		timeout.tv_usec = static_cast< decltype( timeout.tv_usec ) >(
-			( wait_ms % 1000 ) * 1000 );
+		while ( true ) {
+			if ( !pending_.empty( ) ) {
+				auto next = pending_.front( );
+				pending_.erase( pending_.begin( ) );
 
-		const auto ready = ::select( STDIN_FILENO + 1, &read_set, nullptr, nullptr,
-			&timeout );
+				return next;
+			}
 
-		if ( ready == 0 ) {
-			// The wait elapsed. Idle is not exit: the caller polls.
-			event.type = key_event::kind::timeout;
+			auto read_set = fd_set{ };
+			FD_ZERO( &read_set );
+			FD_SET( STDIN_FILENO, &read_set );
 
-			return event;
+			const auto remaining = monotonic_ms( ) >= deadline
+				? std::uint64_t{ 0 }
+				: deadline - monotonic_ms( );
+
+			auto timeout = timeval{ };
+			timeout.tv_sec = static_cast< decltype( timeout.tv_sec ) >( remaining / 1000 );
+			timeout.tv_usec = static_cast< decltype( timeout.tv_usec ) >(
+				( remaining % 1000 ) * 1000 );
+
+			const auto ready = ::select( STDIN_FILENO + 1, &read_set, nullptr, nullptr,
+				&timeout );
+
+			if ( ready == 0 ) {
+				// The wait elapsed. Idle is not exit: the caller polls.
+				if ( !pending_.empty( ) ) {
+					continue;
+				}
+
+				event.type = key_event::kind::timeout;
+
+				return event;
+			}
+
+			if ( ready < 0 ) {
+				event.type = key_event::kind::exit;
+
+				return event;
+			}
+
+			auto bytes = std::array< char, 256 >{ };
+			const auto count = ::read( STDIN_FILENO, bytes.data( ), bytes.size( ) );
+
+			if ( count <= 0 ) {
+				event.type = key_event::kind::exit;
+
+				return event;
+			}
+
+			decode_posix_bytes( std::string_view{ bytes.data( ),
+				static_cast< std::size_t >( count ) }, carry_, pending_ );
 		}
-
-		if ( ready < 0 ) {
-			event.type = key_event::kind::exit;
-
-			return event;
-		}
-
-		auto bytes = std::array< char, 8 >{ };
-		const auto count = ::read( STDIN_FILENO, bytes.data( ), bytes.size( ) );
-
-		if ( count <= 0 ) {
-			event.type = key_event::kind::exit;
-
-			return event;
-		}
-
-		const auto text = std::string_view{ bytes.data( ),
-			static_cast< std::size_t >( count ) };
-
-		if ( text == "\x1b[A" ) { event.type = key_event::kind::up; return event; }
-		if ( text == "\x1b[B" ) { event.type = key_event::kind::down; return event; }
-		if ( text == "\x1b[C" ) { event.type = key_event::kind::right; return event; }
-		if ( text == "\x1b[D" ) { event.type = key_event::kind::left; return event; }
-		if ( text == "\x1b[H" || text == "\x1b[1~" ) {
-			event.type = key_event::kind::home;
-
-			return event;
-		}
-		if ( text == "\x1b[F" || text == "\x1b[4~" ) {
-			event.type = key_event::kind::end;
-
-			return event;
-		}
-
-		const auto first = text.front( );
-
-		if ( first == '\r' || first == '\n' ) {
-			event.type = key_event::kind::enter;
-
-			return event;
-		}
-
-		if ( first == '\x7F' || first == '\x08' ) {
-			event.type = key_event::kind::backspace;
-
-			return event;
-		}
-
-		if ( first == '\x03' ) {
-			event.type = key_event::kind::interrupt;
-
-			return event;
-		}
-
-		if ( first == '\x04' ) {
-			event.type = key_event::kind::exit;
-
-			return event;
-		}
-
-		if ( static_cast< unsigned char >( first ) < 0x20 ) {
-			event.type = key_event::kind::exit;
-
-			return event;
-		}
-
-		event.type = key_event::kind::character;
-		event.text.assign( text.data( ), text.size( ) );
-
-		return event;
 	}
 
 
 #endif
 
-	auto input_decoder::feed( const std::string_view bytes ) -> std::vector< std::string > {
-		auto out = std::vector< std::string >{ };
-
-		for ( const auto character : bytes ) {
-			if ( closed_ ) {
-				break;
-			}
-
-			if ( character == 0x04 ) {
-				// Ctrl+D on an empty line is end-of-input; on a partial line
-				// it is nothing, matching every shell.
-				if ( pending_.empty( ) ) {
-					closed_ = true;
-				}
-
-				continue;
-			}
-
-			if ( character == '\r' || character == '\n' ) {
-				out.push_back( pending_ );
-				pending_.clear( );
-
-				continue;
-			}
-
-			if ( character == 0x7F || character == 0x08 ) {
-				// Backspace deletes one byte, which is one ASCII character.
-				// Multi-byte clusters are the editor's problem; the decoder
-				// only guarantees line framing.
-				if ( !pending_.empty( ) ) {
-					pending_.pop_back( );
-				}
-
-				continue;
-			}
-
-			if ( static_cast< unsigned char >( character ) < 0x20 && character != '\t' ) {
-				continue;
-			}
-
-			pending_.push_back( character );
-		}
-
-		return out;
-	}
 
 }

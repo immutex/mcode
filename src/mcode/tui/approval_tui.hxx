@@ -31,8 +31,13 @@ namespace mcode::tui {
 		// nullopt is closed input and resolves to `refused`.
 		using answer_source = std::function< std::optional< std::string >( ) >;
 
+		// Draws the prompt rows before the answer is read. `ask` blocks on
+		// input, and nothing else draws the request, so without a presenter
+		// the session froze with no indication of what was being asked.
+		using presenter = std::function< void( const std::vector< std::string >& ) >;
+
 		explicit ui_approval_source( answer_queue& answers );
-		explicit ui_approval_source( answer_source source );
+		ui_approval_source( answer_source source, presenter present );
 
 		[[nodiscard]] auto ask( const perm::approval_request& request,
 			const std::function< std::string( ) >& detail ) -> perm::approval_outcome override;
@@ -49,6 +54,7 @@ namespace mcode::tui {
 	private:
 		answer_queue* answers_ = nullptr;
 		answer_source source_;
+		presenter present_;
 		std::size_t asks_ = 0;
 		std::size_t details_ = 0;
 	};

@@ -109,10 +109,10 @@ TEST_CASE( "rendering a fixed state twice produces identical bytes", "[tui][fram
 	const auto previous = build_frame( state, ROWS, COLUMNS, 1 );
 
 	auto emitter = ansi_emitter{ caps };
-	const auto first = emitter.emit( previous, previous, 0 );
+	const auto first = emitter.emit( previous, previous );
 
 	auto emitter_again = ansi_emitter{ caps };
-	const auto second = emitter_again.emit( previous, previous, 0 );
+	const auto second = emitter_again.emit( previous, previous );
 
 	CHECK( first == second );
 	CHECK( first.empty( ) );
@@ -132,7 +132,7 @@ TEST_CASE( "the emitter writes only changed runs with SGR deltas", "[tui][frame]
 	const auto current = build_frame( after, ROWS, COLUMNS, 1 );
 
 	auto emitter = ansi_emitter{ caps };
-	const auto bytes = emitter.emit( previous, current, 0 );
+	const auto bytes = emitter.emit( previous, current );
 
 	// One cursor move for the changed row, one SGR, one cell, nothing else.
 	CHECK( bytes.find( "x" ) != std::string::npos );
@@ -154,7 +154,7 @@ TEST_CASE( "NO_COLOR produces attributes-only output", "[tui][frame]" ) {
 	const auto current = build_frame( after, ROWS, COLUMNS, 1 );
 
 	auto emitter = ansi_emitter{ caps };
-	const auto bytes = emitter.emit( previous, current, 0 );
+	const auto bytes = emitter.emit( previous, current );
 
 	CHECK( bytes.find( "38;" ) == std::string::npos );
 	CHECK( bytes.find( "48;" ) == std::string::npos );
@@ -227,14 +227,96 @@ TEST_CASE( "the first frame is drawn, not swallowed", "[tui][render]" ) {
 	caps.depth = capabilities::color_depth::none;
 	coordinator.set_capabilities( caps );
 
-	coordinator.resize( LIVE_REGION_ROWS, 40 );
-	coordinator.set_prompt( "fix the test" );
+	coordinator.resize( 24, 40 );
+	coordinator.set_prompt( "fix the test", 12 );
 
 	const auto bytes = coordinator.flush( );
 
 	CHECK_FALSE( bytes.empty( ) );
 	CHECK( bytes.find( "fix the test" ) != std::string::npos );
 	CHECK( bytes.find( "> " ) != std::string::npos );
+}
+
+TEST_CASE( "an erased cell reaches the terminal as a space", "[tui][render]" ) {
+	// A blank cell has no text. Appending its `text` wrote nothing, so the
+	// previous frame's glyph stayed on screen -- every backspace, and every
+	// line that got shorter, left ghost characters behind.
+	auto caps = capabilities{ };
+	caps.depth = capabilities::color_depth::none;
+
+	auto coordinator = render_coordinator{ };
+	coordinator.set_capabilities( caps );
+	coordinator.resize( 24, 40 );
+
+	coordinator.set_prompt( "hello", 5 );
+	const auto typed = coordinator.flush( );
+	REQUIRE( typed.find( "hello" ) != std::string::npos );
+
+	// Backspace: one cell shorter, and the removed column must be repainted.
+	coordinator.set_prompt( "hell", 4 );
+	const auto erased = coordinator.flush( );
+
+	CHECK_FALSE( erased.empty( ) );
+
+	// Only the changed cell is re-emitted, so the visible text of this frame is
+	// the erase itself: a single space where the 'o' was. Emitting nothing
+	// would leave the 'o' on screen.
+	auto visible = std::string{ };
+
+	for ( std::size_t index = 0; index < erased.size( ); ++index ) {
+		if ( erased[ index ] == '\x1b' ) {
+			while ( index < erased.size( ) &&
+				!std::isalpha( static_cast< unsigned char >( erased[ index ] ) ) ) {
+				++index;
+			}
+
+			continue;
+		}
+
+		visible.push_back( erased[ index ] );
+	}
+
+	CHECK( visible == " " );
+}
+
+TEST_CASE( "the caret lands on the prompt row, under the typed text",
+	"[tui][render]" ) {
+	// The frame is painted with absolute addressing and leaves the cursor at
+	// the end of the last changed run, which is not where the user is typing.
+	auto caps = capabilities{ };
+	caps.depth = capabilities::color_depth::none;
+
+	auto coordinator = render_coordinator{ };
+	coordinator.set_capabilities( caps );
+	coordinator.resize( 24, 40 );
+	coordinator.set_prompt( "hi", 2 );
+
+	const auto bytes = coordinator.flush( );
+
+	// The prompt is the last row of the live region, and the caret sits after
+	// "> hi" -- four columns in, which is column 5 in the 1-based CHA the
+	// terminal speaks. The row needs no movement: the emitter parks the cursor
+	// on that row, which is what makes the addressing relative rather than
+	// pinned to a fixed screen row.
+	const auto expected = std::string{ "\x1b[5G" };
+
+	CHECK( bytes.ends_with( expected ) );
+}
+
+TEST_CASE( "the caret column is measured in display cells, not bytes",
+	"[tui][render]" ) {
+	auto caps = capabilities{ };
+	caps.depth = capabilities::color_depth::none;
+
+	auto coordinator = render_coordinator{ };
+	coordinator.set_capabilities( caps );
+	coordinator.resize( 24, 40 );
+
+	// Two bytes, one column: a caret placed by byte count would sit one cell
+	// too far right.
+	coordinator.set_prompt( "\u00e9", 2 );
+
+	CHECK( coordinator.state( ).input_cursor == 1 );
 }
 
 TEST_CASE( "every escape the emitter writes is well formed", "[tui][render]" ) {
@@ -248,8 +330,8 @@ TEST_CASE( "every escape the emitter writes is well formed", "[tui][render]" ) {
 
 	auto coordinator = render_coordinator{ };
 	coordinator.set_capabilities( caps );
-	coordinator.resize( LIVE_REGION_ROWS, 40 );
-	coordinator.set_prompt( "hello" );
+	coordinator.resize( 24, 40 );
+	coordinator.set_prompt( "hello", 5 );
 
 	const auto bytes = coordinator.flush( );
 	REQUIRE_FALSE( bytes.empty( ) );
@@ -294,26 +376,79 @@ TEST_CASE( "every escape the emitter writes is well formed", "[tui][render]" ) {
 	CHECK( sequences > 0 );
 }
 
-TEST_CASE( "the render coordinator commits and clears the live region",
-	"[tui][render]" ) {
+TEST_CASE( "a finished tool call is written to scrollback", "[tui][render]" ) {
+	// Tool results were collected into a member nothing rendered, so the
+	// transcript showed the spinner and then nothing at all.
 	auto coordinator = render_coordinator{ };
 
 	auto caps = capabilities{ };
 	caps.depth = capabilities::color_depth::none;
 	coordinator.set_capabilities( caps );
+	coordinator.resize( 24, 40 );
 
-	auto item = event_queue::item{ };
-	item.type = event_queue::kind::tool_start;
-	item.text = "read";
-
-	coordinator.apply( item );
+	auto start = event_queue::item{ };
+	start.type = event_queue::kind::tool_start;
+	start.text = "read";
+	coordinator.apply( start );
 
 	auto end = event_queue::item{ };
 	end.type = event_queue::kind::tool_end;
 	end.text = "read src/main.cxx";
+	coordinator.apply( end );
 
-	const auto bytes = coordinator.commit_tool( { "✓ read src/main.cxx", token::success } );
+	const auto bytes = coordinator.flush( );
 
-	CHECK( bytes.find( "✓ read src/main.cxx" ) != std::string::npos );
+	CHECK( bytes.find( "read src/main.cxx" ) != std::string::npos );
 	CHECK( bytes.find( '\n' ) != std::string::npos );
+}
+
+TEST_CASE( "a committed answer is erased from the region and printed",
+	"[tui][render]" ) {
+	// The commit must erase the region before printing, or the text lands on
+	// the rows the next frame repaints and is overwritten.
+	auto coordinator = render_coordinator{ };
+
+	auto caps = capabilities{ };
+	caps.depth = capabilities::color_depth::none;
+	coordinator.set_capabilities( caps );
+	coordinator.resize( 30, 100 );
+
+	auto delta = event_queue::item{ };
+	delta.type = event_queue::kind::assistant_delta;
+	delta.text = "Red";
+	coordinator.apply( delta );
+
+	auto end = event_queue::item{ };
+	end.type = event_queue::kind::turn_end;
+	coordinator.apply( end );
+
+	const auto bytes = coordinator.flush( );
+
+	CHECK( bytes.find( "\x1b[0J" ) != std::string::npos );
+	CHECK( bytes.find( "Red" ) != std::string::npos );
+}
+
+TEST_CASE( "a turn's answer survives the turn ending", "[tui][render]" ) {
+	// `turn_end` clears the live region. Discarding the accumulated text there
+	// erased the reply before it could be read, so the transcript only ever
+	// showed tool activity.
+	auto coordinator = render_coordinator{ };
+
+	auto caps = capabilities{ };
+	caps.depth = capabilities::color_depth::none;
+	coordinator.set_capabilities( caps );
+	coordinator.resize( 24, 40 );
+
+	auto delta = event_queue::item{ };
+	delta.type = event_queue::kind::assistant_delta;
+	delta.text = "the answer";
+	coordinator.apply( delta );
+
+	auto end = event_queue::item{ };
+	end.type = event_queue::kind::turn_end;
+	coordinator.apply( end );
+
+	const auto bytes = coordinator.flush( );
+
+	CHECK( bytes.find( "the answer" ) != std::string::npos );
 }

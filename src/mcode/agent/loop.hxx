@@ -376,6 +376,12 @@ namespace mcode {
 		}
 
 		[[nodiscard]] auto state( ) const noexcept -> loop_state { return state_; }
+
+		// The model this loop was built for. The status line names it, and it
+		// is otherwise only reachable through the construction inputs.
+		[[nodiscard]] auto model_name( ) const noexcept -> std::string_view {
+			return model_name_;
+		}
 		[[nodiscard]] auto history( ) const noexcept -> const std::vector< model::message >& {
 			return history_;
 		}

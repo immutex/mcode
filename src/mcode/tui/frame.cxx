@@ -219,41 +219,139 @@ namespace mcode::tui {
 		return out;
 	}
 
-	auto ansi_emitter::emit( const cell_buffer& previous, const cell_buffer& current,
-		const std::size_t region_row ) -> std::string {
+	auto ansi_emitter::emit( const cell_buffer& previous, const cell_buffer& current )
+		-> std::string {
 		const auto runs = diff_rows( previous, current );
 
 		if ( runs.empty( ) ) {
 			return { };
 		}
 
-		pen_valid_ = false;
+		const auto rows = current.rows( );
+		const auto parked = rows == 0 ? std::size_t{ 0 } : rows - 1;
 
 		auto out = std::string{ };
-		auto current_row = std::optional< std::size_t >{ };
+		auto here = parked;
+
+		// Movement is relative to the parked cursor, so the region sits
+		// wherever the cursor is. Absolute row addressing pinned it to the top
+		// of the screen and repainted over the transcript's scrollback.
+		const auto move_to = [ & ]( const std::size_t row, const std::size_t column ) {
+			if ( row < here ) {
+				out += "\x1b[";
+				out += std::to_string( here - row );
+				out += 'A';
+			} else if ( row > here ) {
+				out += "\x1b[";
+				out += std::to_string( row - here );
+				out += 'B';
+			}
+
+			// CHA to the run's FIRST column. Positioning to column 1 and
+			// writing the run regardless put every run that did not start at
+			// the row's left edge at the wrong offset -- a status line that
+			// shrank repainted its tail over its head, and the two interleaved.
+			out += "\x1b[";
+			out += std::to_string( column + 1 );
+			out += 'G';
+
+			here = row;
+		};
 
 		for ( const auto& run : runs ) {
-			if ( !current_row || *current_row != run.row ) {
-				current_row = run.row;
-
-				out += "\x1b[";
-				out += std::to_string( region_row + run.row + 1 );
-				out += ";1H";
-			}
+			move_to( run.row, run.column );
 
 			for ( auto index = std::size_t{ 0 }; index < run.count; ++index ) {
 				const auto& cell_value = current.at( run.row, run.column + index );
 
+				// The continuation slot of a wide cluster: the previous cell
+				// already drew both columns.
 				if ( cell_value.width == 0 ) {
 					continue;
 				}
 
 				out += sgr( cell_value.cell_style );
-				out += cell_value.text;
+
+				// A blank cell has no text, and appending nothing leaves the
+				// previous frame's glyph on screen. Every erase -- a backspace,
+				// a line that got shorter, the spinner finishing -- would then
+				// ghost. One space repaints the column, so the diff is honest.
+				if ( cell_value.text.empty( ) ) {
+					out += ' ';
+				} else {
+					out += cell_value.text;
+				}
 			}
 		}
 
+		// Back to the parked row, so the next move starts from a known place
+		// and the prompt is where the cursor is left.
+		move_to( parked, 0 );
+
 		pen_valid_ = false;
+
+		return out;
+	}
+
+	auto ansi_emitter::caret( const std::size_t parked_row, const std::size_t row,
+		const std::size_t column ) const -> std::string {
+		auto out = std::string{ };
+
+		if ( row < parked_row ) {
+			out += "\x1b[";
+			out += std::to_string( parked_row - row );
+			out += 'A';
+		} else if ( row > parked_row ) {
+			out += "\x1b[";
+			out += std::to_string( row - parked_row );
+			out += 'B';
+		}
+
+		out += "\x1b[";
+		out += std::to_string( column + 1 );
+		out += 'G';
+
+		return out;
+	}
+
+	auto ansi_emitter::region_top( const std::size_t row_count ) const -> std::string {
+		if ( row_count <= 1 ) {
+			return std::string{ "\x1b[1G" };
+		}
+
+		auto out = std::string{ "\x1b[" };
+		out += std::to_string( row_count - 1 );
+		out += "A\x1b[1G";
+
+		return out;
+	}
+
+	auto ansi_emitter::down( const std::size_t count ) const -> std::string {
+		if ( count == 0 ) {
+			return { };
+		}
+
+		auto out = std::string{ "\x1b[" };
+		out += std::to_string( count );
+		out += 'B';
+
+		return out;
+	}
+
+	auto ansi_emitter::clear_region( const std::size_t row_count ) const -> std::string {
+		auto out = region_top( row_count );
+
+		for ( auto index = std::size_t{ 0 }; index < row_count; ++index ) {
+			// EL erases the whole line without moving the cursor, which is what
+			// makes this safe to repeat per row.
+			out += "\x1b[2K";
+
+			if ( index + 1 < row_count ) {
+				out += "\x1b[1B";
+			}
+		}
+
+		out += "\x1b[1G";
 
 		return out;
 	}
@@ -266,19 +364,6 @@ namespace mcode::tui {
 		auto out = std::string{ "\x1b[?2026h" };
 		out += frame;
 		out += "\x1b[?2026l";
-
-		return out;
-	}
-
-	auto ansi_emitter::clear_region( const std::size_t region_row,
-		const std::size_t row_count ) const -> std::string {
-		auto out = std::string{ };
-
-		for ( auto index = std::size_t{ 0 }; index < row_count; ++index ) {
-			out += "\x1b[";
-			out += std::to_string( region_row + index + 1 );
-			out += ";1H\x1b[2K";
-		}
 
 		return out;
 	}

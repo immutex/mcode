@@ -33,17 +33,35 @@ namespace mcode::tui {
 	public:
 		explicit ansi_emitter( const capabilities& caps );
 
-		// Renders one frame: cursor to the region top, changed runs, cursor
-		// back to the input row. Empty when nothing changed.
-		[[nodiscard]] auto emit( const cell_buffer& previous, const cell_buffer& current,
-			std::size_t region_row ) -> std::string;
+		// Renders one frame's changed cells.
+		//
+		// The cursor is assumed PARKED on the region's last row -- the prompt
+		// -- and every movement is relative, so the region sits wherever the
+		// cursor is rather than at a fixed screen row. Absolute addressing
+		// pinned the region to the top of the screen and repainted over the
+		// transcript's scrollback.
+		[[nodiscard]] auto emit( const cell_buffer& previous, const cell_buffer& current )
+			-> std::string;
 
 		// Wraps a frame in synchronized-output markers when supported.
 		[[nodiscard]] auto synchronized( const std::string& frame ) const -> std::string;
 
-		// Clears the live region and returns the cursor to the input row.
-		[[nodiscard]] auto clear_region( std::size_t region_row,
-			std::size_t row_count ) const -> std::string;
+		// Moves the parked cursor to one row and column of the live region.
+		//
+		// Painting leaves the cursor wherever the last changed run ended, which
+		// is not where the user is typing, so the caret drifted to the status
+		// line or a tool row after any repaint.
+		[[nodiscard]] auto caret( std::size_t parked_row, std::size_t row,
+			std::size_t column ) const -> std::string;
+
+		// Erases every region row and leaves the cursor parked on the last.
+		[[nodiscard]] auto clear_region( std::size_t row_count ) const -> std::string;
+
+		// Moves the parked cursor to the region's top row.
+		[[nodiscard]] auto region_top( std::size_t row_count ) const -> std::string;
+
+		// Moves down `count` rows. Used to reserve the region at startup.
+		[[nodiscard]] auto down( std::size_t count ) const -> std::string;
 
 	private:
 		[[nodiscard]] auto sgr( const style& value ) -> std::string;

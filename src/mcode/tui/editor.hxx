@@ -11,8 +11,12 @@
 
 namespace mcode::tui {
 
-	// One editable line: content plus the cursor column, both in display
-	// columns so a CJK character moves the cursor by two.
+	// One editable line: content plus the caret's offset into it.
+	//
+	// `cursor` is a BYTE offset into the UTF-8 `text`, not a display column --
+	// the editor owns no width table, and the renderer converts on the way out.
+	// The header previously claimed display columns, which is what made the
+	// mismatch invisible.
 	struct editor_line {
 		std::string text;
 		std::size_t cursor = 0;
@@ -39,6 +43,7 @@ namespace mcode::tui {
 			end,
 			paste,
 			interrupt,
+			escape,
 		};
 
 		struct key_event {
@@ -66,9 +71,16 @@ namespace mcode::tui {
 		}
 
 		[[nodiscard]] auto cursor_row( ) const noexcept -> std::size_t { return cursor_row_; }
-		[[nodiscard]] auto cursor_column( ) const noexcept -> std::size_t {
+
+		// The caret's BYTE offset within the pending input. The renderer turns
+		// this into a display column; nothing outside should treat it as one.
+		[[nodiscard]] auto cursor_offset( ) const noexcept -> std::size_t {
 			return lines_.empty( ) ? 0 : lines_[ cursor_row_ ].cursor;
 		}
+
+		// The caret's byte offset counted across every row, which is what the
+		// one-line prompt echo needs.
+		[[nodiscard]] auto flattened_cursor( ) const noexcept -> std::size_t;
 
 		// The ghost-text suggestion for the current last line, or empty.
 		[[nodiscard]] auto suggestion( ) const -> std::string;

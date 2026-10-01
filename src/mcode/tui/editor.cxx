@@ -222,6 +222,14 @@ namespace mcode::tui {
 
 				return std::nullopt;
 			}
+
+			case key::escape: {
+				// Escape abandons the pending input, the way every other
+				// editor does. The session continues.
+				reset( );
+
+				return std::nullopt;
+			}
 		}
 
 		return std::nullopt;
@@ -246,6 +254,21 @@ namespace mcode::tui {
 		}
 
 		return out;
+	}
+
+	auto input_editor::flattened_cursor( ) const noexcept -> std::size_t {
+		auto offset = std::size_t{ 0 };
+
+		for ( std::size_t index = 0; index < lines_.size( ); ++index ) {
+			if ( index == cursor_row_ ) {
+				return offset + lines_[ index ].cursor;
+			}
+
+			// One space per row break, matching `text()`, so the two agree.
+			offset += lines_[ index ].text.size( ) + 1;
+		}
+
+		return offset;
 	}
 
 	auto input_editor::suggestion( ) const -> std::string {

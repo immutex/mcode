@@ -57,6 +57,11 @@ namespace mcode::tui {
 			// The wait elapsed with no key. Distinct from `exit`: an idle
 			// prompt polls, it does not end the session.
 			timeout,
+
+			// A bare Escape. Not `exit`: Escape is how every other editor
+			// abandons the current input, and ending the session on it made a
+			// stray keypress lose the whole conversation. Ctrl+D exits.
+			escape,
 		};
 
 		kind type = kind::character;
@@ -117,6 +122,17 @@ namespace mcode::tui {
 		bool raw_active_ = false;
 		bool attached_ = false;
 
+		// Keys decoded but not yet returned. One console read yields several
+		// records, and the caller asks for one key at a time -- so the rest are
+		// parked here. Without this the surplus records were discarded, which
+		// is what lost keystrokes whenever typing outran the poll.
+		std::vector< key_event > pending_;
+
+		// A partial escape sequence, when a read split one. POSIX delivers
+		// bytes, and `\x1b[A` can arrive as `\x1b` then `[A`; without this the
+		// lone `\x1b` was read as "quit".
+		std::string carry_;
+
 #if defined( _WIN32 )
 		void* input_handle_ = nullptr;
 		void* output_handle_ = nullptr;
@@ -128,28 +144,6 @@ namespace mcode::tui {
 		bool saved_ = false;
 		termios saved_termios_{ };
 #endif
-	};
-
-	// Turns raw input bytes into plain text lines. The incremental decoder
-	// buffers partial UTF-8 and VT sequences across read boundaries; a
-	// complete line is delivered when Enter arrives. Kept pure so tests can
-	// feed byte chunks without a terminal.
-	class input_decoder {
-	public:
-		// Feeds raw bytes. Returns the completed lines, in order.
-		auto feed( std::string_view bytes ) -> std::vector< std::string >;
-
-		// True when the stream reported end-of-input (Ctrl+D on an empty
-		// line, or stdin closed).
-		[[nodiscard]] auto closed( ) const noexcept -> bool { return closed_; }
-
-		// The pending partial line, for the editor to render.
-		[[nodiscard]] auto pending( ) const noexcept -> const std::string& { return pending_; }
-
-	private:
-		std::string pending_;
-		std::string partial_sequence_;
-		bool closed_ = false;
 	};
 
 }
