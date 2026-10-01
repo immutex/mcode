@@ -3,17 +3,15 @@
 // and tty_posix.cxx.
 #include "mcode/tui/tty.hxx"
 
-#include <chrono>
 #include <cstdlib>
 
 #include "mcode/platform/seams.hxx"
+#include "mcode/support/time.hxx"
 
 namespace mcode::tui {
 
 	auto monotonic_ms( ) -> std::uint64_t {
-		return static_cast< std::uint64_t >(
-			std::chrono::duration_cast< std::chrono::milliseconds >(
-				std::chrono::steady_clock::now( ).time_since_epoch( ) ).count( ) );
+		return support::monotonic_milliseconds( );
 	}
 
 	auto probe_capabilities( const std::string_view colorterm, const std::string_view term,

@@ -233,6 +233,7 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 			auto item = mcode::tui::event_queue::item{ };
 			item.type = target;
 			item.text = display_text( source, value.payload_json );
+			item.stamp_ms = mcode::tui::monotonic_ms( );
 
 			queue.push( std::move( item ) );
 		};
@@ -312,6 +313,7 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 
 			// The approval prompt owns the console while it is up.
 			if ( !approval_active.load( ) ) {
+				coordinator.advance_tools( mcode::tui::monotonic_ms( ) );
 				refresh( );
 				repaint( );
 			}

@@ -25,6 +25,12 @@ namespace mcode::tui {
 			std::string target;
 			std::uint64_t elapsed_ms = 0;
 			std::size_t spinner_frame = 0;
+
+			// When the call started, on the same clock as the event stamp. The
+			// row's clock and spinner are derived from this on each repaint:
+			// they were members nothing ever advanced, so a running call showed
+			// a frozen spinner and `0.0s` for its whole life.
+			std::uint64_t started_ms = 0;
 		};
 
 		std::vector< active_tool > tools;
@@ -83,6 +89,11 @@ namespace mcode::tui {
 		struct item {
 			kind type = kind::assistant_delta;
 			std::string text;
+
+			// Milliseconds on the monotonic clock when the producer saw the
+			// event. The tool row measures from here, so the elapsed time is
+			// the event's age rather than however long the queue took to drain.
+			std::uint64_t stamp_ms = 0;
 		};
 
 		auto push( item value ) -> void;
@@ -140,6 +151,11 @@ namespace mcode::tui {
 		// Applies one queue item to the state.
 		auto apply( const event_queue::item& value ) -> void;
 
+		// Advances the live region's clocks: each active tool's elapsed time and
+		// spinner frame are derived from `now_ms`. Called from the repaint, so
+		// a running call animates instead of standing still.
+		auto advance_tools( std::uint64_t now_ms ) -> void;
+
 		// Builds the current frame and returns the bytes to write. Empty when
 		// nothing changed since the last call.
 		[[nodiscard]] auto flush( ) -> std::string;
@@ -181,6 +197,10 @@ namespace mcode::tui {
 	[[nodiscard]] auto spinner_glyph( std::size_t frame ) -> std::string_view;
 
 	inline constexpr std::size_t SPINNER_FRAMES = 10;
+
+	// How long one spinner frame is held. A frame is a quarter of a second at
+	// this rate, slow enough to read and fast enough to show liveness.
+	inline constexpr std::uint64_t SPINNER_INTERVAL_MS = 120;
 
 	// The prompt's marker. Its width is the caret's base column, so the two are
 	// declared together rather than measured twice.

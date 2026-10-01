@@ -12,4 +12,12 @@ namespace mcode::support {
 	// different question and uses steady_clock directly.
 	[[nodiscard]] auto epoch_milliseconds( ) noexcept -> std::int64_t;
 
+	// Milliseconds from a monotonic clock, for measuring elapsed time.
+	//
+	// Distinct from `epoch_milliseconds` on purpose: this one is only
+	// meaningful as a difference, so it is never written to disk or compared
+	// across processes. Every elapsed-time measurement in the harness reads it,
+	// so two layers cannot disagree about how long something took.
+	[[nodiscard]] auto monotonic_milliseconds( ) noexcept -> std::uint64_t;
+
 }

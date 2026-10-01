@@ -221,6 +221,7 @@ namespace mcode::tui {
 
 				auto tool = render_state::active_tool{ };
 				tool.verb = value.text;
+				tool.started_ms = value.stamp_ms;
 				tool.elapsed_ms = 0;
 				tool.spinner_frame = 0;
 
@@ -274,6 +275,20 @@ namespace mcode::tui {
 				break;
 			}
 
+		}
+	}
+
+	auto render_coordinator::advance_tools( const std::uint64_t now_ms ) -> void {
+		for ( auto& tool : state_.tools ) {
+			// A stamp of zero means the producer did not supply one, which
+			// leaves the row at its initial zero rather than inventing a start.
+			if ( tool.started_ms == 0 || now_ms <= tool.started_ms ) {
+				continue;
+			}
+
+			tool.elapsed_ms = now_ms - tool.started_ms;
+			tool.spinner_frame = static_cast< std::size_t >(
+				tool.elapsed_ms / SPINNER_INTERVAL_MS );
 		}
 	}
 

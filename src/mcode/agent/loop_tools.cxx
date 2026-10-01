@@ -87,7 +87,7 @@ namespace mcode {
 			payload += call.args_json.empty( ) ? "{}" : call.args_json;
 			payload += "}";
 
-			log_->append( "tool.call", std::move( payload ) );
+			log_->append( "tool.call", payload );
 			publish( events::kind::tool_call, std::move( payload ) );
 		}
 
