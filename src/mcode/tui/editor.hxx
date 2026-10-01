@@ -56,8 +56,9 @@ namespace mcode::tui {
 		// The pending input, reset after each submit.
 		auto reset( ) -> void;
 
-		// The pending input as one string, newline-joined. The renderer's prompt
-		// row shows a single line, so this is what it echoes while typing.
+		// The pending input as one line, its rows joined by a space. The
+		// renderer's prompt row is a single line, so this is what it echoes
+		// while typing; the submitted text is the rows themselves.
 		[[nodiscard]] auto text( ) const -> std::string;
 
 		[[nodiscard]] auto lines( ) const noexcept -> const std::vector< editor_line >& {

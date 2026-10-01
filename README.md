@@ -650,6 +650,20 @@ code comments.
     `resize` has already blanked `previous_` to the right size, so the first
     frame can be emitted against it directly.
 
+79. **`sgr` opened and closed the sequence before appending parameters.** It
+    built `"\x1b[0m"` — a complete reset — and then appended `;90;37` and `m`
+    outside the bracket, so the terminal executed the reset and printed
+    `;90;37m` on screen as literal text. Every frame was affected, and the
+    bytes still parsed as valid ANSI, which is why only reading the output
+    catches it. `test_tui_frame` now walks the emitted bytes and fails on a
+    parameter character outside a sequence.
+
+80. **The console decodes written bytes with its own output codepage.** A frame
+    carries UTF-8 (`▸`, the spinner, box drawing) and the session writes raw
+    bytes, so under the default OEM page one separator rendered as `Γû╸`.
+    `tty_session` now sets `CP_UTF8` for the session and restores the previous
+    page on the way out, alongside the console modes.
+
 ## Building
 
 ```bash

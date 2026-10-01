@@ -101,6 +101,20 @@ namespace mcode::tui {
 			return std::unexpected( fail( errc::io, "SetConsoleMode failed" ) );
 		}
 
+		// Every glyph a frame carries is UTF-8 -- the separators, the spinner,
+		// the box drawing -- and the session writes them as raw bytes. The
+		// console decodes those bytes with its own output codepage, so under
+		// the default OEM page one separator arrives as three CP437 glyphs.
+		//
+		// Not fatal on failure: the codepage is an output cosmetic and a
+		// redirected or hosted console can refuse it. A session with mojibake
+		// beats no session.
+		session.saved_output_cp_ = GetConsoleOutputCP( );
+
+		if ( session.saved_output_cp_ != 0 ) {
+			SetConsoleOutputCP( CP_UTF8 );
+		}
+
 		session.raw_active_ = true;
 		session.attached_ = true;
 
@@ -115,9 +129,11 @@ namespace mcode::tui {
 		: caps_( other.caps_ ), raw_active_( other.raw_active_ ),
 		attached_( other.attached_ ), input_handle_( other.input_handle_ ),
 		output_handle_( other.output_handle_ ), in_mode_( other.in_mode_ ),
-		out_mode_( other.out_mode_ ), saved_( other.saved_ ) {
+		out_mode_( other.out_mode_ ), saved_output_cp_( other.saved_output_cp_ ),
+		saved_( other.saved_ ) {
 		other.attached_ = false;
 		other.saved_ = false;
+		other.saved_output_cp_ = 0;
 		other.raw_active_ = false;
 	}
 
@@ -132,10 +148,12 @@ namespace mcode::tui {
 			output_handle_ = other.output_handle_;
 			in_mode_ = other.in_mode_;
 			out_mode_ = other.out_mode_;
+			saved_output_cp_ = other.saved_output_cp_;
 			saved_ = other.saved_;
 
 			other.attached_ = false;
 			other.saved_ = false;
+			other.saved_output_cp_ = 0;
 			other.raw_active_ = false;
 		}
 
@@ -154,6 +172,10 @@ namespace mcode::tui {
 		// one, but a destructor cannot report it usefully either.
 		SetConsoleMode( input_handle_, in_mode_ );
 		SetConsoleMode( output_handle_, out_mode_ );
+
+		if ( saved_output_cp_ != 0 ) {
+			SetConsoleOutputCP( saved_output_cp_ );
+		}
 	}
 
 	tty_session::~tty_session( ) {

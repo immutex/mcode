@@ -2,6 +2,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cctype>
 #include <string>
 
 #include "mcode/tui/cell.hxx"
@@ -234,6 +235,63 @@ TEST_CASE( "the first frame is drawn, not swallowed", "[tui][render]" ) {
 	CHECK_FALSE( bytes.empty( ) );
 	CHECK( bytes.find( "fix the test" ) != std::string::npos );
 	CHECK( bytes.find( "> " ) != std::string::npos );
+}
+
+TEST_CASE( "every escape the emitter writes is well formed", "[tui][render]" ) {
+	// A sequence that closed early left its parameters to be printed as text:
+	// the frame carried "\x1b[0m" followed by ";90;37m", so the terminal
+	// executed the reset and then drew the literal characters ";90;37m" on
+	// screen. Parsing the output back is the only assertion that catches it --
+	// the bytes are "valid" ANSI, just in the wrong place.
+	auto caps = capabilities{ };
+	caps.depth = capabilities::color_depth::ansi16;
+
+	auto coordinator = render_coordinator{ };
+	coordinator.set_capabilities( caps );
+	coordinator.resize( LIVE_REGION_ROWS, 40 );
+	coordinator.set_prompt( "hello" );
+
+	const auto bytes = coordinator.flush( );
+	REQUIRE_FALSE( bytes.empty( ) );
+
+	auto cursor = std::size_t{ 0 };
+	auto sequences = std::size_t{ 0 };
+
+	while ( cursor < bytes.size( ) ) {
+		if ( bytes[ cursor ] != '\x1b' ) {
+			// A `;` here is a parameter that escaped its sequence and is about
+			// to be drawn as text -- the exact shape of the bug. Inside a
+			// sequence it is legal, which is why this is checked only outside.
+			CHECK( bytes[ cursor ] != ';' );
+			++cursor;
+
+			continue;
+		}
+
+		++sequences;
+		REQUIRE( cursor + 1 < bytes.size( ) );
+		REQUIRE( bytes[ cursor + 1 ] == '[' );
+
+		cursor += 2;
+
+		// Only digits, ';' and '?' may appear before the final byte, which must
+		// be a letter. A parameter after the terminator is the bug.
+		while ( cursor < bytes.size( ) && !std::isalpha(
+			static_cast< unsigned char >( bytes[ cursor ] ) ) ) {
+			const auto character = bytes[ cursor ];
+			const auto is_parameter = ( character >= '0' && character <= '9' ) ||
+				character == ';' || character == '?';
+
+			REQUIRE( is_parameter );
+
+			++cursor;
+		}
+
+		REQUIRE( cursor < bytes.size( ) );
+		++cursor;
+	}
+
+	CHECK( sequences > 0 );
 }
 
 TEST_CASE( "the render coordinator commits and clears the live region",

@@ -172,7 +172,12 @@ namespace mcode::tui {
 			return { };
 		}
 
-		auto out = std::string{ "\x1b[0m" };
+		// "\x1b[0" and not "\x1b[0m": the trailing `m` closes the sequence, and
+		// every parameter appended below must land INSIDE the bracket. With the
+		// `m` already present the parameters were emitted after a complete
+		// sequence, so the terminal executed the reset and then printed the
+		// text ";90;37m" on screen.
+		auto out = std::string{ "\x1b[0" };
 
 		if ( value.bold ) {
 			out += ";1";
