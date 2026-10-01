@@ -3,6 +3,7 @@
 #include "mcode/ext/api.hxx"
 #include "mcode/ext/api_internal.hxx"
 
+#include <cmath>
 #include <string>
 #include <string_view>
 
