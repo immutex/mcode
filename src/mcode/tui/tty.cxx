@@ -268,8 +268,11 @@ namespace mcode::tui {
 			}
 
 			if ( available == 0 ) {
+				// An idle prompt polls; it does not end the session. Returning
+				// `exit` here made a quiet terminal quit after the wait, which
+				// the caller cannot distinguish from Ctrl+D.
 				if ( GetTickCount64( ) >= deadline ) {
-					event.type = key_event::kind::exit;
+					event.type = key_event::kind::timeout;
 
 					return event;
 				}
@@ -526,7 +529,14 @@ namespace mcode::tui {
 		const auto ready = ::select( STDIN_FILENO + 1, &read_set, nullptr, nullptr,
 			&timeout );
 
-		if ( ready <= 0 ) {
+		if ( ready == 0 ) {
+			// The wait elapsed. Idle is not exit: the caller polls.
+			event.type = key_event::kind::timeout;
+
+			return event;
+		}
+
+		if ( ready < 0 ) {
 			event.type = key_event::kind::exit;
 
 			return event;

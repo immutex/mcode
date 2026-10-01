@@ -116,12 +116,16 @@ namespace mcode::tui {
 
 		[[nodiscard]] auto state( ) const noexcept -> const render_state& { return state_; }
 
+		// The prompt row's content. Set directly rather than through the
+		// queue: it is local session state, not an event, and the first frame
+		// needs it before any event exists.
+		auto set_prompt( std::string text ) -> void;
+
 	private:
 		capabilities caps_{ };
 		render_state state_;
 		cell_buffer previous_;
 		cell_buffer current_;
-		bool first_frame_ = true;
 	};
 
 	// The spinner glyphs: braille, 80 ms per frame, skipped when idle. Every

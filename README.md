@@ -635,6 +635,21 @@ code comments.
     falls back to `price_input` when the config sets no cached-read price, so
     the default assumes no discount instead of a total one.
 
+77. **`read_key` returning `exit` on a timeout made an idle prompt quit.**
+    `tty_session::read_key` used `exit` for both "the user pressed Ctrl+D" and
+    "the wait elapsed with no key", so a session ended itself whenever the user
+    paused. `key_event::kind::timeout` now carries the second case and the loop
+    repaints and keeps waiting. The same conflation was on both platform
+    branches, Windows and POSIX.
+
+78. **The first rendered frame was swallowed.** `render_coordinator::flush`
+    returned an empty string for the first frame, recording it as the diff
+    baseline without drawing it. The frame builder was only ever reached from a
+    bus event, so at an idle prompt nothing appeared until the user typed --
+    no prompt, no status line -- which reads as a program that hung or exited.
+    `resize` has already blanked `previous_` to the right size, so the first
+    frame can be emitted against it directly.
+
 ## Building
 
 ```bash

@@ -108,6 +108,10 @@ namespace mcode::tui {
 		current_.resize( row_count, column_count );
 	}
 
+	auto render_coordinator::set_prompt( std::string text ) -> void {
+		state_.input_line = std::move( text );
+	}
+
 	auto render_coordinator::apply( const event_queue::item& value ) -> void {
 		switch ( value.type ) {
 			case event_queue::kind::assistant_delta: {
@@ -180,14 +184,12 @@ namespace mcode::tui {
 	auto render_coordinator::flush( ) -> std::string {
 		current_ = build_frame( state_, previous_.rows( ), previous_.columns( ), 1 );
 
-		if ( first_frame_ ) {
-			first_frame_ = false;
-
-			previous_ = current_;
-
-			return std::string{ };
-		}
-
+		// The first frame is DRAWN, not just recorded. Returning empty here
+		// left the screen blank until some later frame differed, and at an idle
+		// prompt the only thing that differs is what the user types -- so the
+		// prompt, the status line and every committed row were invisible until
+		// then. `resize` has already blanked `previous_` to the right size, so
+		// emitting against it writes the whole frame.
 		auto emitter = ansi_emitter{ caps_ };
 		auto bytes = emitter.emit( previous_, current_, 0 );
 

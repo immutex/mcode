@@ -215,6 +215,27 @@ TEST_CASE( "spinner glyphs are single-width and cycle", "[tui][render]" ) {
 	CHECK( spinner_glyph( 0 ) == spinner_glyph( SPINNER_FRAMES ) );
 }
 
+TEST_CASE( "the first frame is drawn, not swallowed", "[tui][render]" ) {
+	// The prompt has to reach the terminal before the first key is read. The
+	// frame builder was only ever reached from a bus event, so an idle session
+	// showed nothing at all -- no prompt, no status line -- until something was
+	// typed, which reads as a program that hung.
+	auto coordinator = render_coordinator{ };
+
+	auto caps = capabilities{ };
+	caps.depth = capabilities::color_depth::none;
+	coordinator.set_capabilities( caps );
+
+	coordinator.resize( LIVE_REGION_ROWS, 40 );
+	coordinator.set_prompt( "fix the test" );
+
+	const auto bytes = coordinator.flush( );
+
+	CHECK_FALSE( bytes.empty( ) );
+	CHECK( bytes.find( "fix the test" ) != std::string::npos );
+	CHECK( bytes.find( "> " ) != std::string::npos );
+}
+
 TEST_CASE( "the render coordinator commits and clears the live region",
 	"[tui][render]" ) {
 	auto coordinator = render_coordinator{ };

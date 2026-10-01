@@ -63,6 +63,14 @@ namespace mcode::cli {
 
 		auto turn = session{ *built };
 
+		// The plain path draws no prompt, so without this the session prints
+		// nothing until the first answer arrives and reads as a hang. The
+		// model is named because it is the one thing the user cannot see from
+		// the prompt: the plain path is the fallback for a terminal the TUI
+		// could not take over.
+		std::fprintf( stderr, "mcode: interactive session; one prompt per line, Ctrl+D to exit\n" );
+		std::fflush( stderr );
+
 		// The plain path has no renderer, so the answer is echoed here. Without
 		// this the fallback read input and discarded every response, which is a
 		// session that looks like it works and says nothing.

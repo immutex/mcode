@@ -53,6 +53,10 @@ namespace mcode::tui {
 			interrupt,
 			exit,
 			paste,
+
+			// The wait elapsed with no key. Distinct from `exit`: an idle
+			// prompt polls, it does not end the session.
+			timeout,
 		};
 
 		kind type = kind::character;

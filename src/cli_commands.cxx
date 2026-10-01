@@ -978,6 +978,17 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 
 	auto editor = mcode::tui::input_editor{ };
 
+	// Draw the prompt once before waiting for the first key. The frame was
+	// only ever produced from a bus event, and an idle prompt has no event, so
+	// the terminal stayed blank until something was typed -- indistinguishable
+	// from a program that hung or exited without printing anything.
+	const auto show_prompt = [ & ]( ) {
+		coordinator.set_prompt( editor.text( ) );
+		repaint( );
+	};
+
+	show_prompt( );
+
 	while ( true ) {
 		// The editor owns the prompt: keys go through it, so multi-line
 		// editing, the history ring and the ghost-text suggestion are live.
@@ -985,7 +996,17 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 		auto submitted = std::optional< std::string >{ };
 
 		while ( !submitted ) {
-			const auto key = session_tty->read_key( 600'000 );
+			// A short poll, not a long block: the prompt repaints between
+			// keys, so typing echoes and an idle session stays responsive.
+			const auto key = session_tty->read_key( 250 );
+
+			if ( key.type == mcode::tui::key_event::kind::timeout ) {
+				// The wait elapsed with no key. Idle is not exit: returning
+				// here ended the session whenever the user paused.
+				show_prompt( );
+
+				continue;
+			}
 
 			if ( key.type == mcode::tui::key_event::kind::exit ) {
 				// Ctrl+D ends the session; the editor's exit flag tracks it.
@@ -1055,6 +1076,7 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 			}
 
 			std::ignore = editor.handle( forwarded );
+			show_prompt( );
 		}
 
 		if ( !submitted || submitted->empty( ) ) {

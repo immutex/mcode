@@ -234,6 +234,20 @@ namespace mcode::tui {
 		history_position_ = history_.size( );
 	}
 
+	auto input_editor::text( ) const -> std::string {
+		auto out = std::string{ };
+
+		for ( std::size_t index = 0; index < lines_.size( ); ++index ) {
+			if ( index != 0 ) {
+				out.push_back( ' ' );
+			}
+
+			out += lines_[ index ].text;
+		}
+
+		return out;
+	}
+
 	auto input_editor::suggestion( ) const -> std::string {
 		if ( lines_.empty( ) ) {
 			return { };
