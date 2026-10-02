@@ -188,16 +188,18 @@ is a prompt that grants by accident.
 | `src/mcode/tui/cell.{hxx,cxx}` | A | `cell`, `style`, `cell_buffer`, the width function |
 | `src/mcode/tui/frame.{hxx,cxx}` | A | pure `state → buffer`, diff, ANSI emit |
 | `src/mcode/tui/theme.{hxx,cxx}` | A | named tokens and the depth fallback rule |
-| `src/mcode/tui/markdown.{hxx,cxx}` | A | incremental block parser and renderer |
-| `src/mcode/tui/diff_view.{hxx,cxx}` | A | line tinting, token LCS, folding |
-| `src/mcode/tui/editor.{hxx,cxx}` | A | multi-line input, history, paste, autosuggest |
+| `src/mcode/tui/markdown.{hxx,cxx}` | A | inline formatting for one line |
+| `src/mcode/tui/palette.{hxx,cxx}` | A | slash-command filter and query parsing |
+| `src/mcode/tui/editor.{hxx,cxx}` | A | multi-line input and history |
 | `src/mcode/tui/approval_tui.{hxx,cxx}` | A | `perm::approval_source` over the UI |
 | `src/mcode/tui/render.{hxx,cxx}` | A | the render coordinator and event queue |
 | `src/mcode/cli/repl.{hxx,cxx}` | A | the session loop and turn sequencing |
+| `src/mcode/cli/slash.{hxx,cxx}` | A | command parsing, split from execution so it is testable |
 | `src/cli_commands.cxx` | **A** | the REPL entry, reusing the existing construction |
 | `src/main.cxx` | **A** | the no-subcommand branch |
 | `tests/test_tui_frame.cxx` | A | frame/diff/emit assertions on bytes |
-| `tests/test_tui_markdown.cxx` | A | block parsing and streaming |
+| `tests/test_tui_markdown.cxx` | A | inline formatting |
+| `tests/test_cli_slash.cxx` | A | slash parsing and palette filtering |
 | `tests/test_tui_editor.cxx` | A | input handling against synthetic key events |
 | `tests/test_tui_repl.cxx` | A | two turns in one process, history intact |
 
@@ -216,7 +218,7 @@ is a prompt that grants by accident.
 5. `frame`: pure builder, row-then-cell diff, ANSI emitter with SGR delta
    tracking. Assert on emitted bytes.
 6. `render`: the coordinator, the queue, the commit protocol.
-7. `markdown`, then `diff_view`, then `editor`.
+7. `markdown`, then `editor`, then the slash palette.
 8. `approval_tui`, then the REPL wiring in `cli_commands.cxx` and `main.cxx`.
 
 ## Acceptance

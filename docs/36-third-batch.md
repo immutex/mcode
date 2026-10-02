@@ -197,11 +197,12 @@ searching `PATH`.
 
 **A — the interactive surface.** `src/mcode/tui/` (tty, cell, theme, frame,
 markdown, diff_view, editor, approval_tui, render) plus `cli/repl`, wired into
-`run_repl`. The loop runs on a worker thread per turn and the renderer pumps on
-the main thread; the bus stays single-threaded because its handlers run on the
-loop thread and push copies into a mutex-guarded queue. Two turns in one
-process carry history — asserted, and confirmed live against the endpoint.
-`mcode exec` is byte-unchanged.
+`run_repl`. `diff_view` and the markdown block parser were later removed as
+unwired scaffolding — see `37` §Markdown and diffs. The loop runs on a worker
+thread per turn and the renderer pumps on the main thread; the bus stays
+single-threaded because its handlers run on the loop thread and push copies
+into a mutex-guarded queue. Two turns in one process carry history — asserted,
+and confirmed live against the endpoint. `mcode exec` is byte-unchanged.
 
 **B — the Lua API.** The declared surface is now real in both directions: the
 declared-vs-implemented test **parses `extensions/mcode.d.luau` at test time**
