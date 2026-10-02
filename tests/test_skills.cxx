@@ -1,9 +1,3 @@
-// Skills: frontmatter parsing, discovery, dedupe, collision precedence, index
-// rendering, and the skill_read tool through the real extension loader.
-//
-// Every fixture lives in a process-unique scratch directory, so parallel
-// worktrees cannot delete each other's inputs.
-
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
@@ -219,8 +213,7 @@ TEST_CASE( "a symlinked skill root does not double-index", "[skills]" ) {
 	std::filesystem::create_directory_symlink( real_root, link, error );
 
 	if ( error ) {
-		// A symlink needs privileges on some Windows configurations. The test is
-		// then vacuous, so it says so rather than passing silently.
+		// a symlink needs privileges on some Windows setups; without one the test is vacuous.
 		WARN( "skipped: cannot create a symlink here (" << error.message( ) << ")" );
 
 		return;
@@ -380,9 +373,7 @@ TEST_CASE( "the skill index is emitted only when skill_read is registered", "[sk
 
 	const auto without = build_system_prompt( without_tool, std::string{ }, index );
 
-	// The dangling-reference rule: a prompt that names a tool the model does
-	// not have is an unsatisfiable rule. No skill line, no section, no
-	// reference at all.
+	// a prompt naming a tool the model does not have is an unsatisfiable rule.
 	CHECK( without.find( "demo" ) == std::string::npos );
 	CHECK( without.find( "skill_read" ) == std::string::npos );
 	CHECK( without.find( "# Skills" ) == std::string::npos );
@@ -428,11 +419,7 @@ TEST_CASE( "the session-start budget holds with a realistic chain and 15 skills"
 	CHECK( chain_tokens <= INSTRUCTION_CHAIN_TOKEN_BUDGET );
 	CHECK( index_tokens <= SKILL_INDEX_TOKEN_BUDGET );
 
-	// The whole session-start row, not three of its four parts. Asserting only
-	// prompt + chain + index sums to 5K against an 8.5K budget and would pass
-	// with the tools slice 70% over -- the test would not notice the one thing
-	// it exists to bound. The tools figure is the budgeted 3.5K; `test_tools`
-	// asserts the real schemas against that same number.
+	// all four parts: the first three alone would pass while the tools slice is over budget.
 	const auto session_start_tokens = prompt_tokens + chain_tokens + index_tokens
 		+ TOOLS_TOKEN_BUDGET;
 

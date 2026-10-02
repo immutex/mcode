@@ -1,12 +1,5 @@
 #pragma once
 
-// The startup smoke test's shared state and reporting helpers.
-//
-// Split out so the smoke checks can live in more than one translation unit:
-// main.cxx is the driver, and a single file listing every check grew past the
-// project's file-length limit. The counters are inline variables rather than
-// extern definitions, so a check in any TU increments the same totals.
-
 #include <cstdio>
 #include <string_view>
 
@@ -42,9 +35,6 @@ namespace smoke {
 
 }
 
-// Defined in smoke_cli_extensions.cxx. Split so no single smoke file exceeds the
-// project's file-length limit.
 auto smoke_cli_and_extensions( ) -> void;
 
-// Defined in smoke_luau.cxx: the extension-layer checks and the boundary probes.
 auto smoke_luau( ) -> void;

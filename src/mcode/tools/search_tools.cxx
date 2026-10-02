@@ -22,33 +22,25 @@ namespace mcode::tools {
 		inline constexpr std::size_t DEFAULT_GREP_MATCHES = 50;
 		inline constexpr std::size_t MAX_GREP_MATCHES = 200;
 
-		// Files above this are skipped by grep: std::regex can backtrack
-		// catastrophically, and the bound is per file, enforced while scanning.
+		// std::regex backtracks catastrophically, so the cap is per file, enforced mid-scan
 		inline constexpr std::uintmax_t GREP_FILE_BYTES = 1u * 1024u * 1024u;
 
-		// A single line longer than this is skipped in grep: matching inside it is
-		// where backtracking lives.
+		// lines longer than this are skipped: matching inside them is where backtracking lives
 		inline constexpr std::size_t GREP_LINE_BYTES = 8u * 1024u;
 
 		inline constexpr std::size_t GREP_CONTEXT_CHARS = 120;
 
-		// The per-call glob candidate budget: this many candidates per possible
-		// match plus a base floor, so a narrow pattern still sees enough of the
-		// tree.
+		// candidates per possible match, plus a floor, so a narrow pattern still sees the tree
 		inline constexpr std::size_t GLOB_BUDGET_PER_RESULT = 4;
 		inline constexpr std::size_t GLOB_BUDGET_BASE = 256;
 
-		// The ignore filter, applied in this layer. The workspace walk is
-		// ignore-blind by design; these are the directories that would otherwise
-		// burn the whole result budget on artifacts.
+		// the workspace walk is ignore-blind; these would burn the whole result budget on artifacts
 		[[nodiscard]] auto always_skipped( const std::string_view name ) noexcept -> bool {
 			return name == ".git" || name == ".mcode" || name == "build" || name == "node_modules" ||
 				name == ".vs" || name == ".vscode" || name == "out";
 		}
 
-		// Parses the root .gitignore's simple subset: one pattern per line, `#`
-		// comments, trailing `/` marks a directory, `*` wildcards. Negation,
-		// nested files and `**` rules are out of scope for this slice.
+		// root .gitignore only: one pattern per line, # comments, trailing / = dir, * wildcards
 		class ignore_rules {
 		public:
 			auto load( const std::filesystem::path& root ) -> void {
@@ -105,8 +97,6 @@ namespace mcode::tools {
 						return true;
 					}
 
-					// A wildcard pattern matches any path segment sequence against
-					// the file name portion.
 					if ( entry.pattern.find( '*' ) != std::string_view::npos &&
 						glob_match( entry.pattern, relative ) ) {
 						return true;
@@ -116,8 +106,7 @@ namespace mcode::tools {
 				return false;
 			}
 
-			// `*` matches within one segment; a pattern with no `/` matches the file
-			// name in any directory.
+			// `*` stays within one segment; a pattern with no `/` matches the file name anywhere
 			[[nodiscard]] static auto glob_match( const std::string_view pattern,
 				const std::string_view path ) noexcept -> bool {
 				const auto slash = pattern.find( '/' );
@@ -143,8 +132,6 @@ namespace mcode::tools {
 			std::vector< rule > rules_;
 		};
 
-		// Walks the workspace collecting candidate paths for glob and grep, with
-		// the ignore filter applied. Returns workspace-relative paths.
 		[[nodiscard]] auto collect_paths( const workspace& space, const ignore_rules& rules,
 			std::size_t budget ) -> std::vector< std::string > {
 			auto out = std::vector< std::string >{ };
@@ -198,8 +185,6 @@ namespace mcode::tools {
 			return out;
 		}
 
-		// Matches a glob pattern (with `**` crossing directories) against a
-		// workspace-relative path. The shared matcher owns the segment walk.
 		[[nodiscard]] auto glob_matches_pattern( const std::string_view path,
 			const std::string_view pattern ) -> bool {
 			return support::glob_match( pattern, path );
@@ -237,10 +222,7 @@ namespace mcode::tools {
 		auto rules = ignore_rules{ };
 		rules.load( space.root( ) );
 
-		// Collect every candidate the walk can see, then match the pattern against
-		// the relative path. This costs one full walk per call; the workspace walk
-		// cannot be reused because it applies the pattern per segment without the
-		// ignore filter.
+		// the workspace walk cannot be reused: it applies the pattern per segment, ignore-blind
 		const auto budget = max_results * GLOB_BUDGET_PER_RESULT + GLOB_BUDGET_BASE;
 		auto candidates = collect_paths( space, rules, budget );
 
@@ -337,9 +319,7 @@ namespace mcode::tools {
 			name_filter = *requested;
 		}
 
-		// The walk budget bounds how many candidate files the ignore-aware walk
-		// collects. When it is reached the scan is PARTIAL, and "not found" would
-		// be a lie about files never examined, so the result says so.
+		// a partial scan must never read as proof of absence
 		auto candidates = collect_paths( space, rules, DEFAULT_GLOB_LIMIT + 1 );
 		auto partial_coverage = candidates.size( ) > DEFAULT_GLOB_LIMIT;
 

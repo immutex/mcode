@@ -147,9 +147,6 @@ namespace mcode {
 		out += "Keep chat terse; keep code at full verbosity. Cite changes as";
 		out += " path:line.\n";
 
-		// Sections 10 and 11 are session-start only: both arrive fully rendered
-		// from the caller, and nothing here recomputes per turn, so the cached
-		// prefix stays byte-stable.
 		if ( !instruction_chain.empty( ) ) {
 			out += "\n# Project instructions\n";
 			out += "The instructions below come from the repository's AGENTS.md";

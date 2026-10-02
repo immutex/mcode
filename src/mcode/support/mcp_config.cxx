@@ -8,11 +8,8 @@ namespace mcode::mcp {
 
 	namespace {
 
-		// The section is `[mcp]` and every server lives under `mcp.servers.<name>`.
 		constexpr auto SERVERS_PREFIX = std::string_view{ "mcp.servers." };
 
-		// The fields one server accepts. Anything else is a typo, and a typo in a
-		// launch command is the case that must not pass silently.
 		constexpr auto SERVER_FIELDS = std::array{
 			std::string_view{ "command" },
 			std::string_view{ "args" },
@@ -21,12 +18,9 @@ namespace mcode::mcp {
 			std::string_view{ "tools" },
 		};
 
-		// The only transport this build speaks. A declared other one is refused
-		// rather than spawned and failed later.
 		constexpr auto STDIO_TRANSPORT = std::string_view{ "stdio" };
 
-		// A server name lands inside `mcp__<server>__<tool>`, so it must be
-		// non-empty and cannot carry the separator that prefixing relies on.
+		// the name lands inside `mcp__<server>__<tool>`.
 		auto is_valid_server_name( const std::string_view name ) -> bool {
 			if ( name.empty( ) ) {
 				return false;
@@ -54,8 +48,6 @@ namespace mcode::mcp {
 				"transport must be \"stdio\"; no other transport ships" ) );
 		}
 
-		// The launch command is the code-execution vector. An empty or missing one
-		// is refused, never defaulted to something plausible.
 		if ( server.command.empty( ) ) {
 			return std::unexpected( server_error( server.name,
 				"'command' is required and must name the server's executable" ) );
@@ -76,12 +68,6 @@ namespace mcode::mcp {
 			-> result< std::vector< server_config > > {
 			auto out = std::vector< server_config >{ };
 
-			// The TOML reader emits a key only when it has a value, so a server
-			// declared as `[mcp.servers.filesystem]` with fields beneath it produces
-			// `mcp.servers.filesystem.command` and friends -- never a bare
-			// `mcp.servers.filesystem` row. Servers are therefore built from the
-			// FIELD keys, and each server is finished the first time its name is
-			// seen; a later field for a name already emitted is a duplicate.
 			for ( const auto& full_key : keys ) {
 				const auto& key = full_key.first;
 
@@ -92,9 +78,6 @@ namespace mcode::mcp {
 				const auto remainder = key.substr( SERVERS_PREFIX.size( ) );
 				const auto separator = remainder.find( '.' );
 
-				// A bare `mcp.servers.<name>` row carries no value the reader can
-				// act on; the fields are what define the server. Skipping it is not
-				// a silent drop: nothing is lost, because there is nothing there.
 				if ( separator == std::string_view::npos ) {
 					continue;
 				}
@@ -128,8 +111,6 @@ namespace mcode::mcp {
 					fresh.name = std::string{ server_name };
 					fresh.transport = STDIO_TRANSPORT;
 
-					// A newly configured server is disabled unless the user wrote
-					// `enabled = true`. Enabling is explicit; absence is not consent.
 					existing = out.insert( out.end( ), std::move( fresh ) );
 				}
 
@@ -144,11 +125,7 @@ namespace mcode::mcp {
 							"': 'command' must be an array of strings" ) );
 					}
 
-					// `args` appends to `command`, and the map iterates keys in
-					// sorted order -- args arrives first. `command` therefore
-					// PREPENDS the program rather than replacing what args built,
-					// so the assembled argv is program-first whichever order the
-					// file wrote the two keys in.
+					// the map iterates sorted, so args arrives first; command PREPENDS the program.
 					server.command.insert( server.command.begin( ),
 						std::make_move_iterator( argv->begin( ) ),
 						std::make_move_iterator( argv->end( ) ) );
@@ -197,9 +174,6 @@ namespace mcode::mcp {
 				}
 			}
 
-			// Validation happens once per assembled server, after every field row
-			// has been read -- not per row, which would refuse a server whose
-			// command arrives after its header.
 			for ( const auto& server : out ) {
 				if ( const auto validated = validate_server( server ); !validated ) {
 					return std::unexpected( validated.error( ) );

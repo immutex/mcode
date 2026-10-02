@@ -18,6 +18,7 @@ mcode.model.register({
 	-- choices[0].delta.tool_calls[] fragments keyed by index.
 	stream = {
 		text_delta = "/choices/0/delta/content",
+		thinking_delta = "/choices/0/delta/reasoning_content",
 		tool_calls = {
 			index = "/choices/0/delta/tool_calls/0/index",
 			id = "/choices/0/delta/tool_calls/0/id",

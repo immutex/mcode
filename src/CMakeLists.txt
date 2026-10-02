@@ -122,12 +122,13 @@ add_library(mcode_core STATIC
     mcode/tui/frame.cxx
     mcode/tui/theme.cxx
     mcode/tui/markdown.cxx
-    mcode/tui/diff_view.cxx
     mcode/tui/editor.cxx
     mcode/tui/approval_tui.cxx
+    mcode/tui/palette.cxx
     mcode/tui/render.cxx
 
     mcode/cli/repl.cxx
+    mcode/cli/slash.cxx
 )
 
 target_include_directories(mcode_core
@@ -191,7 +192,8 @@ endif()
 
 set(MCODE_BUNDLED_EXT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../extensions")
 
-add_executable(mcode main.cxx cli_commands.cxx cli_repl.cxx cli_session.cxx smoke_cli_extensions.cxx smoke_luau.cxx)
+add_executable(mcode main.cxx cli_commands.cxx cli_repl.cxx cli_session.cxx
+    cli_approval.cxx smoke_cli_extensions.cxx smoke_luau.cxx)
 target_link_libraries(mcode PRIVATE mcode_core)
 
 # The binary cannot live at `src/mcode`: that path is the SOURCE DIRECTORY, and on

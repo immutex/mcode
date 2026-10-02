@@ -94,18 +94,14 @@ TEST_CASE( "read refuses binary with a stub, never emitting bytes", "[tools][rea
 }
 
 TEST_CASE( "read of an empty file succeeds and records the read", "[tools][read]" ) {
-	// Zero lines is a legitimate state, not an offset past the end. Treating it as
-	// one rejected the default offset of 1, so reading a file the agent had just
-	// created failed and the read went unrecorded -- which then refused the write
-	// that followed, since write requires a prior read.
+	// zero lines is a legitimate state, not an offset past the end
 	auto setup = fixture{ };
 	setup.write_raw( "empty.txt", "" );
 
 	const auto out = run_tool( handle_read, R"({"path":"empty.txt"})", setup );
 	CHECK_FALSE( is_error_json( out ) );
 
-	// An empty render is indistinguishable from a tool that produced nothing, so
-	// the result says which it is.
+	// an empty render must be distinguishable from a tool that produced nothing
 	CHECK( out.find( "\"empty\":true" ) != std::string::npos );
 
 	const auto absolute = setup.space.resolve( "empty.txt" );
@@ -152,7 +148,7 @@ TEST_CASE( "write succeeds after a read and refuses a stale file", "[tools][writ
 	CHECK( replaced.find( "\"ok\":true" ) != std::string::npos );
 	CHECK( replaced.find( "\"mode\":\"overwrite\"" ) != std::string::npos );
 
-	// An external change after the recorded read makes the next write stale.
+	// a write after an external change to the recorded read is stale
 	setup.write_raw( "notes.txt", "externally changed\n" );
 
 	const auto stale = run_tool( handle_write,
@@ -424,8 +420,6 @@ TEST_CASE( "read of a non-UTF-8 file does not make the first write stale", "[too
 TEST_CASE( "deny beats allow regardless of scope order", "[perm][engine]" ) {
 	auto setup = fixture{ };
 
-	// A user-scope allow and a session-scope deny for the same argv: the deny
-	// wins no matter which was added first.
 	setup.engine.add_config_rules( perm::rule_scope::user, { }, { "git status" } );
 	setup.engine.add_config_rules( perm::rule_scope::session, { "git status" }, { } );
 
@@ -455,7 +449,6 @@ TEST_CASE( "a remembered allow is argv-exact", "[perm][engine]" ) {
 
 	CHECK( setup.engine.decide( status ) == perm::permission_decision::allow );
 
-	// The store now holds `git status`; a different argv is still an ask.
 	auto push = perm::permission_request{ };
 	push.tool_name = "bash";
 	push.klass = tool_class::exec;

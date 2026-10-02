@@ -13,8 +13,6 @@ namespace mcode::model {
 	namespace {
 
 		auto is_json_pointer( const std::string_view text ) -> bool {
-			// Empty means the whole document. Otherwise a JSON pointer is a sequence
-			// of `/`-prefixed tokens.
 			if ( text.empty( ) ) {
 				return true;
 			}
@@ -23,10 +21,7 @@ namespace mcode::model {
 				return false;
 			}
 
-			// The applier resolves pointers literally, so the two RFC 6901 forms it
-			// cannot honour are refused here rather than resolving to nothing at
-			// first token: `/-` means "append to the array" and `*` is not a
-			// wildcard in a JSON pointer at all.
+			// `/-` means "append to the array" and `*` is not a JSON pointer wildcard at all.
 			if ( text.find( "/-" ) != std::string_view::npos ) {
 				return false;
 			}
@@ -38,9 +33,6 @@ namespace mcode::model {
 			return text.starts_with( "http://" ) || text.starts_with( "https://" );
 		}
 
-		// Returns void, not a status: an absent member is not a failure, and a
-		// fallible signature on an infallible operation forces every caller either
-		// to check a value that is always empty or to discard it.
 		auto string_member( const json::document& doc, const std::string_view key,
 			std::string& target ) -> void {
 			if ( const auto found = doc.get_string( key ) ) {
@@ -61,22 +53,18 @@ namespace mcode::model {
 		}
 
 		if ( !is_absolute_url( descriptor.endpoint ) ) {
-			// An unvalidated endpoint would let a descriptor point at file:// or a
-			// bare host, which the egress policy cannot reason about.
+			// a bare host or file:// is not something the egress policy can reason about.
 			return std::unexpected( fail( errc::config,
 				"provider '" + descriptor.name + "' endpoint must be an absolute http(s) URL" ) );
 		}
 
-		// An escape hatch needs no mapping; everything else needs at least one.
 		if ( !descriptor.escape_hatch && descriptor.stream.text_delta.empty( ) &&
 			descriptor.stream.tool_call_args.empty( ) ) {
 			return std::unexpected( fail( errc::config,
 				"provider '" + descriptor.name + "' maps neither text nor tool-call deltas" ) );
 		}
 
-		// Every pointer the descriptor can carry, so a typo is caught here rather
-		// than silently dropping a field at first token. Adding a pointer to the
-		// struct without adding it here is the bug this array exists to prevent.
+		// adding a pointer to the struct without adding it here is the bug this array prevents.
 		const auto pointers = std::array< std::pair< const char*, const std::string* >, 14 >{ {
 			{ "stream.text_delta", &descriptor.stream.text_delta },
 			{ "stream.thinking_delta", &descriptor.stream.thinking_delta },
@@ -119,10 +107,6 @@ namespace mcode::model {
 
 	namespace {
 
-		// The keys a descriptor accepts, per level. A typo such as `steam` for
-		// `stream` would otherwise be dropped silently, and the descriptor would load
-		// with the field unset -- the first-token failure validation exists to
-		// prevent exactly that.
 		inline constexpr auto ALLOWED_TOP_LEVEL = std::array< std::string_view, 7 >{
 			"name", "endpoint", "auth", "request", "stream", "extra_headers", "on_event",
 		};
@@ -167,9 +151,6 @@ namespace mcode::model {
 		}
 
 		auto reject_unknown_keys( const json::document& document ) -> status {
-			// Every level is checked, including the ones the descriptor may omit. A
-			// block that is absent yields no keys, so this costs nothing when the
-			// descriptor is minimal.
 			const auto levels = std::array< std::pair< const char*, std::span< const std::string_view > >, 7 >{ {
 				{ "", ALLOWED_TOP_LEVEL },
 				{ "/auth", ALLOWED_AUTH },
@@ -236,10 +217,7 @@ namespace mcode::model {
 			}
 		}
 
-		// An `auth` block that is present but names no source is a typo, not an
-		// intentional "no auth": `auth = { header = "..." }` would otherwise
-		// validate and send an unauthenticated request. Same rule as the manifest's
-		// unknown-key rejection (`19`).
+		// an auth block that names no source is a typo, not an intentional "no auth".
 		if ( parsed->has_pointer( "/auth" ) && descriptor.auth.from == auth_spec::source::none ) {
 			return std::unexpected( fail( errc::config,
 				"provider '" + descriptor.name +
@@ -270,7 +248,6 @@ namespace mcode::model {
 			descriptor.request.response_schema = *field;
 		}
 
-		// The Lua-facing form nests the stream mapping.
 		if ( auto text = parsed->pointer_string( "/stream/text_delta" ) ) {
 			descriptor.stream.text_delta = *text;
 		}
@@ -347,9 +324,7 @@ namespace mcode::model {
 			descriptor.stream.tool_call_events = *gated;
 		}
 
-		// Terminal markers differ per provider -- [OI] Chat Completions sends the
-		// [DONE] sentinel, Anthropic sends a message_stop event, Responses sends
-		// response.completed -- so this is a descriptor field, not a hardcoded list.
+		// terminal markers differ per provider ([DONE] sentinel, message_stop, response.completed).
 		if ( parsed->has_pointer( "/stream/terminal_events" ) ) {
 			auto terminal = parsed->pointer_string_array( "/stream/terminal_events" );
 
@@ -393,7 +368,6 @@ namespace mcode::model {
 
 	auto provider_registry::find( const std::string_view name ) const
 		-> const provider_descriptor* {
-		// std::less<> makes the map transparent, so this does not build a string.
 		const auto found = entries_.find( name );
 
 		return found != entries_.end( ) ? &found->second.descriptor : nullptr;

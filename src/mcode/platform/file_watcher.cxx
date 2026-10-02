@@ -1,5 +1,3 @@
-// The file-watcher seam. Split from seams.cxx, which owns the platform
-// queries; this one has no platform branch at all.
 #include "mcode/platform/seams.hxx"
 
 #include <filesystem>
@@ -11,8 +9,6 @@
 namespace mcode::platform {
 
 	auto file_watcher::supported( ) noexcept -> bool {
-		// The interface exists so the extension API has a shape to target; the real
-		// implementation is a Lua extension over a small core API.
 		return false;
 	}
 

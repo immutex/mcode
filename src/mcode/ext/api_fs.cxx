@@ -12,10 +12,6 @@ namespace mcode::ext {
 
 	namespace {
 
-		// `handle_read` returns a JSON result object on success and the error
-		// contract (`ok:false`) on failure. The extension API returns plain
-		// values, so the JSON is decoded here: `read` yields the rendered text,
-		// `write` yields its receipt. Both failures surface as `nil, err`.
 		[[nodiscard]] auto result_field( const std::string& rendered,
 			const char* key ) -> std::optional< std::string >;
 

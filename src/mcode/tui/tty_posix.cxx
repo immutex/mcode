@@ -1,5 +1,3 @@
-// The POSIX console backend. Split from tty.cxx, which owns the
-// platform-neutral capability probe and geometry queries.
 
 #if !defined( _WIN32 )
 
@@ -127,9 +125,8 @@ namespace mcode::tui {
 		auto got_enter = false;
 		auto got_eof = false;
 
-		// One deadline for the whole line, not one per byte: re-arming the wait
-		// on every byte meant a slow typist could never time out, and a prompt
-		// that had been answered still waited on the next key.
+		// One deadline for the whole line: re-arming per byte meant a slow
+		// typist could never time out.
 		const auto deadline = monotonic_ms( ) + wait_ms;
 
 		while ( !got_enter && !got_eof ) {
@@ -175,9 +172,6 @@ namespace mcode::tui {
 				break;
 			}
 
-			// Backspace edits the line. Without this a typo in an approval
-			// answer could not be corrected -- 0x7F was appended as a literal
-			// byte and the answer never matched.
 			if ( byte == 0x7F || byte == 0x08 ) {
 				if ( !line.empty( ) ) {
 					line.pop_back( );
@@ -186,7 +180,6 @@ namespace mcode::tui {
 				continue;
 			}
 
-			// A control byte is not an answer; ignoring it beats storing it.
 			if ( static_cast< unsigned char >( byte ) < 0x20 ) {
 				continue;
 			}
@@ -241,11 +234,8 @@ namespace mcode::tui {
 			std::size_t consumed = 0;
 		};
 
-		// One escape sequence from the front of `text`.
-		//
-		// `consumed == 0` means the text is a prefix of a sequence that needs
-		// more bytes, so the caller keeps it and reads on. Returning a bogus
-		// key instead is what made a split arrow key end the session.
+		// `consumed == 0` means `text` is a prefix of a longer sequence, so the
+		// caller keeps it and reads on.
 		auto decode_escape( const std::string_view text ) -> escape_result {
 			struct mapping {
 				std::string_view sequence;
@@ -279,8 +269,7 @@ namespace mcode::tui {
 				}
 			}
 
-			// Still a prefix of something longer: wait for the rest. A lone
-			// ESC is only "exit" once nothing follows it.
+			// Still a prefix: wait for the rest.
 			for ( const auto& candidate : MAPPINGS ) {
 				if ( candidate.sequence.starts_with( text ) ) {
 					return result;
@@ -288,28 +277,21 @@ namespace mcode::tui {
 			}
 
 			if ( text.size( ) == 1 ) {
-				// A bare ESC, with nothing after it.
 				result.event.type = key_event::kind::escape;
 				result.consumed = 1;
 
 				return result;
 			}
 
-			// An unrecognized sequence: consume it rather than emitting its
-			// bytes as text.
+			// Consume an unrecognised sequence rather than emitting its bytes.
 			result.event.type = key_event::kind::timeout;
 			result.consumed = text.size( );
 
 			return result;
 		}
 
-		// Splits a raw read into whole keys.
-		//
-		// The previous version compared the ENTIRE read against exact escape
-		// strings and returned at most one key, so any read that was not
-		// exactly one known sequence fell through to "control byte" and quit
-		// the session. Fast typing or a paste delivered several keys in one
-		// read and ended the session.
+		// Splits a raw read into whole keys. A read can deliver several keys
+		// and can split one.
 		auto decode_posix_bytes( const std::string_view text,
 			std::string& carry, std::vector< key_event >& out ) -> void {
 			carry.append( text );
@@ -320,8 +302,6 @@ namespace mcode::tui {
 				const auto first = static_cast< unsigned char >( carry[ cursor ] );
 
 				if ( first == 0x1B ) {
-					// A sequence needs its final byte before it can be named.
-					// Without one buffered, the next read completes it.
 					const auto parsed = decode_escape( std::string_view{ carry }.substr( cursor ) );
 
 					if ( parsed.consumed == 0 ) {
@@ -330,7 +310,7 @@ namespace mcode::tui {
 
 					cursor += parsed.consumed;
 
-					// An unrecognized sequence is swallowed rather than
+					// Swallowed rather than
 					// delivered: `timeout` here means "nothing to report", and
 					// pushing it would make the caller repaint for a key the
 					// user never pressed.
@@ -344,6 +324,16 @@ namespace mcode::tui {
 				if ( first == '\r' || first == '\n' ) {
 					auto event = key_event{ };
 					event.type = key_event::kind::enter;
+
+					out.push_back( event );
+					++cursor;
+
+					continue;
+				}
+
+				if ( first == 0x09 ) {
+					auto event = key_event{ };
+					event.type = key_event::kind::tab;
 
 					out.push_back( event );
 					++cursor;

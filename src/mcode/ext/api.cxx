@@ -29,14 +29,9 @@ namespace mcode::ext {
 
 	namespace {
 
-		// The two frozen identity fields: `mcode.ext.name` and `mcode.api_version`.
-		// Nothing else is written into the surface, because the freeze is closed and
-		// an unlisted field is exactly the drift the table exists to prevent.
 		constexpr auto EXTENSION_NAME_PATH = "ext.name";
 		constexpr auto API_VERSION_PATH = "api_version";
 
-		// Bounded so a runaway extension cannot fill the log. The count is what
-		// matters; the text is best-effort.
 		constexpr auto MAX_LOGGED_ARGUMENTS = 8;
 		constexpr auto MAX_LOGGED_LENGTH = 2048;
 
@@ -60,11 +55,6 @@ namespace mcode::ext {
 
 			return std::string{ lua_typename( state, lua_type( state, index ) ) };
 		}
-
-		// Returns the api_surface bound as the closure's upvalue. Every raw entry
-		// point needs it, and a missing upvalue is a host bug rather than an
-		// extension error -- reported as an error rather than dereferenced.
-
 
 	}
 
@@ -93,7 +83,6 @@ namespace mcode::ext {
 			lua_error( state );
 		}
 
-		// The schema is validated by being encodable, and rendered once here.
 		lua_getfield( state, definition, "schema" );
 
 		if ( lua_type( state, -1 ) != LUA_TTABLE ) {
@@ -103,13 +92,8 @@ namespace mcode::ext {
 			lua_error( state );
 		}
 
-		// The schema is data. Rendering it here rather than per turn keeps the
-		// prompt cache stable, and it is the only place the host walks
-		// it.
 		auto schema = std::string{ };
 		{
-			// A dedicated encoder call: the schema is plain JSON data, and the
-			// helper below is the same one the argument path uses.
 			lua_pushvalue( state, -1 );
 			auto rendered = json_from_lua( state, -1 );
 			lua_pop( state, 1 );
@@ -129,9 +113,6 @@ namespace mcode::ext {
 
 		lua_pop( state, 1 );
 
-		// The `run` closure is kept by registry reference. It cannot be copied into
-		// C++: a Luau function is a value in this VM, and the reference is what
-		// keeps it alive while the registry holds the tool.
 		lua_getfield( state, definition, "run" );
 
 		if ( lua_type( state, -1 ) != LUA_TFUNCTION ) {
@@ -153,9 +134,6 @@ namespace mcode::ext {
 		definition_value.deferrable = true;
 		definition_value.schema_json = std::move( schema );
 
-		// A name collision is a contract violation: the caller gets an
-		// error, not a silently replaced tool. The reference is released first so
-		// a rejected registration does not leak it.
 		if ( auto added = self->registry_->add( std::move( definition_value ) ); !added ) {
 			lua_unref( state, tool.function_reference );
 
@@ -176,8 +154,6 @@ namespace mcode::ext {
 	auto api_surface::handle_unregister( lua_State* state ) -> int {
 		auto* self = surface_from( state );
 
-		// Truncating the double would silently address the wrong tool for a
-		// fractional id, and the cast is undefined outside the representable range.
 		const auto number = luaL_checknumber( state, 1 );
 		const auto identifier = static_cast< std::int64_t >( number );
 
@@ -190,9 +166,6 @@ namespace mcode::ext {
 		const auto index = static_cast< std::size_t >( identifier ) - 1;
 		const auto& tool = self->tools_[ index ];
 
-		// Removing the registry entry by owner would drop every tool the
-		// extension registered, so the one tool is removed by name and the
-		// closure reference is released with it.
 		self->registry_->remove( tool.name );
 
 		lua_unref( state, tool.function_reference );
@@ -228,9 +201,7 @@ namespace mcode::ext {
 			message += to_text( state, index );
 		}
 
-		// stderr, not the session log: an extension's log line is diagnostic
-		// output, and routing it into the event log would let extension code
-		// write arbitrary entries into the transcript.
+		// stderr, not the session log: extension text must not enter the transcript.
 		std::fprintf( stderr, "%s\n", message.c_str( ) );
 
 		return 0;
@@ -244,9 +215,6 @@ namespace mcode::ext {
 			lua_error( state );
 		}
 
-		// The descriptor is data, so it crosses the boundary as JSON and
-		// is parsed by the same validator the C++ tests use. A second parser here
-		// would be a second set of rules.
 		auto rendered = json_from_lua( state, 1 );
 
 		if ( !rendered ) {
@@ -267,9 +235,6 @@ namespace mcode::ext {
 			lua_error( state );
 		}
 
-		// `net` is required to declare a provider: a descriptor names an
-		// endpoint, and declaring one without the permission to reach it would
-		// defer the denial to the first request.
 		if ( !self->manifest_.has_permission( "net" ) ) {
 			const auto message = std::string{ "mcode.model.register: extension '" } +
 				self->manifest_.name + "' declares no 'net' permission";
@@ -427,9 +392,6 @@ namespace mcode::ext {
 					const std::string& ) > >( *request.session_forker );
 		}
 
-		// The manifest's declared net hosts, copied at install so the check
-		// reads a snapshot rather than re-parsing the manifest per call.
-		// Declared in the manifest as `net_hosts = ["host", ...]`.
 		net_hosts_ = request.net_hosts;
 		http_client_ = request.http_client;
 
@@ -461,15 +423,9 @@ namespace mcode::ext {
 					std::string_view ) > >( *request.skill_sink );
 		}
 
-		// The timer pump runs the closures through this surface's own VM, on
-		// whatever thread the host's loop pumps from. One registry per surface:
-		// when the surface dies the timers die with it.
 		timers_ = std::make_unique< timer_registry >(
 			[ this ]( ) { pump_timers_once( ); } );
 
-		// The file context is assembled here, from the borrowed pointers the
-		// request carries, so `fs.read` / `fs.write` dispatch through the same
-		// tool handlers the model's own calls use.
 		if ( request.files != nullptr ) {
 			auto context = std::make_unique< tools::tool_context >( );
 			context->space = request.files;
@@ -481,8 +437,6 @@ namespace mcode::ext {
 			file_context_ = std::move( context );
 		}
 
-		// Identity first: `mcode.ext.name` is read by tools and by the log prefix,
-		// and the definition file declares it as a field rather than a call.
 		if ( auto name = host.set_global_string( EXTENSION_NAME_PATH, request.details.name );
 			!name ) {
 			return name;

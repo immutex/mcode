@@ -13,10 +13,6 @@ namespace mcode::ext {
 
 	namespace {
 
-		// The cap on one contribution. The instruction budget is a session-start
-		// budget; one extension cannot own all of it, so a contribution past the
-		// cap is truncated and the caller is told so rather than silently
-		// dropped.
 		inline constexpr auto MAX_CONTRIBUTION_CHARS = std::size_t{ 8'192 };
 
 	}

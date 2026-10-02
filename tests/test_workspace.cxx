@@ -38,8 +38,6 @@ namespace {
 	};
 
 #if defined( _WIN32 )
-	// The 8.3 form of a path. CI runs under a temp directory whose spelling is
-	// `RUNNER~1`, and that is the exact input that broke `contains`.
 	auto short_path( const std::filesystem::path& path ) -> std::filesystem::path {
 		auto buffer = std::array< wchar_t, 1024 >{ };
 		const auto length = ::GetShortPathNameW( path.c_str( ), buffer.data( ),
@@ -297,20 +295,13 @@ TEST_CASE( "display paths use forward slashes on every platform", "[workspace]" 
 
 #if defined( _WIN32 )
 TEST_CASE( "contains accepts the 8.3 spelling of the same directory", "[workspace]" ) {
-	// Windows spells one directory two ways, and `%TEMP%` on a CI runner is the
-	// short form (`RUNNER~1`). The canonical root is the long form, so a
-	// component-wise comparison against a raw short path fails on a directory that
-	// is plainly inside the workspace -- which is how this test was found.
-	//
-	// A long leaf name is required: only components over eight characters get a
-	// short form at all.
+	// windows spells one directory two ways (8.3 short names), so containment must canonicalize
 	const auto directory = temp_directory{ };
 
+	// a short name only exists for components over eight characters
 	const auto short_root = short_path( directory.path );
 
 	if ( short_root.empty( ) || short_root == directory.path ) {
-		// Short names can be disabled on a volume; the case cannot be constructed,
-		// so there is nothing to assert.
 		SUCCEED( "short names unavailable on this volume" );
 
 		return;
@@ -319,22 +310,16 @@ TEST_CASE( "contains accepts the 8.3 spelling of the same directory", "[workspac
 	auto opened = workspace::open( directory.path );
 	REQUIRE( opened );
 
-	// Both spellings resolve to the same directory and both must be accepted.
 	CHECK( opened->contains( directory.path / "child" ) );
 	CHECK( opened->contains( short_root / "child" ) );
 
-	// And the guarantee the function exists for still holds for the short form:
-	// a sibling that merely shares a string prefix is not contained.
 	const auto sibling = std::filesystem::path{ short_root.string( ) + "-evil" };
 	CHECK_FALSE( opened->contains( sibling ) );
 }
 #endif
 
 TEST_CASE( "a directory symlink loop does not hang the glob", "[workspace]" ) {
-	// `**` recursed into every entry whose is_directory() was true, and
-	// is_directory FOLLOWS a symlink -- so a clone containing a -> b -> a made the
-	// walk recurse until the stack ran out. The result cap did not help: it counts
-	// matches, not visits, so a tree with few matching files never hit it.
+	// a symlinked directory cycle overflows the stack; the match cap counts matches, not visits
 	auto root = test::scratch_directory( "mcode-glob-loop-test" );
 	std::filesystem::create_directories( root / "a" / "b" );
 
@@ -345,27 +330,21 @@ TEST_CASE( "a directory symlink loop does not hang the glob", "[workspace]" ) {
 		FAIL( opened.error( ).msg );
 	}
 
-	// b/loop -> a, which closes the cycle.
 	auto error = std::error_code{ };
 	std::filesystem::create_directory_symlink( root / "a", root / "a" / "b" / "loop", error );
 
 	if ( error ) {
-		// Symlinks need a privilege this process may not have. The test is then
-		// vacuous, so it says so rather than passing silently.
 		WARN( "skipped: cannot create a symlink here (" << error.message( ) << ")" );
 		std::filesystem::remove_all( root );
 
 		return;
 	}
 
-	// The walk must terminate. Depth and visited-set guards are what make this
-	// finish; without them it is a stack overflow, not a slow answer.
 	auto matched = opened->glob( "**/*.txt" );
 
 	REQUIRE( static_cast< bool >( matched ) );
 
 	if ( matched ) {
-		// And nothing it returned came from outside the root.
 		for ( const auto& path : *matched ) {
 			REQUIRE( opened->contains( path ) );
 		}
@@ -375,10 +354,7 @@ TEST_CASE( "a directory symlink loop does not hang the glob", "[workspace]" ) {
 }
 
 TEST_CASE( "a path past MAX_PATH is read, not refused", "[workspace]" ) {
-	// Windows caps a path at 260 characters unless it carries the \\?\ prefix or
-	// the machine sets LongPathsEnabled -- and that value defaults to 0. A deep
-	// cloned repository therefore failed to resolve on a stock machine, which the
-	// platform seam exists to prevent.
+	// windows caps a path at 260 characters without the `\\?\` prefix or LongPathsEnabled
 	const auto root = test::scratch_directory( "mcode-longpath-test" );
 
 	std::filesystem::create_directories( root );
@@ -386,8 +362,6 @@ TEST_CASE( "a path past MAX_PATH is read, not refused", "[workspace]" ) {
 	auto deep = root;
 	const auto segment = std::string( 20, 'a' );
 
-	// Deep enough that the file's full path exceeds 260 characters on any platform
-	// with a non-trivial temp root.
 	for ( auto level = 0; level < 14; ++level ) {
 		deep /= segment;
 	}
@@ -399,7 +373,6 @@ TEST_CASE( "a path past MAX_PATH is read, not refused", "[workspace]" ) {
 		FAIL( opened.error( ).msg );
 	}
 
-	// Create the tree with the extended form, so the SETUP is not what fails.
 	auto error = std::error_code{ };
 	std::filesystem::create_directories( mcode::platform::to_extended_path( deep ), error );
 
@@ -418,7 +391,6 @@ TEST_CASE( "a path past MAX_PATH is read, not refused", "[workspace]" ) {
 
 	REQUIRE( file.string( ).size( ) > 260 );
 
-	// Resolve through the workspace, which is where the seam is applied.
 	auto relative = std::filesystem::relative( file, root, error );
 	REQUIRE( !error );
 
@@ -429,7 +401,6 @@ TEST_CASE( "a path past MAX_PATH is read, not refused", "[workspace]" ) {
 		FAIL( resolved.error( ).msg );
 	}
 
-	// And read it, which is the syscall boundary the prefix is applied at.
 	auto content = opened->read_file( relative.string( ) );
 	REQUIRE( static_cast< bool >( content ) );
 
@@ -446,8 +417,6 @@ TEST_CASE( "write creates and overwrites with the right mode", "[workspace]" ) {
 	auto opened = workspace::open( directory.path );
 	REQUIRE( opened );
 
-	// create on a path that is absent succeeds, and reports the hash of what it
-	// wrote so the caller can record it.
 	auto created = opened->write_file( "notes.txt", "first\n", mcode::write_mode::create );
 	REQUIRE( static_cast< bool >( created ) );
 
@@ -457,8 +426,6 @@ TEST_CASE( "write creates and overwrites with the right mode", "[workspace]" ) {
 		REQUIRE( created->content_hash == mcode::hash_bytes( "first\n" ) );
 	}
 
-	// create on an existing path is a different error from overwrite on a missing
-	// one, because the caller acts differently on each.
 	auto again = opened->write_file( "notes.txt", "second\n", mcode::write_mode::create );
 	REQUIRE_FALSE( again );
 	CHECK( again.error( ).msg.find( "already exists" ) != std::string::npos );
@@ -467,7 +434,6 @@ TEST_CASE( "write creates and overwrites with the right mode", "[workspace]" ) {
 	REQUIRE_FALSE( missing );
 	CHECK( missing.error( ).msg.find( "does not exist" ) != std::string::npos );
 
-	// overwrite replaces the content and the hash moves with it.
 	auto replaced = opened->write_file( "notes.txt", "second\n", mcode::write_mode::overwrite );
 	REQUIRE( static_cast< bool >( replaced ) );
 
@@ -482,8 +448,6 @@ TEST_CASE( "write creates and overwrites with the right mode", "[workspace]" ) {
 		REQUIRE( *content == "second\n" );
 	}
 
-	// No temp file is left behind, which is the observable part of the atomic
-	// write.
 	auto leftovers = std::size_t{ 0 };
 
 	for ( const auto& entry : std::filesystem::directory_iterator{ directory.path } ) {
@@ -505,8 +469,6 @@ TEST_CASE( "write refuses paths outside the root and oversized content", "[works
 	REQUIRE_FALSE( escape );
 	CHECK( escape.error( ).code == mcode::errc::io );
 
-	// One byte over the cap. The cap is a named constant, so the test reads it
-	// rather than restating the number.
 	const auto oversized = std::string( mcode::MAX_WRITE_FILE_BYTES + 1, 'a' );
 
 	auto too_big = opened->write_file( "big.txt", oversized, mcode::write_mode::create );
@@ -522,19 +484,14 @@ TEST_CASE( "protected paths are .mcode and .git at the root only", "[workspace]"
 	auto opened = workspace::open( directory.path );
 	REQUIRE( opened );
 
-	// The primitive does not enforce this -- the harness writes artifacts under
-	// .mcode/artifacts/ -- so the query is what the tool layer consults.
 	CHECK( opened->is_protected( directory.path / ".mcode" / "config.toml" ) );
 	CHECK( opened->is_protected( directory.path / ".git" / "hooks" / "pre-commit" ) );
 	CHECK( opened->is_protected( directory.path / ".mcode" / "artifacts" / "run-1" / "out.txt" ) );
 
-	// A name that merely starts with the same characters is not protected, which is
-	// the case a prefix check gets wrong.
 	CHECK_FALSE( opened->is_protected( directory.path / "notes.mcode" ) );
 	CHECK_FALSE( opened->is_protected( directory.path / "src" / ".mcode" / "x" ) );
 	CHECK_FALSE( opened->is_protected( directory.path / "src" / "main.cxx" ) );
 
-	// And the write itself still succeeds there, which is what the harness needs.
 	auto artifact = opened->write_file( ".mcode/artifacts/run-1/out.txt", "spilled\n",
 		mcode::write_mode::create );
 

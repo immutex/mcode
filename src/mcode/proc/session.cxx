@@ -29,9 +29,6 @@ namespace mcode::proc {
 		namespace asio = boost::asio;
 		namespace process = boost::process::v2;
 
-		// Binary mode is not negotiable: text mode translates \n to \r\n on
-		// Windows and newline-delimited framing breaks. asio pipes are binary by
-		// construction; the child's side is set up by the launcher the same way.
 		struct chunk {
 			std::string data;
 			std::string detail;
@@ -60,10 +57,7 @@ namespace mcode::proc {
 		asio::readable_pipe stdout_pipe{ context };
 
 #if defined( _WIN32 )
-		// Held for the child's lifetime: kill-on-close is what guarantees the
-		// server process does not outlive the session. The token handle is
-		// held too because CreateProcessAsUserW's token must outlive the call
-		// in some bookkeeping paths, and keeping both together is simpler.
+		// kill-on-close on the Job is what guarantees the child does not outlive the session
 		platform::unique_job_windows token;
 		platform::unique_job_windows job;
 #endif
@@ -89,15 +83,10 @@ namespace mcode::proc {
 			return;
 		}
 
-		// The shutdown sequence: close stdin, wait for a graceful exit,
-		// terminate, wait again, and the child is gone. Children must not
-		// outlive mcode, and the destructor is the path that guarantees it.
+		// children must not outlive mcode; the destructor is what guarantees it
 		auto ignored = boost::system::error_code{ };
 
-		// Closing stdin is the polite half of shutdown; a failure here means the
-		// pipe was already gone, which is the same end state. The exit path below
-		// is what actually guarantees the child does not outlive us, so the
-		// result is deliberately discarded rather than checked with a no-op.
+		// a close failure means the pipe was already gone; the exit path is the real guarantee
 		state_->stdin_pipe.close( ignored );
 
 		if ( state_->child.running( ignored ) ) {
@@ -125,25 +114,12 @@ namespace mcode::proc {
 		auto& context = owned.state_->context;
 		auto& child = owned.state_->child;
 
-		// Named lvalue pipes, not temporaries: the launcher's handle-inheritance
-		// bookkeeping reads the bindings after the initializer list is evaluated,
-		// and a moved-from temporary leaves a stale handle in the list -- which
-		// surfaces as "The parameter is incorrect" from CreateProcessW.
+		// named lvalues, not temporaries: a moved-from one leaves a stale inherit-list handle
 		auto stderr_pipe = asio::readable_pipe{ context };
 
 		try {
-			// No shell anywhere in this path. The launcher receives the executable
-			// and the argument vector verbatim.
-			//
-			// The launcher, not the `popen` convenience constructor: that one
-			// appends its own `process_stdio` after the caller's, and the second
-			// `on_setup` overwrites the handles -- the child's stderr ended up on
-			// the parent's stdout. One `process_stdio`, passed to the launcher
-			// directly, is the only arrangement where all three pipes bind.
+			// not the popen ctor: its second on_setup overwrites handles; use one process_stdio
 #if defined( _WIN32 )
-			// The MCP server child is sandboxed when a profile is supplied:
-			// Low integrity token, Job Object, mandatory-label boundary, same
-			// as run_process.
 			if ( options.sandbox != nullptr ) {
 				auto token = platform::sandbox_windows_child_token( );
 
@@ -306,8 +282,6 @@ namespace mcode::proc {
 				outcome.data.assign( buffer.data( ), length );
 				settled = true;
 
-				// Data arrived inside the window; retire the timer so `run`
-				// returns promptly rather than waiting out the full timeout.
 				state_->timer.cancel( );
 			} );
 
@@ -383,9 +357,7 @@ namespace mcode::proc {
 
 		auto guard = std::lock_guard< std::mutex >( state_->ring_mutex );
 
-		// The drainer stages chunks in `pending` and folds them into the ring
-		// on `finalize`; a reader between chunks would otherwise see an empty
-		// ring, so every read drains what has arrived so far.
+		// drain what the drainer staged, or a read between chunks sees an empty ring
 		while ( !state_->pending.empty( ) ) {
 			append_bounded( state_->ring, state_->pending.front( ).data( ),
 				state_->pending.front( ).size( ) );

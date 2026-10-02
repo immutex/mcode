@@ -8,14 +8,9 @@
 
 using namespace mcode;
 
-// D3's dogfood test: the reference descriptors in extensions/providers/init.luau
-// must drive real streams from all three wire formats the provider docs identify. These
-// are the exact JSON shapes each provider emits, so if a descriptor cannot be
-// expressed the test fails here rather than in production.
-
 namespace {
 
-	// Mirrors extensions/providers/init.luau: openai-chat-completions.
+	// these mirror extensions/providers/init.luau; keep them in sync.
 	const char* OPENAI_CHAT = R"({
 		"name": "openai-chat-completions",
 		"endpoint": "https://api.openai.com/v1/chat/completions",
@@ -37,7 +32,6 @@ namespace {
 		}
 	})";
 
-	// Mirrors extensions/providers/init.luau: openai-responses.
 	const char* OPENAI_RESPONSES = R"({
 		"name": "openai-responses",
 		"endpoint": "https://api.openai.com/v1/responses",
@@ -54,7 +48,6 @@ namespace {
 		}
 	})";
 
-	// Mirrors extensions/providers/init.luau: anthropic-messages.
 	const char* ANTHROPIC = R"({
 		"name": "anthropic-messages",
 		"endpoint": "https://api.anthropic.com/v1/messages",
@@ -141,9 +134,6 @@ namespace {
 }
 
 TEST_CASE( "all three reference descriptors validate", "[dogfood]" ) {
-	// Three, and the title says three. Listing two made the count a claim the test
-	// did not check, and left the Responses descriptor -- the one with the shared
-	// /delta pointer and the event-name gates -- unvalidated.
 	for ( const auto* text : { OPENAI_CHAT, ANTHROPIC, OPENAI_RESPONSES } ) {
 		auto descriptor = model::descriptor_from_json( text );
 
@@ -162,7 +152,6 @@ TEST_CASE( "openai chat completions drives a full stream", "[dogfood]" ) {
 		{ "message", R"({"choices":[{"delta":{"role":"assistant","content":""}}]})" },
 		{ "message", R"({"choices":[{"delta":{"content":"I'll read "}}]})" },
 		{ "message", R"({"choices":[{"delta":{"content":"that file."}}]})" },
-		// Tool call: id+name first, arguments split mid-token, as [OI] does.
 		{ "message", R"({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_9","type":"function","function":{"name":"read","arguments":""}}]}}]})" },
 		{ "message", R"({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"pa"}}]}}]})" },
 		{ "message", R"({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"th\":\"a.txt\"}"}}]}}]})" },
@@ -182,16 +171,10 @@ TEST_CASE( "openai chat completions drives a full stream", "[dogfood]" ) {
 	REQUIRE( applier.accumulated_usage( ).input == 1200 );
 	REQUIRE( applier.accumulated_usage( ).output == 48 );
 
-	// The cached-read mapping is the one that proves nested pointers work: a
-	// provider that reports prompt caching is useless to the cost model without it.
 	REQUIRE( applier.accumulated_usage( ).cached_read == 1024 );
 }
 
 TEST_CASE( "an event arriving after the terminal is ignored", "[dogfood]" ) {
-	// Providers emit trailing events after the one that ends the stream -- a
-	// rate-limit notice, a keepalive -- and new event types appear without
-	// warning. Processing one lets a late fallthrough overwrite state that is
-	// already final: the text appends to a finished turn and the usage re-adds.
 	auto applier = model::delta_applier{ load( OPENAI_CHAT ) };
 
 	const auto events = drive( applier, {
@@ -206,10 +189,7 @@ TEST_CASE( "an event arriving after the terminal is ignored", "[dogfood]" ) {
 }
 
 TEST_CASE( "a mid-stream provider error is surfaced, not dropped", "[dogfood]" ) {
-	// Providers report a failure as an ordinary event rather than an HTTP status:
-	// an overloaded backend, a content filter, a quota that ran out after tokens
-	// were already delivered. Unmapped, the message is discarded and the turn ends
-	// as a bare truncation with the provider's reason thrown away.
+	// a provider reports failure as an ordinary event on a 200 stream.
 	const auto descriptor = load( R"({
 		"name": "error-reporting",
 		"endpoint": "https://example.invalid/v1/chat",
@@ -235,15 +215,12 @@ TEST_CASE( "anthropic drives text, thinking, and tool input", "[dogfood]" ) {
 
 	const auto events = drive( applier, {
 		{ "message_start", R"({"type":"message_start","message":{"usage":{"input_tokens":800,"cache_read_input_tokens":600,"cache_creation_input_tokens":100}}})" },
-		// Thinking block, then a text block -- separate content blocks, each with
-		// its own index.
 		{ "content_block_start", R"({"type":"content_block_start","index":0,"content_block":{"type":"thinking"}})" },
 		{ "content_block_delta", R"({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Let me check."}})" },
 		{ "content_block_stop", R"({"type":"content_block_stop","index":0})" },
 		{ "content_block_start", R"({"type":"content_block_start","index":1,"content_block":{"type":"text"}})" },
 		{ "content_block_delta", R"({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Reading it now."}})" },
 		{ "content_block_stop", R"({"type":"content_block_stop","index":1})" },
-		// Tool use: input_json_delta fragments keyed by block index.
 		{ "content_block_start", R"({"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_1","name":"read"}})" },
 		{ "content_block_delta", R"({"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"path\":"}})" },
 		{ "content_block_delta", R"({"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"\"a.txt\"}"}})" },
@@ -270,8 +247,7 @@ TEST_CASE( "anthropic drives text, thinking, and tool input", "[dogfood]" ) {
 	REQUIRE( call->tool_call_id == "toolu_1" );
 	REQUIRE( call->args_fragment == R"({"path":"a.txt"})" );
 
-	// Cumulative usage from two different events: input from message_start,
-	// output from message_delta. max() across both is why this works.
+	// usage is max-of-observed, so cumulative and per-event reports both work.
 	REQUIRE( applier.accumulated_usage( ).input == 800 );
 	REQUIRE( applier.accumulated_usage( ).output == 77 );
 	REQUIRE( applier.accumulated_usage( ).cached_read == 600 );
@@ -281,8 +257,7 @@ TEST_CASE( "anthropic drives text, thinking, and tool input", "[dogfood]" ) {
 }
 
 TEST_CASE( "an anthropic message_stop ends the stream without a [DONE]", "[dogfood]" ) {
-	// The terminal marker differs per provider, which is why it is a descriptor
-	// field rather than a hardcoded sentinel.
+	// the terminal marker differs per provider, so it is a descriptor field.
 	auto applier = model::delta_applier{ load( ANTHROPIC ) };
 
 	REQUIRE_FALSE( applier.saw_terminal_event( ) );
@@ -294,9 +269,6 @@ TEST_CASE( "an anthropic message_stop ends the stream without a [DONE]", "[dogfo
 }
 
 TEST_CASE( "a non-streaming error body is not mistaken for a delta", "[dogfood]" ) {
-	// Providers return an error object on a 200 stream in some failure modes.
-	// Every mapped pointer is absent, so nothing is produced and nothing is
-	// corrupted -- the caller decides what an empty event means.
 	auto applier = model::delta_applier{ load( OPENAI_CHAT ) };
 
 	auto produced = applier.feed( "message", R"({"error":{"message":"rate limited","type":"rate_limit_error"}})" );

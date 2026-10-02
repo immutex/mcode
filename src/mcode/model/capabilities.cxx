@@ -8,10 +8,7 @@ namespace mcode::model {
 
 	namespace {
 
-		// Prices are USD per million tokens, from the providers' published pages
-		// at the time they were recorded. Only sourced entries are in the table:
-		// an invented price is a fabricated number, and an absent entry fails
-		// closed at lookup rather than pricing a run at zero.
+		// USD per million tokens from the providers' published pages; an absent entry fails closed.
 		const char* CAPABILITIES_JSON = R"JSON([
 	{
 		"model": "claude-sonnet-4-5",
@@ -241,13 +238,7 @@ namespace mcode::model {
 			return caps;
 		}
 
-		// No transform on the id. A quoted key segment is taken verbatim, so
-		// `[models."cb/gpt-5.6-sol"]` flattens to exactly `models.cb/gpt-5.6-sol`
-		// and a lookup for the id as written finds it. An unquoted
-		// `[models.gpt-5.6-sol]` re-joins its dots to the same string, so
-		// quoting is needed only for characters a bare key forbids, `/` among
-		// them. Mangling the id instead (`_` for `.`) would collide two ids and
-		// silently price one at the other's rate.
+		// no transform on the id: a quoted key segment flattens verbatim, so the id is the key.
 		const auto prefix = "models." + std::string{ model_id } + '.';
 		auto merged = caps.value_or( capabilities{ } );
 
@@ -301,20 +292,12 @@ namespace mcode::model {
 			merged.price_output = *value;
 		}
 
-		// A config entry is a declaration that this model is known. Without it,
-		// a section that only sets `supports_tool_calls` would leave every price
-		// at zero -- the silent zero the table exists to prevent -- so an entry
-		// with no input price at all is refused rather than priced at nothing.
+		// a config entry declares the model known, so one with no price at all is refused.
 		if ( !caps && merged.price_input <= 0.0 && merged.price_output <= 0.0 ) {
 			return std::nullopt;
 		}
 
-		// An unset cached-read price is not a free one. A gateway that reports
-		// the whole prompt as a cache read -- which is what InferHub does, even
-		// on a first request -- bills the entire input at this rate, so leaving
-		// it at zero under-estimates the run by the whole input cost and the
-		// budget stops late instead of early. Assuming no discount is the
-		// neutral position; a user who knows their cached rate sets it.
+		// an unset cached-read price is not free: assume no discount rather than under-estimating.
 		if ( !cached_read && merged.price_input > 0.0 ) {
 			merged.price_cached_read = merged.price_input;
 		}

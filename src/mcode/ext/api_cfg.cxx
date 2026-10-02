@@ -9,9 +9,7 @@ namespace mcode::ext {
 
 	namespace {
 
-		// The config prefix an extension's settings live under. One section per
-		// extension, so `cfg.get("key")` reads `extensions.<name>.key` and no
-		// extension can read another's section or the harness's own keys.
+		// scoped to `extensions.<name>.`, so one extension cannot read another's section.
 		auto extension_key( const std::string_view name, const std::string_view key )
 			-> std::string {
 			auto out = std::string{ "extensions." };
@@ -22,9 +20,6 @@ namespace mcode::ext {
 			return out;
 		}
 
-		// Pushes the TOML value, or the caller's default when the key is absent.
-		// A value the merged config holds is copied out as plain data; the
-		// extension never sees a reference into the config.
 		auto push_value_or_default( lua_State* state,
 			const mcode::toml::value& value ) -> void {
 			switch ( value.kind ) {
@@ -81,8 +76,6 @@ namespace mcode::ext {
 		}
 
 		if ( self->config( ) == nullptr ) {
-			// No config was installed with the surface. Absent is the honest
-			// answer, and the caller's default is exactly the contract for it.
 			lua_pushvalue( state, 2 );
 
 			return 1;

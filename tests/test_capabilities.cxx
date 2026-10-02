@@ -1,9 +1,3 @@
-// Model pricing and the capability table.
-//
-// Split from test_model_client.cxx, which owns the transport: credentials,
-// retry and the usage fold. These are about what a model COSTS, which is a
-// different question from whether the request reached it.
-
 #include <catch2/catch_test_macros.hpp>
 
 #include <string>
@@ -18,12 +12,7 @@ using namespace mcode;
 
 
 TEST_CASE( "a config entry prices a model the table does not carry", "[capabilities]" ) {
-	// The gateway case: the compiled-in table cannot know every id a proxy
-	// serves, so the user prices theirs. Absent from both sources still fails
-	// closed -- the section below is what makes the id known.
-	//
-	// The id is quoted because it carries `/` and `.`; a quoted segment is taken
-	// verbatim, so the entry key is the id as written, with no mangling.
+	// the id carries `/` and `.`, so it is quoted and taken verbatim as the entry key.
 	REQUIRE_FALSE( model::resolve_capabilities( "cb/gpt-5.6-sol", nullptr ).has_value( ) );
 
 	auto parsed = toml::parse( R"(
@@ -57,17 +46,12 @@ supports_thinking = true
 		REQUIRE( caps->caching == model::cache_mode::implicit );
 		REQUIRE( caps->supports_thinking );
 
-		// Not set by the entry, so the struct default stands rather than a zero.
 		REQUIRE( caps->supports_tool_calls );
 
-		// An explicit cached-read price is used as written.
 		REQUIRE( caps->price_cached_read == 0.125 );
 	}
 
-	// With no cached-read price, the input price stands in rather than zero: a
-	// gateway that reports the whole prompt as a cache read bills all of the
-	// input at this rate, so a zero would under-estimate the run by the entire
-	// input cost.
+	// no cached-read price: input price stands in, as a gateway may bill all input at that rate.
 	{
 		auto plain = toml::parse( R"(
 [models.plain]
@@ -91,8 +75,7 @@ price_output = 21.0
 		}
 	}
 
-	// An entry that names no price is refused: it would price every turn at
-	// zero, which is the failure the table exists to prevent.
+	// an entry that names no price is refused: it would price every turn at zero.
 	auto unpriced = toml::parse( R"(
 [models.cheap]
 supports_thinking = true
@@ -107,7 +90,6 @@ supports_thinking = true
 	REQUIRE( static_cast< bool >( unpriced_merged ) );
 	REQUIRE_FALSE( model::resolve_capabilities( "cheap", &*unpriced_merged ).has_value( ) );
 
-	// An integer price is the same number as a float one.
 	auto integral = toml::parse( R"(
 [models.flat]
 price_input = 2

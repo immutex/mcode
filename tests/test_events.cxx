@@ -21,8 +21,7 @@ namespace {
 }
 
 TEST_CASE( "subscribers receive only the kinds they asked for", "[events]" ) {
-	// Per-kind lists, not one global list with a filter: otherwise every
-	// subscriber pays for every event type.
+	// per-kind subscription lists, so a subscriber does not pay for every event type
 	auto bus = events::bus{ };
 	auto deltas = std::vector< std::string >{ };
 	auto calls = std::vector< std::string >{ };
@@ -91,13 +90,11 @@ TEST_CASE( "the first veto wins and short-circuits", "[events]" ) {
 	REQUIRE( decision.has_value( ) );
 	REQUIRE( decision->reason == "destructive command" );
 
-	// The third handler must not have run: first veto short-circuits.
 	REQUIRE( reached == std::vector< int >{ 1, 2 } );
 }
 
 TEST_CASE( "a non-vetoable kind never returns a veto", "[events]" ) {
-	// Only the Pre* kinds accept a veto, so a handler cannot accidentally block a
-	// turn by returning a value.
+	// only the Pre* kinds accept a veto
 	REQUIRE( events::is_vetoable( events::kind::tool_pre_call ) );
 	REQUIRE( events::is_vetoable( events::kind::spawn_pre ) );
 	REQUIRE( events::is_vetoable( events::kind::prompt_pre ) );
@@ -109,8 +106,7 @@ TEST_CASE( "a non-vetoable kind never returns a veto", "[events]" ) {
 }
 
 TEST_CASE( "a handler publishing during dispatch queues rather than recurses", "[events]" ) {
-	// Flat, never recursive. The depth cap plus the pending deque makes infinite
-	// recursion impossible by construction rather than by convention.
+	// dispatch is flat (depth cap plus pending deque), so a publishing handler cannot recurse.
 	auto bus = events::bus{ };
 	auto observed = std::vector< std::string >{ };
 
@@ -127,19 +123,16 @@ TEST_CASE( "a handler publishing during dispatch queues rather than recurses", "
 
 	bus.publish( make_event( events::kind::turn_start ) );
 
-	// The nested event is delivered AFTER the outer handler returns, not inside it.
 	REQUIRE( observed.size( ) == 3 );
 	REQUIRE( observed[ 0 ] == "outer" );
 	REQUIRE( observed[ 1 ] == "outer-after-publish" );
 	REQUIRE( observed[ 2 ] == "inner:nested" );
 
-	// The nested publish was queued, never recursed, so dispatch has finished.
 	REQUIRE_FALSE( bus.dispatching( ) );
 	REQUIRE( bus.pending_count( ) == 0 );
 }
 
 TEST_CASE( "an event loop between two handlers terminates", "[events]" ) {
-	// A handler that publishes its own event is the case that hangs a naive bus.
 	auto bus = events::bus{ };
 	auto deliveries = 0;
 
@@ -171,7 +164,6 @@ TEST_CASE( "unsubscribing mid-dispatch does not invalidate iteration", "[events]
 	bus.subscribe( events::kind::turn_start, [&]( const events::event& ) {
 		reached.push_back( 2 );
 
-		// Removing a subscription while the list is being walked.
 		bus.unsubscribe( first_id );
 	} );
 
@@ -181,7 +173,6 @@ TEST_CASE( "unsubscribing mid-dispatch does not invalidate iteration", "[events]
 
 	bus.publish( make_event( events::kind::turn_start ) );
 
-	// All three ran this dispatch; the removal takes effect for the next one.
 	REQUIRE( reached == std::vector< int >{ 1, 2, 3 } );
 	REQUIRE( bus.subscriber_count( events::kind::turn_start ) == 2 );
 
@@ -192,8 +183,6 @@ TEST_CASE( "unsubscribing mid-dispatch does not invalidate iteration", "[events]
 }
 
 TEST_CASE( "a throwing handler is contained and counted, not removed", "[events]" ) {
-	// Dispatch is noexcept at the bus boundary. Auto-removing a throwing handler
-	// would make a transient bug permanent.
 	auto bus = events::bus{ };
 	auto after_threw = false;
 
@@ -207,11 +196,9 @@ TEST_CASE( "a throwing handler is contained and counted, not removed", "[events]
 
 	REQUIRE_NOTHROW( bus.publish( make_event( events::kind::turn_start ) ) );
 
-	// The peer handler still ran.
 	REQUIRE( after_threw );
 	REQUIRE( bus.handler_failures( ) == 1 );
 
-	// And the handler is still subscribed.
 	REQUIRE( bus.subscriber_count( events::kind::turn_start ) == 2 );
 
 	bus.publish( make_event( events::kind::turn_start ) );
@@ -219,8 +206,7 @@ TEST_CASE( "a throwing handler is contained and counted, not removed", "[events]
 }
 
 TEST_CASE( "kind tags are stable and complete", "[events]" ) {
-	// The numeric value is the log's primary key, so a renumbering would corrupt
-	// every existing session file.
+	// the numeric kind value is the session log's primary key, so renumbering corrupts files
 	REQUIRE( static_cast< std::uint16_t >( events::kind::session_start ) == 0 );
 	REQUIRE( static_cast< std::uint16_t >( events::kind::tool_pre_call ) == 7 );
 	REQUIRE( static_cast< std::uint16_t >( events::kind::error ) == 15 );
@@ -228,7 +214,6 @@ TEST_CASE( "kind tags are stable and complete", "[events]" ) {
 	REQUIRE( events::to_string( events::kind::tool_pre_call ) == "tool.pre_call" );
 	REQUIRE( events::to_string( events::kind::assistant_delta ) == "assistant.delta" );
 
-	// Every kind has a distinct, non-placeholder name.
 	auto names = std::vector< std::string_view >{ };
 
 	for ( auto value = std::uint16_t{ 0 }; value < events::KIND_COUNT; ++value ) {
@@ -240,9 +225,7 @@ TEST_CASE( "kind tags are stable and complete", "[events]" ) {
 		REQUIRE( name.find( '.' ) != std::string_view::npos );
 	}
 
-	// The loop pushed exactly KIND_COUNT names, so asserting the size equals
-	// KIND_COUNT proved nothing. Two kinds sharing a name is the real defect: a
-	// handler subscribing by name would receive the wrong event.
+	// every kind needs a distinct name, or a name-based subscriber receives the wrong event
 	auto sorted = names;
 	std::sort( sorted.begin( ), sorted.end( ) );
 

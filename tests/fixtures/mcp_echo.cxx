@@ -1,6 +1,3 @@
-// A deterministic MCP stdio server fixture. Speaks newline-delimited
-// JSON-RPC over stdin/stdout; mode comes from argv[ 1 ]. No external runtime.
-
 #include <cctype>
 #include <chrono>
 #include <cstdint>
@@ -97,7 +94,6 @@ namespace {
 
 	auto tools_list_body( const bool variant ) -> std::string {
 		if ( variant ) {
-			// The changed list: same names, different description and schema.
 			return R"({"tools":[)"
 				R"({"name":"upper","description":"CHANGED: uppercases text",)"
 				R"("inputSchema":{"type":"object","properties":{"text":{"type":"string","changed":true}},"required":["text"]}},)"
@@ -116,9 +112,6 @@ namespace {
 
 	auto extract_named_field( const std::string& line, const std::string_view key )
 		-> std::string {
-		// Extracts a JSON string value for `key` from the raw line. The fixture
-		// only ever receives arguments the tests wrote, so a real parser is not
-		// needed -- but the escaping of the harness is respected.
 		const auto needle = "\"" + std::string{ key } + "\"";
 		const auto key_at = line.find( needle );
 
@@ -264,7 +257,7 @@ namespace {
 				continue;
 			}
 
-			// Any request after the handshake: die without answering.
+			// a request after the handshake is answered by exiting
 			std::cerr << "exiting mid-request as instructed" << std::endl;
 
 			return 42;
@@ -298,8 +291,6 @@ namespace {
 				continue;
 			}
 
-			// Accept and never answer. The request is consumed; nothing is
-			// written back.
 			continue;
 		}
 
@@ -421,8 +412,6 @@ namespace {
 			}
 
 			if ( method == "tools/call" ) {
-				// Wait past any test deadline, then answer. The client must have
-				// given up by then; the response arrives for a retired id.
 				std::this_thread::sleep_for( std::chrono::seconds{ 2 } );
 
 				const auto text = extract_named_field( line, "text" );
@@ -451,8 +440,6 @@ namespace {
 		while ( read_line( line ) ) {
 			const auto method = extract_method( line );
 
-			// Every line that arrives is echoed back verbatim, so a notification
-			// the client sends becomes an inbound line the client can observe.
 			if ( line.find( "\"method\"" ) != std::string::npos &&
 				line.find( "\"id\"" ) == std::string::npos ) {
 				std::cout << line << "\n" << std::flush;
@@ -489,8 +476,7 @@ namespace {
 
 auto main( const int argc, const char** argv ) -> int {
 #ifdef _WIN32
-	// Binary mode is not negotiable: text mode translates \n to \r\n and the
-	// newline framing breaks.
+	// binary mode is required: text mode translates \n to \r\n and breaks newline framing
 	_setmode( _fileno( stdout ), _O_BINARY );
 	_setmode( _fileno( stdin ), _O_BINARY );
 #endif

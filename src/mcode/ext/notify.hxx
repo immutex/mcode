@@ -1,13 +1,6 @@
 #pragma once
 
-// `mcode.notify`.
-//
-// A user-visible, attributed message. Always available: notification is
-// presentation, not capability. Attribution is automatic and non-optional --
-// the extension name comes from the surface, so a handler cannot forge
-// another extension's attribution. The message lands where the host's
-// notifier sends it; with no notifier installed the call is a counted no-op
-// rather than a silent drop.
+// always available: presentation, not capability; attribution is unforgeable.
 
 #include <string>
 

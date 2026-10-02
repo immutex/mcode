@@ -79,11 +79,7 @@ namespace mcode::net {
 
 	#if defined( _WIN32 )
 
-		// Windows has no CA file for OpenSSL to find: `set_default_verify_paths`
-		// resolves to the build machine's OPENSSLDIR, which does not exist on a
-		// user's, so every handshake failed with "certificate verify failed" and
-		// HTTPS was unusable. The roots live in the OS store, so they are read
-		// from there.
+		// Windows has no CA file for OpenSSL, so the roots are read from the OS store instead.
 		[[nodiscard]] auto add_windows_roots( X509_STORE* store ) -> bool {
 			auto* handle = ::CertOpenSystemStoreW( 0, L"ROOT" );
 
@@ -103,8 +99,7 @@ namespace mcode::net {
 					continue;
 				}
 
-				// A duplicate is reported as an error with nothing added; that is
-				// expected across a store this size and is not a failure.
+				// A duplicate is expected across a store this size, not a failure.
 				if ( ::X509_STORE_add_cert( store, parsed ) == 1 ) {
 					++added;
 				} else {
@@ -121,18 +116,13 @@ namespace mcode::net {
 
 	#endif
 
-		// OpenSSL spells SNI as a macro whose body casts to `void *` with a C-style
-		// cast. GCC attributes that cast to the call site and -Wold-style-cast is an
-		// error here; clang blames the system header and stays quiet, so the local
-		// build never saw it. This is the same call with the cast written out.
+		// The same call with the cast written out: OpenSSL's SNI macro trips -Wold-style-cast.
 		[[nodiscard]] auto set_sni_host_name( SSL* const handle, const std::string& host ) -> bool {
 			return SSL_ctrl( handle, SSL_CTRL_SET_TLSEXT_HOSTNAME, TLSEXT_NAMETYPE_host_name,
 				const_cast< char* >( host.c_str( ) ) ) == 1;
 		}
 
-		// Verification stays ON: a verify-disabled build is a security bug, not a
-		// convenience. `false` means no trust anchor was found, which is reported
-		// rather than silently proceeding.
+		// Verification stays ON: `false` means no trust anchor was found, and that is reported.
 		[[nodiscard]] auto make_ssl_context( ) -> result< ssl::context > {
 			auto context = ssl::context{ ssl::context::tls_client };
 
@@ -151,13 +141,7 @@ namespace mcode::net {
 			return context;
 		}
 
-		// One context per process, deliberately never freed.
-		//
-		// Rebuilding it per request reloads every root in the OS store. Destroying
-		// it is worse: a static `ssl::context` is torn down during static
-		// destruction, where its ordering against OpenSSL's own cleanup is
-		// unspecified, and the process aborted at exit whenever a TLS connection
-		// had been made. A process-lifetime context is therefore leaked on purpose.
+		// Leaked on purpose: a static context torn down during static destruction aborted at exit.
 		[[nodiscard]] auto shared_ssl_context( ) -> ssl::context* {
 			static auto* holder = []( ) -> ssl::context* {
 				auto built = make_ssl_context( );
@@ -168,9 +152,6 @@ namespace mcode::net {
 			return holder;
 		}
 
-		// The request head, shared by the plain and the TLS path so the two
-		// cannot drift. Headers are set in map order, which is also sorted order.
-		// The SSE variants add the stream headers, which `send` must not carry.
 		template< class Stream >
 		auto write_request( Stream& stream, const http_request& request, const url& parsed,
 			const bool event_stream ) -> void {
@@ -210,9 +191,7 @@ namespace mcode::net {
 		}
 
 
-		// Reads the SSE body incrementally. Shared by both transports; the
-		// buffered prefix from the header read is drained first, or a server that
-		// sends its first event with the response head loses it.
+		// The buffered prefix from the header read is drained first, or the first event is lost.
 		struct sse_pump_request {
 			beast::flat_buffer& buffer;
 			std::function< std::size_t( void*, std::size_t ) > read_some;
@@ -371,8 +350,7 @@ namespace mcode::net {
 
 				auto stream = ssl_stream{ context, *ssl_context };
 
-				// Shared hosts route by SNI; without it the handshake picks the
-				// wrong certificate and verification fails confusingly.
+				// Without SNI the handshake picks the wrong certificate and verification fails.
 				if ( !set_sni_host_name( stream.native_handle( ), parsed->host ) ) {
 					return std::unexpected( fail( errc::protocol, "failed to set the SNI host name" ) );
 				}
@@ -437,10 +415,7 @@ namespace mcode::net {
 			auto resolver = tcp::resolver{ context };
 			const auto endpoints = resolver.resolve( parsed->host, parsed->port );
 
-			// The failure path is the same shape for both transports: read the
-			// head, and on a non-2xx read the bounded error body so the caller can
-			// classify. The body is what distinguishes a retryable rate limit from
-			// a billing one, and `Retry-After` is not re-derivable.
+			// On a non-2xx the bounded error body is read so the caller can classify it.
 			auto head_ok = true;
 			auto status_code = 0;
 
@@ -511,13 +486,7 @@ namespace mcode::net {
 					.chunked = detail::is_chunked(
 						parser.get( ).base( )[ http::field::transfer_encoding ] ) } );
 
-				// `~ssl_stream` performs a graceful close: it waits for the peer's
-				// close_notify. A provider that keeps the connection alive never
-				// sends one, so the destructor blocks until the socket times out --
-				// and if it throws instead, the throw leaves a destructor and
-				// terminates the process. Both were observed against a real gateway:
-				// intermittent hangs and 0xC0000409 crashes after a successful
-				// stream. The shutdown handshake is skipped and the socket closed.
+				// The graceful close blocks on a keep-alive peer until timeout, so it is skipped.
 				::SSL_set_shutdown( stream.native_handle( ),
 					SSL_SENT_SHUTDOWN | SSL_RECEIVED_SHUTDOWN );
 
@@ -569,10 +538,7 @@ namespace mcode::net {
 			return std::unexpected(
 				fail( classify( exception.code( ) ), std::string{ "sse: " } + exception.what( ) ) );
 		} catch ( const std::exception& exception ) {
-			// The event callback reports a malformed payload by throwing, so this
-			// boundary converts instead of letting it unwind. An exception that
-			// escaped here reached no handler and terminated the process: over TLS
-			// a stream that splits an event across records hit it every time.
+			// The callback reports a malformed payload by throwing; an escape here terminates.
 			return std::unexpected(
 				fail( errc::protocol, std::string{ "sse: " } + exception.what( ) ) );
 		}

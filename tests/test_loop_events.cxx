@@ -1,10 +1,3 @@
-// The loop's event contract: which events are published, and what they carry.
-//
-// Split from test_loop.cxx, which owns the state machine. These cover the
-// publish side, where two defects were invisible to any state assertion: a
-// `turn_end` that no terminal path reached, and a `tool_call` payload that a
-// second move left empty.
-
 #include <catch2/catch_test_macros.hpp>
 
 #include <string>
@@ -17,14 +10,9 @@ using namespace loop_test;
 
 
 TEST_CASE( "turn_end is published on every terminal path", "[loop][events]" ) {
-	// It used to sit after the state machine's loop, and `handoff`, `done` and
-	// `failed` all return from inside it -- so it was never published at all.
-	// The TUI commits a turn's answer on this event, so every reply was erased
-	// with the live region. The loop now publishes it from a destructor guard,
-	// and this covers each of the three ways a turn can end.
+	// turn_end is published from a destructor guard so all three terminal exits reach it
 	const auto endings = std::vector< std::pair< std::string, std::string > >{
-		// { label, verification command }. Empty means Verify routes to
-		// handoff; "pass" reaches done.
+		// an empty command routes verify to handoff, `pass` reaches done
 		{ "handoff", "" },
 		{ "done", "pass" },
 	};
@@ -52,7 +40,6 @@ TEST_CASE( "turn_end is published on every terminal path", "[loop][events]" ) {
 		fx.loop->bus( ).unsubscribe( id );
 	}
 
-	// `failed` is the third exit, and it returns from the state machine too.
 	auto fx = fixture{ };
 	fx.connect( );
 	fx.loop->budget( ).max_steps = 0;
@@ -69,10 +56,6 @@ TEST_CASE( "turn_end is published on every terminal path", "[loop][events]" ) {
 }
 
 TEST_CASE( "the tool_call event carries the tool name", "[loop][events]" ) {
-	// The payload was moved into the event log and then moved again into the
-	// published event, so the event carried an empty string. The live region
-	// renders the tool row from this field, and a blank name made every running
-	// call anonymous while the finished rows (`\u2713 read`) stayed correct.
 	auto fx = fixture{ };
 	fx.connect( );
 
@@ -96,6 +79,5 @@ TEST_CASE( "the tool_call event carries the tool name", "[loop][events]" ) {
 	REQUIRE( tool.has_value( ) );
 	CHECK( *tool == "echo" );
 
-	// The log gets the same text, so the two readers cannot disagree.
 	CHECK( fx.log.events( ).size( ) > 0 );
 }

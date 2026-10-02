@@ -14,14 +14,7 @@ namespace mcode {
 
 	namespace {
 
-		// The resource the engine matches on, per class. Exec matches the
-		// canonical parsed argv; a file tool matches its path; anything else
-		// matches its raw arguments blob, which the engine treats as an opaque
-		// subject.
-		//
-		// The class has to come from the registry, so it is passed in rather
-		// than inferred from the tool name -- an extension tool and a built-in
-		// with the same class must be treated identically.
+		// The class comes from the registry, not the tool name: same-class tools are identical.
 		[[nodiscard]] auto permission_resource( const tool_call& call,
 			const tool_class klass ) -> std::string {
 			if ( klass != tool_class::exec && klass != tool_class::read &&
@@ -38,11 +31,7 @@ namespace mcode {
 			}
 
 			if ( klass != tool_class::exec ) {
-				// The path, not the blob. Handing the engine the raw arguments
-				// JSON made every in-workspace write look like a write outside
-				// the boundary, so it prompted on every edit -- the exact
-				// failure the resolved default set exists to prevent. A relative
-				// path is resolved against the workspace root by the engine.
+				// The path, not the blob: raw args JSON would look like a write outside the root.
 				const auto path = parsed->pointer_string( "/path" );
 
 				return path ? *path : std::string{ };
@@ -57,9 +46,7 @@ namespace mcode {
 			const auto tokens = perm::parse_command_line( *command );
 
 			if ( !tokens ) {
-				// Unparsable or compound: the engine never sees a string it
-				// could mistake for a single command. The empty resource makes
-				// the default set's exec rule an ask, never an allow.
+				// The empty resource makes the default exec rule an ask, never an allow.
 				return { };
 			}
 
@@ -131,11 +118,7 @@ namespace mcode {
 			return finish( );
 		}
 
-		// The veto gate. A separate check from the permission engine, and
-		// ahead of it resolving prompts: an extension veto denies the call
-		// even under --yolo, which is why the event is vetoable at all.
-		// Publishing it here, before the handler runs, is what makes the
-		// hook observable at all -- nothing else ever published this kind.
+		// A veto denies even under --yolo, so it is published before the handler runs.
 		{
 			auto pre_payload = std::string{ "{\"tool\":\"" };
 			json::append_escaped( pre_payload, call.name );
@@ -148,9 +131,7 @@ namespace mcode {
 			pre_event.timestamp_ms = support::epoch_milliseconds( );
 			pre_event.payload_json = std::move( pre_payload );
 
-			// The loop's own publish is fire-and-forget, so the vetoable
-			// publish goes to the bus directly: the returned veto is the
-			// decision, not a notification.
+			// The returned veto is the decision, not a notification.
 			const auto veto = bus_ != nullptr ? bus_->publish( std::move( pre_event ) )
 				: std::optional< events::veto >{ };
 
@@ -177,9 +158,7 @@ namespace mcode {
 			}
 		}
 
-		// The permission check, ahead of every handler. One engine, one check
-		// point: built-in, extension and MCP tools all pass through here, and
-		// the class comes from the registry rather than the tool.
+		// One check point: built-in, extension and MCP tools all pass through here.
 		if ( permissions_ != nullptr ) {
 			auto request = perm::permission_request{ };
 			request.tool_name = call.name;
@@ -250,8 +229,7 @@ namespace mcode {
 		outcome.ok = true;
 		outcome.content = *produced;
 
-		// A success after a denial is the run recovering: the flag must not
-		// survive it, or a recovered run would still exit 5.
+		// The flag must not survive a success, or a recovered run would still exit 5.
 		permission_denied_ = false;
 
 		{

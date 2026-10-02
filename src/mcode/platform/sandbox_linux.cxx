@@ -21,36 +21,20 @@ namespace mcode::platform {
 
 #if defined( __linux__ )
 
-	// The syscall numbers: glibc ships no wrappers for the Landlock trio, and
-	// the kernel ABI is the contract, not the libc.
+	// glibc ships no wrappers for the Landlock trio; the kernel ABI is the contract.
 	inline constexpr long SYSCALL_LANDLOCK_CREATE_RULESET = __NR_landlock_create_ruleset;
 	inline constexpr long SYSCALL_LANDLOCK_ADD_RULE = __NR_landlock_add_rule;
 	inline constexpr long SYSCALL_LANDLOCK_RESTRICT_SELF = __NR_landlock_restrict_self;
 
-	// The system roots every process needs to load and run: the shell, the
-	// dynamic loader, libc, and the nsswitch/ld.so configuration that name
-	// them. Without these a restricted child cannot exec anything at all --
-	// `LANDLOCK_ACCESS_FS_EXECUTE` is handled, so an ungranted `/bin/sh` is
-	// denied and the spawn fails rather than the command.
-	//
-	// Granted read+execute, never write: this is what makes the sandbox
-	// usable, and it grants nothing the child could not already read as the
-	// invoking user. A path that does not exist is skipped, because the
-	// distributions disagree about `/lib64` and a missing one must not fail
-	// the spawn.
+	// granted read+execute, never write; a missing path (e.g. /lib64) is skipped.
 	inline constexpr std::string_view SYSTEM_READ_ROOTS[] = {
 		"/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/dev",
 	};
 
-	// LANDLOCK_ACCESS_FS_IOCTL_DEV, which ABI 5 introduced and which the build
-	// headers may not name: they are enum members in linux/landlock.h, not
-	// macros, so a missing one cannot be detected with #ifdef. The value is
-	// fixed by the kernel ABI, and the ABI itself is probed at runtime.
+	// ABI 5's IOCTL_DEV right: an enum member, so #ifdef cannot detect a missing one.
 	inline constexpr std::uint64_t LANDLOCK_ACCESS_FS_IOCTL_DEV_RIGHT = 1ULL << 15;
 
-	// Filesystem rights per ABI, accumulated up the ladder. ABI 1 has no
-	// REFER, which means every cross-directory rename and link is denied
-	// under the ruleset; that is the documented cost of the oldest floor.
+	// accumulated up the ladder; ABI 1 has no REFER, so cross-directory rename/link are denied.
 	[[nodiscard]] auto landlock_fs_rights( const int abi ) -> std::uint64_t {
 		auto rights = std::uint64_t{ 0 };
 
@@ -128,9 +112,6 @@ namespace mcode::platform {
 		auto handled_fs = landlock_fs_rights( abi );
 		auto handled_net = landlock_net_rights( abi );
 
-		// Denying network is only meaningful when the ABI can handle it; below
-		// ABI 4 the seccomp fallback covers it, and the capability reporting
-		// says which one applies.
 		auto attr = landlock_ruleset_attr{ };
 		attr.handled_access_fs = handled_fs;
 		attr.handled_access_net = profile.allow_network ? std::uint64_t{ 0 } : handled_net;
@@ -145,8 +126,6 @@ namespace mcode::platform {
 
 		auto ruleset = unique_ruleset_linux{ static_cast< int >( ruleset_fd ) };
 
-		// The access mask is a parameter because a rule for a file takes the
-		// same shape as one for a directory: only the granted bits differ.
 		auto grant = [ & ]( const std::filesystem::path& path,
 			const std::uint64_t access ) -> status {
 			const auto fd = ::open( path.c_str( ), O_PATH | O_CLOEXEC );
@@ -219,9 +198,7 @@ namespace mcode::platform {
 			}
 		}
 
-		// allow_network = false with a network-capable ABI means the ruleset
-		// handles the net rights and grants none: connect and bind on TCP are
-		// denied. The profile grants no ports, so handled implies denied.
+		// handled with no port rule granted, so handled implies denied.
 		return ruleset;
 #else
 		return std::unexpected( mcode::fail( mcode::errc::unsupported,
@@ -238,9 +215,7 @@ namespace mcode::platform {
 #endif
 
 #if defined( __linux__ )
-		// no_new_privs before restrict_self: without it the kernel rejects the
-		// restriction for an unprivileged caller, and the call that looks like
-		// a sandbox is a no-op.
+		// without no_new_privs the kernel rejects restrict_self for an unprivileged caller.
 		if ( ::prctl( PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0 ) != 0 ) {
 			return std::unexpected( mcode::fail( mcode::errc::io,
 				std::string{ "prctl(PR_SET_NO_NEW_PRIVS) failed: " } + std::strerror( errno ) ) );
@@ -264,22 +239,14 @@ namespace mcode::platform {
 
 	auto sandbox_linux_seccomp_deny_network( ) -> status {
 #if defined( __linux__ )
-		// BPF_STMT/BPF_LD etc. come from linux/filter.h; the filter denies the
-		// syscalls that open outbound sockets. socket(2) itself is denied too:
-		// a socket that cannot be created cannot connect.
 		auto program = std::vector< sock_filter >{
-			// Load the syscall number.
 			BPF_STMT( BPF_LD | BPF_W | BPF_ABS, offsetof( seccomp_data, nr ) ),
-			// socket
 			BPF_JUMP( BPF_JMP | BPF_JEQ | BPF_K, __NR_socket, 0, 1 ),
 			BPF_STMT( BPF_RET | BPF_K, SECCOMP_RET_ERRNO | ( EPERM & SECCOMP_RET_DATA ) ),
-			// connect
 			BPF_JUMP( BPF_JMP | BPF_JEQ | BPF_K, __NR_connect, 0, 1 ),
 			BPF_STMT( BPF_RET | BPF_K, SECCOMP_RET_ERRNO | ( EPERM & SECCOMP_RET_DATA ) ),
-			// socketpair
 			BPF_JUMP( BPF_JMP | BPF_JEQ | BPF_K, __NR_socketpair, 0, 1 ),
 			BPF_STMT( BPF_RET | BPF_K, SECCOMP_RET_ERRNO | ( EPERM & SECCOMP_RET_DATA ) ),
-			// Everything else passes.
 			BPF_STMT( BPF_RET | BPF_K, SECCOMP_RET_ALLOW ),
 		};
 
@@ -287,9 +254,7 @@ namespace mcode::platform {
 		fprog.len = static_cast< unsigned short >( program.size( ) );
 		fprog.filter = program.data( );
 
-		// TSYNC is not required: the caller is single-threaded at spawn time in
-		// the child path this serves, and a filter without TSYNC still applies
-		// to this thread and everything it creates.
+		// no TSYNC: the caller is single-threaded at spawn, and the filter still covers children.
 		if ( ::syscall( __NR_seccomp, SECCOMP_SET_MODE_FILTER, 0, &fprog ) != 0 ) {
 			return std::unexpected( mcode::fail( mcode::errc::io,
 				std::string{ "seccomp(SECCOMP_SET_MODE_FILTER) failed: " } +

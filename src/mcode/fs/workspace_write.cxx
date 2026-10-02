@@ -31,8 +31,7 @@ namespace mcode {
 			}
 		}
 
-		// The first component BELOW the root, which is what the rule names. A file
-		// called `notes.mcode` at the root is not protected; `.mcode/` is.
+		// The first component below the root: `notes.mcode` is not protected, `.mcode/` is.
 		if ( path_entry == canonical.end( ) ) {
 			return false;
 		}
@@ -86,11 +85,7 @@ namespace mcode {
 			}
 		}
 
-		// A sibling temp file, so the rename is same-filesystem and therefore
-		// atomic. The counter keeps two writes in one process apart; the timestamp
-		// keeps two processes apart. Concurrent writers to the SAME file from
-		// different processes are not supported -- the harness serializes tool
-		// calls -- and this is what makes that limit visible rather than silent.
+		// A sibling temp file keeps the rename same-filesystem, hence atomic.
 		static auto counter = std::atomic< std::uint64_t >{ 0 };
 
 		const auto stamp = std::to_string( support::epoch_milliseconds( ) ) + "-" +
@@ -127,8 +122,6 @@ namespace mcode {
 			}
 		}
 
-		// Replaces on all three platforms: POSIX `rename`, and MSVC routes
-		// std::filesystem::rename through MoveFileExW with MOVEFILE_REPLACE_EXISTING.
 		std::filesystem::rename( platform::to_extended_path( temporary ),
 			platform::to_extended_path( *resolved ), error_code );
 

@@ -13,9 +13,6 @@ namespace mcode::ext {
 
 	namespace {
 
-		// The longest name a command may carry. A slash line is typed by a human
-		// at a prompt, so anything past this is a typo rather than a name, and
-		// an unbounded name would let one extension fill the completion list.
 		inline constexpr auto MAX_COMMAND_NAME_LENGTH = std::size_t{ 64 };
 
 		auto is_valid_command_name( const std::string_view name ) -> bool {
@@ -117,8 +114,6 @@ namespace mcode::ext {
 
 		lua_pushlstring( state, arguments.data( ), arguments.size( ) );
 
-		// A command handler that throws is contained, exactly as a hook handler
-		// is: the user sees the message, the session continues.
 		if ( lua_pcall( state, 1, 1, 0 ) != 0 ) {
 			auto message = std::string{ };
 
@@ -207,8 +202,6 @@ namespace mcode::ext {
 
 		auto* commands = self->commands( );
 
-		// A rejected registration must not leak the references it took. Every
-		// failure path past this point releases them before raising.
 		const auto release_references = [ & ]( ) {
 			lua_unref( state, command.function_reference );
 
@@ -218,10 +211,6 @@ namespace mcode::ext {
 		};
 
 		if ( commands == nullptr ) {
-			// No registry was installed with the surface. A denied registration is
-			// a contract violation here rather than an environmental failure: the
-			// host built no command surface at all, and silently dropping the
-			// command would leave the author believing it exists.
 			release_references( );
 
 			lua_pushliteral( state, "mcode.cmd.register: no command registry was "

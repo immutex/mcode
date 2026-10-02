@@ -30,9 +30,7 @@ namespace mcode::mcp {
 			}
 		}
 
-		// The per-tool handler the loop dispatches into. The supervisor is owned
-		// by the caller's `server_set`, which outlives the loop, so the reference
-		// is valid for every call the loop can make.
+		// the supervisor is owned by the caller's server_set, which outlives the loop
 		auto make_handler( supervisor& board, const std::string& server_tool_name )
 			-> std::function< result< std::string >( std::string_view ) > {
 			return [ &board, server_tool_name ]( const std::string_view arguments_json )
@@ -54,17 +52,12 @@ namespace mcode::mcp {
 						wrap_untrusted( outcome->content ) ) );
 				}
 
-				// The result content is attacker-controlled input: it crosses the
-				// boundary into the harness here, wrapped once, at the one place
-				// that returns it to the model. `call_tool` stays raw so callers
-				// that need the verbatim body keep it.
+				// wrapped once, here: call_tool stays raw for callers that need the verbatim body
 				return wrap_untrusted( outcome->content );
 			};
 		}
 
-		// Starts one server and registers its tools. Returns the stderr message
-		// when the server could not be started or registered; empty when it is
-		// running. A disabled server returns empty with nothing done.
+		// empty on success; a disabled server is a no-op that also returns empty
 		auto connect_one( const server_config& server, const connect_input& input )
 			-> std::string {
 			if ( !server.enabled ) {
@@ -105,8 +98,6 @@ namespace mcode::mcp {
 					make_handler( *board, tool.name ) );
 			}
 
-			// The handler references hold, and the children live until the
-			// caller's `server_set` is destroyed after the loop.
 			input.owned->add( std::move( board ) );
 
 			return { };

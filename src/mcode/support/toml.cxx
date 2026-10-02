@@ -10,7 +10,6 @@ namespace mcode::toml {
 
 	namespace {
 
-		// The UTF-8 byte order mark.
 		inline constexpr auto BOM = std::string_view{ "\xEF\xBB\xBF" };
 
 		auto is_space( const char character ) -> bool {
@@ -75,9 +74,7 @@ namespace mcode::toml {
 					return out;
 				}
 
-				// Only the escapes that appear in real config files. An unsupported
-				// escape is refused rather than passed through, because a silently
-				// literal backslash changes a value's meaning.
+				// an unsupported escape is refused; a literal backslash changes a value.
 				if ( character == '\\' && quote == '"' ) {
 					if ( input.at_end( ) ) {
 						return std::unexpected( input.failure( "unterminated escape" ) );
@@ -117,7 +114,6 @@ namespace mcode::toml {
 			return out;
 		}
 
-		// A key may be dotted (`a.b = 1`), which flattens to "a.b".
 		auto parse_key( reader& input ) -> result< std::string > {
 			auto out = std::string{ };
 
@@ -168,7 +164,6 @@ namespace mcode::toml {
 			while ( true ) {
 				input.skip_spaces( );
 
-				// Arrays may span lines.
 				while ( !input.at_end( ) && input.peek( ) == '\n' ) {
 					input.advance( );
 					input.skip_spaces( );
@@ -190,8 +185,7 @@ namespace mcode::toml {
 					return std::unexpected( item.error( ) );
 				}
 
-				// Homogeneity is required by TOML and is what lets a caller ask for a
-				// string array without checking each element's type at the call site.
+				// TOML requires homogeneous arrays, so a string array needs no per-element check.
 				if ( !out.items.empty( ) && out.items.front( ).kind != item->kind ) {
 					return std::unexpected( input.failure( "array elements must share a type" ) );
 				}
@@ -248,7 +242,6 @@ namespace mcode::toml {
 
 			auto literal = std::string{ input.text.substr( start, input.position - start ) };
 
-			// TOML allows underscores as digit separators.
 			auto cleaned = std::string{ };
 
 			for ( const auto character : literal ) {
@@ -264,10 +257,6 @@ namespace mcode::toml {
 			if ( is_float ) {
 				out.kind = value_kind::floating;
 
-				// The whole text must be consumed. `stod` stops at the first
-				// character it cannot use and returns the prefix without raising, so
-				// `0.25.9` silently became 0.25 and `1e` became 1.0 -- a malformed
-				// number quietly replaced by a different one.
 				if ( !support::parse_double( cleaned, out.floating ) ) {
 					return std::unexpected( input.failure( "malformed number: " + cleaned ) );
 				}
@@ -322,7 +311,6 @@ namespace mcode::toml {
 					"inline tables are not supported; use a [table] section" ) );
 			}
 
-			// Bare words: true, false, and anything else we do not accept.
 			if ( std::isalpha( static_cast< unsigned char >( character ) ) != 0 ) {
 				auto word = std::string{ };
 
@@ -351,10 +339,7 @@ namespace mcode::toml {
 		auto out = table{ };
 		auto input = reader{ };
 
-		// A UTF-8 BOM is skipped rather than treated as content. Notepad -- still the
-		// default editor on this project's primary platform -- writes one, and
-		// without this the first byte is not a space, a '#', or a '[', so a
-		// hand-edited config failed with "expected a key" and named the wrong cause.
+		// Notepad writes a UTF-8 BOM, which would otherwise be read as the first key.
 		input.text = text.starts_with( BOM ) ? text.substr( BOM.size( ) ) : text;
 
 		auto prefix = std::string{ };
@@ -378,7 +363,6 @@ namespace mcode::toml {
 				continue;
 			}
 
-			// A table header sets the prefix for every key that follows.
 			if ( input.peek( ) == '[' ) {
 				input.advance( );
 

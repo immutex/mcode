@@ -19,12 +19,9 @@ namespace mcode::ext {
 
 	namespace {
 
-		// Depth cap: a payload nested past this is malformed or hostile, and the
-		// recursion is what would blow the C stack.
+		// a payload nested past this would blow the C stack.
 		constexpr auto MAX_JSON_DEPTH = 64;
 
-		// The one place a Lua number becomes JSON text. A numeric key and a numeric
-		// value must agree, so both call sites use these.
 		inline constexpr auto NUMBER_FORMAT = "%.17g";
 		inline constexpr auto NUMBER_BUFFER_SIZE = std::size_t{ 32 };
 
@@ -44,9 +41,7 @@ namespace mcode::ext {
 					return pushed;
 				}
 
-				// A JSON null becomes nil, and assigning nil to a table key removes
-				// it. That is the honest mapping: Lua has no null, so a null member
-				// is ABSENT rather than present-and-nil.
+				// a JSON null becomes nil, which removes the key: the member is absent, not nil.
 				lua_setfield( state, -2, yyjson_get_str( key ) );
 			}
 
@@ -150,8 +145,6 @@ namespace mcode::ext {
 			++context.depth;
 
 			const auto table = lua_absindex( state, index );
-			// lua_objlen returns int; the counters below are size_t, so the
-			// conversion happens once here rather than at every comparison.
 			const auto length = static_cast< std::size_t >( lua_objlen( state, table ) );
 
 			auto keys = std::vector< std::string >{ };
@@ -168,9 +161,6 @@ namespace mcode::ext {
 
 					if ( number < 1.0 || number > static_cast< double >( length ) ||
 						number != std::floor( number ) ) {
-						// Not part of the array run, so it becomes an object key.
-						// Dropping it here would emit a payload that does not match
-						// the table the extension built.
 						array_like = false;
 
 						auto buffer = std::array< char, NUMBER_BUFFER_SIZE >{ };
@@ -223,9 +213,7 @@ namespace mcode::ext {
 				return { };
 			}
 
-			// Objects are emitted in sorted key order so two runs produce byte-
-			// identical JSON. The model's prompt cache keys on the payload, so an
-			// unstable field order would invalidate it for no reason.
+			// sorted so two runs emit byte-identical JSON, which the prompt cache keys on.
 			std::sort( keys.begin( ), keys.end( ) );
 
 			out += '{';

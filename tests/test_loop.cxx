@@ -1,9 +1,3 @@
-// The ReAct loop, driven by a scripted fake client.
-//
-// The loop's correctness is the state machine's, not the transport's, so every
-// test here drives model_client with queued events and asserts on the visited
-// state sequence -- never on a network.
-
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 

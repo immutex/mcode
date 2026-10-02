@@ -1,9 +1,5 @@
 #pragma once
 
-// Linux half of the Sandbox seam: Landlock with mandatory runtime ABI
-// detection, plus a seccomp fallback for the network denials older ABIs
-// cannot express. The unique_ruleset_linux type owns the ruleset fd.
-
 #include <memory>
 #include <filesystem>
 
@@ -18,13 +14,7 @@ namespace mcode::platform {
 
 #if defined( __linux__ )
 
-	// The ruleset fd from landlock_create_ruleset. Rules are added while it is
-	// open; restrict_self consumes it.
-	//
-	// A named type rather than a `unique_ptr<int>`: the fd is the value, not a
-	// pointer to one, and every consumer passes it straight to `syscall`, which
-	// takes an `int`. A `unique_ptr<int>` would also require its deleter to be
-	// invocable with an `int*`, which an fd-holding deleter is not.
+	// the ruleset fd from landlock_create_ruleset; restrict_self consumes it.
 	class unique_ruleset_linux {
 	public:
 		unique_ruleset_linux( ) = default;
@@ -65,50 +55,30 @@ namespace mcode::platform {
 		int descriptor_ = -1;
 	};
 
-	// The ABI ladder this code knows. A kernel reporting a version above
-	// LANDLOCK_ABI_MAX is handled: newer ABIs are supersets, so the newest
-	// known feature set is applied. The cost of that choice is real and
-	// accepted here: a future ABI that ADDS a filesystem right this code does
-	// not know leaves that right unhandled, and unhandled means NOT
-	// RESTRICTED -- the sandbox is complete for every right the code knows
-	// and silently permissive for any it does not. A kernel reporting a
-	// version the code has never seen is NOT assumed -- it hard-fails, because
-	// "never seen" is exactly what a partial ruleset looks like from inside.
+	// newer ABIs are supersets; an unknown one hard-fails rather than risk a partial ruleset.
 	inline constexpr int LANDLOCK_ABI_MAX = 5;
 
-	// The first ABI that can express the network rights (NET_BIND_TCP /
-	// NET_CONNECT_TCP). Below it the seccomp filter is the network deny.
+	// below this ABI the seccomp filter is the network deny.
 	inline constexpr int LANDLOCK_NETWORK_ABI = 4;
 #endif
 
-	// A placeholder on other platforms so the declarations below parse; the
-	// definitions are compiled only on Linux and the placeholder is never
-	// constructed anywhere.
+	// parses on other platforms; never constructed there.
 #if !defined( __linux__ )
 	struct unique_ruleset_linux_placeholder { };
 	using unique_ruleset_linux = unique_ruleset_linux_placeholder;
 #endif
 
-	// Queries the kernel's Landlock ABI version. This is the mandatory probe:
-	// RHEL 9.6 reports ABI 5 on a 5.14 kernel, so no compile-time assumption
-	// about the header's feature set can be trusted.
+	// the runtime probe: a 5.14 kernel can report ABI 5, so no compile-time assumption holds.
 	[[nodiscard]] auto sandbox_linux_abi( ) -> result< int >;
 
-	// Builds a ruleset for the profile at the given ABI. Read paths get
-	// read+execute rights, write paths get the full known right set. When
-	// allow_network is false and the ABI supports it, the net rights are
-	// handled (and therefore denied, since no port rule grants them).
 	[[nodiscard]] auto sandbox_linux_ruleset( const int abi,
 		const sandbox_profile& profile ) -> result< unique_ruleset_linux >;
 
-	// Applies the ruleset to the calling process: sets no_new_privs first,
-	// then restrict_self, then the seccomp network deny when the ABI could not
-	// express it.
+	// sets no_new_privs before restrict_self, then the seccomp deny when the ABI lacks net rules.
 	[[nodiscard]] auto sandbox_linux_restrict( const int abi,
 		const unique_ruleset_linux& ruleset, const sandbox_profile& profile ) -> status;
 
-	// The seccomp fallback: a filter denying socket, connect and socketpair
-	// with EPERM. Used when the kernel's Landlock ABI predates network rules.
+	// denies socket, connect and socketpair with EPERM, for ABIs below 4.
 	[[nodiscard]] auto sandbox_linux_seccomp_deny_network( ) -> status;
 
 }

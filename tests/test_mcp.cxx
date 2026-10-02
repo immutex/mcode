@@ -87,7 +87,6 @@ TEST_CASE( "jsonrpc renders and parses frames", "[mcp]" ) {
 	CHECK( stamped->find( "\"_meta\"" ) != std::string::npos );
 	CHECK( stamped->find( "\"cursor\"" ) != std::string::npos );
 
-	// A second stamp is a no-op, not a second map.
 	auto restamped = jsonrpc::stamp_meta( *stamped );
 	REQUIRE( restamped );
 	CHECK( *restamped == *stamped );
@@ -111,8 +110,6 @@ TEST_CASE( "a session keeps stdin open and reports EOF", "[mcp][session]" ) {
 	CHECK( spawned->running( ) );
 	CHECK( spawned->id( ) != 0 );
 
-	// A write succeeds while stdin is open; the child never sees EOF until it
-	// is closed or the child exits.
 	CHECK( spawned->write( R"({"jsonrpc":"2.0"})" "\n" ) );
 
 	auto closed = spawned->close_stdin( );
@@ -182,24 +179,16 @@ TEST_CASE( "a crashed server is restarted and its tools come back", "[mcp][super
 	REQUIRE( saw_ready.size( ) == 1 );
 	CHECK( registry.find( "mcp__echo__upper" ) != nullptr );
 
-	// The supervisor is driven over the EOF event; the fixture exits on the
-	// first post-handshake request, so the transport sees EOF and the restart
-	// path runs.
 	board.on_transport_eof( );
 
 	REQUIRE( wait_until( [ & ]( ) { return board.state( ) == server_state::ready; } ) );
 	REQUIRE( saw_ready.size( ) == 2 );
 
-	// The tools came back: the follow-up defect from 07 -- respawned servers
-	// wrongly deregistered -- does not reproduce.
 	CHECK( registry.find( "mcp__echo__upper" ) != nullptr );
 	CHECK( registry.find( "mcp__echo__count" ) != nullptr );
 }
 
 TEST_CASE( "a pending call is failed, not replayed", "[mcp][supervisor]" ) {
-	// The fixture exits on any post-handshake request. A `tools/call` is in
-	// flight when that happens; it must come back as a transport error, and a
-	// restart must not silently re-issue it.
 	auto [ wire, session_client ] = handshaked_client( "exit-mid-request" );
 
 	auto pending = std::async( std::launch::async, [ & ]( ) {
@@ -207,7 +196,6 @@ TEST_CASE( "a pending call is failed, not replayed", "[mcp][supervisor]" ) {
 			DEFAULT_CALL_TIMEOUT );
 	} );
 
-	// The call fails with a transport error once EOF lands.
 	auto outcome = pending.get( );
 	REQUIRE_FALSE( outcome );
 	CHECK( outcome.error( ).code == errc::io );
@@ -225,13 +213,11 @@ TEST_CASE( "a changed tools/list is detected via hash mismatch", "[mcp][supervis
 	const auto pinned = board.pinned_hash( );
 	REQUIRE_FALSE( pinned.empty( ) );
 
-	// The fixture's second list returns changed definitions.
 	auto fresh = board.client_ptr( )->list_tools( );
 	REQUIRE( fresh );
 
 	CHECK( board.detect_changed_tools( *fresh ) );
 
-	// The first list, unchanged, does not trip the pin.
 	auto again = board.client_ptr( )->list_tools( );
 	REQUIRE( again );
 	CHECK_FALSE( board.detect_changed_tools( *again ) );
@@ -239,10 +225,6 @@ TEST_CASE( "a changed tools/list is detected via hash mismatch", "[mcp][supervis
 
 TEST_CASE( "a hung server times out with cancellation sent and late responses ignored",
 	"[mcp]" ) {
-	// The "echo-notify" fixture echoes every notification back on stdout, so
-	// the `notifications/cancelled` the client sends on timeout comes back as
-	// an inbound notification the notify handler observes -- the assertion is
-	// end-to-end, not a mock.
 	auto [ wire, session_client ] = handshaked_client( "echo-notify" );
 
 	auto notifications = std::vector< std::string >{ };
@@ -258,11 +240,8 @@ TEST_CASE( "a hung server times out with cancellation sent and late responses ig
 	REQUIRE_FALSE( outcome );
 	CHECK( outcome.error( ).code == errc::cancelled );
 
-	// The loop was not blocked for the call timeout of a healthy server.
 	CHECK( elapsed < std::chrono::seconds{ 5 } );
 
-	// The cancellation notification went out and came back. The pump drives
-	// the wire; without it the echoed notification would sit unread.
 	auto saw_cancelled = false;
 	const auto deadline = std::chrono::steady_clock::now( ) + std::chrono::seconds{ 10 };
 
@@ -286,10 +265,7 @@ TEST_CASE( "a hung server times out with cancellation sent and late responses ig
 }
 
 TEST_CASE( "a late response after a timeout is ignored", "[mcp]" ) {
-	// The "late" fixture waits past the deadline, then answers. The client
-	// must have given up by then: the call returns `cancelled`, and the
-	// response that eventually arrives lands on a retired id -- counted,
-	// ignored, never delivered as a second result.
+	// a response arriving after cancellation lands on a retired id and is counted, never delivered
 	auto [ wire, session_client ] = handshaked_client( "late" );
 
 	auto timed = session_client->call_tool( "upper", R"({"text":"x"})",
@@ -297,9 +273,6 @@ TEST_CASE( "a late response after a timeout is ignored", "[mcp]" ) {
 	REQUIRE_FALSE( timed );
 	CHECK( timed.error( ).code == errc::cancelled );
 
-	// Pump past the fixture's two-second delay so the response actually
-	// arrives while this test is still watching. The pump drives the wire;
-	// without it the late response would sit unread.
 	auto saw_late = false;
 	const auto deadline = std::chrono::steady_clock::now( ) + std::chrono::seconds{ 10 };
 
@@ -322,14 +295,10 @@ TEST_CASE( "stderr is captured and never fatal", "[mcp]" ) {
 	auto tools = session_client->list_tools( );
 	REQUIRE( tools );
 
-	// The fixture wrote to stderr before answering; the ring holds it.
 	auto report_text = wire->stderr_text( );
 	REQUIRE_FALSE( report_text.empty( ) );
 	CHECK( report_text.find( "trouble before the list" ) != std::string::npos );
 
-	// A call makes the fixture exit non-zero on stderr; the call fails with a
-	// transport error and the server state reflects the exit, but stderr
-	// content is still buffered, not treated as a protocol failure.
 	auto outcome = session_client->call_tool( "upper", R"({"text":"x"})",
 		DEFAULT_CALL_TIMEOUT );
 	REQUIRE_FALSE( outcome );
@@ -364,15 +333,13 @@ TEST_CASE( "source registers mcp tools with the right class, source and owner",
 	REQUIRE( count != nullptr );
 	CHECK( count->klass == tool_class::mcp );
 
-	// Teardown removes exactly the server's tools.
 	CHECK( mcp_source.unregister_server( "echo" ) == 2 );
 	CHECK( registry.find( "mcp__echo__upper" ) == nullptr );
 	CHECK( registry.size( ) == 0 );
 }
 
 TEST_CASE( "a server cannot mark itself read-only", "[mcp][source]" ) {
-	// The class is assigned by the registry path, never by the tool: whatever
-	// the server claims, the registration lands as tool_class::mcp.
+	// an mcp tool always registers as tool_class::mcp regardless of what the server claims
 	auto registry = tool_registry{ };
 	auto mcp_source = source{ registry };
 
@@ -415,7 +382,6 @@ TEST_CASE( "graceful shutdown closes stdin before terminating", "[mcp][superviso
 
 	CHECK( board.state( ) == server_state::stopped );
 
-	// A second shutdown is a no-op, not an error.
 	board.shutdown( );
 }
 
@@ -431,9 +397,6 @@ TEST_CASE( "untrusted delimiters wrap description and result", "[mcp][source]" )
 
 TEST_CASE( "the wiring registers a configured server's tools on the loop",
 	"[mcp][connect]" ) {
-	// The acceptance test for the integration gap: a supervisor was built and
-	// tested but nothing in the shipped binary ever constructed one. This
-	// drives the same connect path `run_exec` drives, against the fixture.
 	auto registry = tool_registry{ };
 	auto servers = server_set{ };
 	auto loop = mcode::agent_loop{ mcode::agent_loop::dependencies{ } };
@@ -453,8 +416,6 @@ TEST_CASE( "the wiring registers a configured server's tools on the loop",
 	CHECK( registry.find( qualified_tool_name( "echo", "upper" ) ) != nullptr );
 	CHECK( registry.find( qualified_tool_name( "echo", "count" ) ) != nullptr );
 
-	// The handler the loop dispatches into routes to the server's client and
-	// returns the result wrapped as untrusted data.
 	const auto* handler = loop.handler_for( qualified_tool_name( "echo", "upper" ) );
 	REQUIRE( handler != nullptr );
 
@@ -488,13 +449,10 @@ TEST_CASE( "a disabled server is not started and a bad one does not fail the ses
 	auto report = connect_list( { disabled, unstartable }, input );
 	REQUIRE( report );
 
-	// The disabled server never started: nothing registered, nothing owned.
 	CHECK( report->started.empty( ) );
 	CHECK( registry.size( ) == 0 );
 	CHECK( servers.all( ).empty( ) );
 
-	// The enabled-but-unstartable one is reported, and the call still returns
-	// a report -- one bad server did not fail the session.
 	CHECK( report->failed.size( ) == 1 );
 	CHECK( report->failed.front( ) == "missing" );
 
@@ -527,9 +485,7 @@ TEST_CASE( "a tool result comes back wrapped as untrusted data", "[mcp][connect]
 }
 
 TEST_CASE( "no request can exceed the absolute maximum timeout", "[mcp][client]" ) {
-	// The clamp lives inside `client::call`: a caller asking for a year still
-	// waits at most ABSOLUTE_MAX_TIMEOUT, and a caller asking for less keeps
-	// its shorter deadline -- which is what the timeout-path tests rely on.
+	// `client::call` clamps a year-long request to ABSOLUTE_MAX_TIMEOUT, a shorter deadline wins
 	auto [ wire, session_client ] = handshaked_client( "hang" );
 
 	const auto started = std::chrono::steady_clock::now( );
@@ -541,9 +497,6 @@ TEST_CASE( "no request can exceed the absolute maximum timeout", "[mcp][client]"
 	CHECK( outcome.error( ).code == errc::cancelled );
 	CHECK( elapsed < ABSOLUTE_MAX_TIMEOUT + std::chrono::seconds{ 10 } );
 
-	// The shorter caller timeout still wins: the existing timeout-path tests
-	// pass 300-500ms and observe cancellation within seconds; asserted here
-	// once, against the same fixture, so the clamp is not order-dependent.
 	auto short_call_started = std::chrono::steady_clock::now( );
 	auto short_outcome = session_client->call_tool( "upper", R"({"text":"x"})",
 		std::chrono::milliseconds{ 400 } );

@@ -15,10 +15,7 @@ namespace mcode {
 		tool_failed,
 		cancelled,
 
-		// Distinct from `cancelled`: a budget stop is a normal, resumable end to a
-		// run, while a cancellation is an interruption. They carry different exit
-		// codes, and collapsing them told a CI script that a run out of budget had
-		// been interrupted by a signal.
+		// Distinct from `cancelled`: they carry different exit codes.
 		budget_exhausted,
 
 		lua_error,

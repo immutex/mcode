@@ -1,8 +1,5 @@
 #pragma once
 
-// Shared by test_manifest.cxx, test_loader.cxx and test_hooks.cxx. The three
-// were one file past the 600-line limit; these helpers are what they share.
-
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
@@ -18,18 +15,14 @@
 
 namespace ext_test {
 
-	// The registry a load writes into. A free function cannot capture, so the
-	// installer reads it from here; each test replaces it before loading.
+	// a free function cannot capture, so the installer reads the registry from here.
 	inline mcode::tool_registry* g_registry = nullptr;
 
 	inline auto extensions_root( ) -> std::filesystem::path {
 		return std::filesystem::path{ MCODE_FIXTURE_EXTENSIONS };
 	}
 
-	// The REAL API surface, not a stub. A hand-written stub would keep passing
-	// after the API renamed something, which is exactly the drift this suite
-	// exists to catch -- the extension calls `mcode.tool.register` through the
-	// same entry points a third-party extension does.
+	// the real API surface, not a stub, so an API rename cannot silently drift.
 	inline auto register_api( const mcode::ext::registration& given )
 		-> mcode::status {
 		return given.surface.install( mcode::ext::api_surface::install_request{ .host = given.host,
@@ -37,8 +30,7 @@ namespace ext_test {
 			.details = given.details } );
 	}
 
-	// A bare "0 == 1" hides which extension failed and why, so every assertion on
-	// the report goes through this.
+	// a bare "0 == 1" hides which extension failed and why.
 	inline auto describe( const mcode::ext::load_report& report ) -> std::string {
 		auto text = std::string{ };
 

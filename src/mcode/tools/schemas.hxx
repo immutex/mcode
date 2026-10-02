@@ -4,10 +4,7 @@
 
 namespace mcode::tools {
 
-	// The eight core tool schemas, authored in one place and registered through
-	// tool_registry::add. Flat parameter schemas only: every parameter is
-	// top-level, defaults and bounds live in each description with an example
-	// value. Measured budget for all eight is asserted in the tests.
+	// flat parameter schemas only: validate_schema accepts top-level properties, no nesting
 	inline constexpr std::string_view READ_SCHEMA = R"JSON({
   "type": "object",
   "properties": {

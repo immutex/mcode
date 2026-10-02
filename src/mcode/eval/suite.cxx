@@ -59,11 +59,7 @@ namespace mcode::eval {
 	}
 
 	auto run_record::to_json( ) const -> std::string {
-		// Hand-built rather than through the DOM: the shape is fixed and this keeps
-		// the record byte-stable, which is what makes two runs diffable.
-		// Every interpolated string goes through the escaper. Escaping only `detail`
-		// left the other fields able to emit a quote that makes the whole line
-		// unparseable -- and a run record exists to be read back.
+		// Hand-built to keep the record byte-stable; every field goes through the escaper.
 		auto out = std::string{ "{\"run_id\":\"" };
 		json::append_escaped( out, run_id );
 		out += "\",\"ts\":\"";
@@ -87,7 +83,6 @@ namespace mcode::eval {
 	}
 
 	auto pass_at_k( const std::vector< bool >& attempts ) -> double {
-		// Did ANY attempt succeed.
 		for ( const auto succeeded : attempts ) {
 			if ( succeeded ) {
 				return 1.0;
@@ -98,8 +93,7 @@ namespace mcode::eval {
 	}
 
 	auto pass_power_k( const std::vector< bool >& attempts ) -> double {
-		// Did ALL attempts succeed. Reporting only pass@k flatters a harness that
-		// works half the time, which is why both are reported.
+		// Both are reported: pass@k alone flatters a harness that works half the time.
 		if ( attempts.empty( ) ) {
 			return 0.0;
 		}
@@ -116,7 +110,6 @@ namespace mcode::eval {
 	auto builtin_tasks( ) -> std::vector< task > {
 		auto tasks = std::vector< task >{ };
 
-		// 1. The workspace boundary refuses an escape.
 		tasks.push_back( {
 			.id = "workspace-refuses-escape",
 			.description = "a path escaping the workspace is refused, and a prefix-sharing sibling too",
@@ -139,7 +132,6 @@ namespace mcode::eval {
 			},
 		} );
 
-		// 2. Project config may only restrict.
 		tasks.push_back( {
 			.id = "project-config-cannot-widen",
 			.description = "a project config file may only add deny/ask, never widen",
@@ -152,7 +144,6 @@ namespace mcode::eval {
 						allowed.error( ).msg );
 				}
 
-				// The same scope must refuse a widening key.
 				auto scratch = root / ".mcode" / "widening.toml";
 				{
 					auto out = std::ofstream{ scratch, std::ios::trunc };
@@ -170,7 +161,6 @@ namespace mcode::eval {
 			},
 		} );
 
-		// 3. TOML refuses what it cannot represent.
 		tasks.push_back( {
 			.id = "toml-refuses-unsupported",
 			.description = "dates, inline tables, and multi-line strings are refused, not ignored",
@@ -192,7 +182,6 @@ namespace mcode::eval {
 			},
 		} );
 
-		// 4. The event bus is flat under reentrancy.
 		tasks.push_back( {
 			.id = "event-bus-flat-reentrancy",
 			.description = "a handler publishing during dispatch queues rather than recurses",
@@ -227,7 +216,6 @@ namespace mcode::eval {
 			},
 		} );
 
-		// 5. A veto short-circuits.
 		tasks.push_back( {
 			.id = "veto-short-circuits",
 			.description = "the first veto wins and later handlers are skipped",
@@ -274,7 +262,6 @@ namespace mcode::eval {
 			},
 		} );
 
-		// 6. The session log survives a crash.
 		tasks.push_back( {
 			.id = "event-log-survives-crash",
 			.description = "events are on disk before the log is closed, and a torn tail is reported",
@@ -292,7 +279,6 @@ namespace mcode::eval {
 					log.append( "session.start" );
 					log.append( "tool.call" );
 
-					// Deliberately NOT closed: this is the crash state.
 					const auto on_disk = read_text( path );
 
 					if ( on_disk.find( "tool.call" ) == std::string::npos ) {
@@ -314,7 +300,6 @@ namespace mcode::eval {
 			},
 		} );
 
-		// 7. The provider descriptor rejects what cannot work.
 		tasks.push_back( {
 			.id = "provider-descriptor-validation",
 			.description = "a descriptor with no endpoint, a non-http URL, or no mapping is refused",
@@ -333,7 +318,6 @@ namespace mcode::eval {
 					}
 				}
 
-				// And the reference example must be accepted.
 				const auto* good = R"({
 					"name":"g","endpoint":"https://api.example.com/v1/chat/completions",
 					"stream":{"text_delta":"/choices/0/delta/content"}
@@ -347,7 +331,6 @@ namespace mcode::eval {
 			},
 		} );
 
-		// 8. The delta applier reassembles split tool arguments.
 		tasks.push_back( {
 			.id = "delta-applier-reassembles-fragments",
 			.description = "arguments split mid-token are reassembled into valid JSON",
@@ -368,8 +351,7 @@ namespace mcode::eval {
 
 				auto applier = model::delta_applier{ *descriptor };
 
-				// Custom delimiters: these payloads end with `)"`, which would
-				// terminate a plain R"( )" early.
+				// Custom delimiters: these payloads end with `)"`, which would end R"( )" early.
 				for ( const auto* payload : {
 					R"JSON({"i":0,"id":"c","n":"read","a":"{\"pa"})JSON",
 					R"JSON({"i":0,"a":"th\":\"a.tx"})JSON",
@@ -395,7 +377,6 @@ namespace mcode::eval {
 			},
 		} );
 
-		// 9. Unknown CLI flags are refused.
 		tasks.push_back( {
 			.id = "cli-refuses-unknown-flags",
 			.description = "an unrecognised flag is collected, never silently ignored",
@@ -414,7 +395,6 @@ namespace mcode::eval {
 					return fail_message( "the wrong argument was collected" );
 				}
 
-				// A flag without a value is an error, not an empty string.
 				if ( cli::parse_exec_options( { "--model" } ) ) {
 					return fail_message( "a flag without a value was accepted" );
 				}
@@ -423,7 +403,6 @@ namespace mcode::eval {
 			},
 		} );
 
-		// 10. The extension VM boundary holds.
 		tasks.push_back( {
 			.id = "extension-boundary-holds",
 			.description = "io, package, and the writable-globals escapes are all refused",
@@ -471,9 +450,7 @@ namespace mcode::eval {
 		result.suite = std::string{ suite_name };
 		result.run_id = "eval-" + now_iso8601( );
 
-		// A stable identity for "what code produced this run": a git
-		// sha; the version string is what M0 has, and it is recorded rather than
-		// omitted so the field's absence is not mistaken for an oversight.
+		// The version string stands in for a git sha, so the field is never absent.
 		auto revision = std::string{ "mcode/" } + std::string{ VERSION };
 
 		for ( const auto& entry : builtin_tasks( ) ) {
@@ -483,9 +460,7 @@ namespace mcode::eval {
 			record.suite = result.suite;
 			record.task_id = entry.id;
 			record.scaffold_revision = revision;
-			// The tasks assert harness behaviour directly; none dispatches a model
-			// tool call, so the count is zero. Reporting 1 would be a fabricated
-			// metric, which is worse than a zero that is honestly zero.
+			// No task dispatches a model tool call, so this is honestly zero.
 			record.tool_calls = 0;
 
 			const auto started = std::chrono::steady_clock::now( );

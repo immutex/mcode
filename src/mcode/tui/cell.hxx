@@ -9,8 +9,7 @@
 
 namespace mcode::tui {
 
-	// Theme tokens. Named, never raw colors: the depth fallback lives in
-	// theme.cxx and every styled cell names a token.
+	// Named, never raw colours: the depth fallback lives in theme.cxx.
 	enum class token : std::uint8_t {
 		none,
 		text,
@@ -19,6 +18,7 @@ namespace mcode::tui {
 		success,
 		warn,
 		error,
+		thinking,
 		code_bg,
 		diff_add_bg,
 		diff_add_emph,
@@ -26,8 +26,10 @@ namespace mcode::tui {
 		diff_del_emph,
 	};
 
-	// One presentation style. Colors are tokens resolved once per session by
-	// the emitter; the depth is never carried per cell.
+	inline constexpr std::size_t TOKEN_COUNT =
+		static_cast< std::size_t >( token::diff_del_emph ) + 1;
+
+	// Resolved once per session by the emitter; the depth is never per cell.
 	struct style {
 		token foreground = token::text;
 		token background = token::none;
@@ -39,9 +41,8 @@ namespace mcode::tui {
 		[[nodiscard]] auto operator==( const style& other ) const noexcept -> bool = default;
 	};
 
-	// One display column's content. `text` is a whole grapheme cluster in
-	// UTF-8; `width` is its display width, and 0 marks the continuation slot
-	// of a wide cluster, which the emitter skips.
+	// One display column. `text` is a whole grapheme cluster; `width` 0 marks
+	// the continuation slot of a wide cluster, which the emitter skips.
 	struct cell {
 		std::string text;
 		style cell_style;
@@ -50,8 +51,7 @@ namespace mcode::tui {
 		[[nodiscard]] auto operator==( const cell& other ) const noexcept -> bool = default;
 	};
 
-	// A run of text sharing one style. The vocabulary type every renderer
-	// above the cell buffer speaks.
+	// A run of text sharing one style.
 	struct styled_span {
 		std::string text;
 		token color = token::text;
@@ -101,21 +101,18 @@ namespace mcode::tui {
 		std::vector< cell > cells_;
 	};
 
-	// The ambiguous-width policy: East Asian ambiguous characters count as one
-	// column or two. A terminal that renders them double-width needs 2; a
-	// mismatch mis-measures every line containing one, so the frame builder and
-	// the caret must read the same value.
+	// East Asian ambiguous characters count as one column or two. A mismatch
+	// mis-measures every line containing one, so the frame builder and the
+	// caret must read the same value.
 	inline constexpr std::size_t AMBIGUOUS_WIDTH = 1;
 
-	// Display width of one code point. `ambiguous_width` is 1 or 2, the
-	// MCODE_AMBIGUOUS_WIDTH policy.
+	// Display width of one code point.
 	[[nodiscard]] auto codepoint_width( char32_t value, std::size_t ambiguous_width ) noexcept
 		-> std::size_t;
 
 	// Advances one grapheme cluster: base + extending marks + ZWJ sequences +
-	// variation selectors + regional-indicator pairs. Returns the cluster's
-	// bytes and its display width. Never returns an empty cluster for
-	// non-empty input; one invalid byte is its own cluster.
+	// variation selectors + regional-indicator pairs. Returns its bytes and
+	// display width. One invalid byte is its own cluster.
 	[[nodiscard]] auto next_cluster( std::string_view text, std::size_t ambiguous_width )
 		-> std::pair< std::string_view, std::size_t >;
 
@@ -126,9 +123,5 @@ namespace mcode::tui {
 	// Never mid-cluster, never a byte count.
 	[[nodiscard]] auto truncate_to_width( std::string_view text, std::size_t max_width,
 		std::size_t ambiguous_width ) -> std::string;
-
-	// Splits on '\n', dropping '\r'. A trailing newline does not produce a
-	// trailing empty line.
-	[[nodiscard]] auto split_lines( std::string_view text ) -> std::vector< std::string >;
 
 }

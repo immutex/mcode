@@ -11,7 +11,7 @@
 namespace mcode::ext::detail {
 
 	auto interrupt( lua_State* state, int gc ) -> void {
-		// Non-negative values are GC steps, which share this callback.
+		// gc >= 0 is a GC step, which shares this callback.
 		if ( gc >= 0 ) {
 			return;
 		}
@@ -22,9 +22,7 @@ namespace mcode::ext::detail {
 			return;
 		}
 
-		// The callback is global state but the deadline is not: this looks the
-		// watchdog up through the running thread, so extension A's budget can
-		// never fire inside extension B.
+		// the deadline is per-thread, so one extension's budget cannot fire inside another.
 		auto* watchdog = ext::detail::watchdog_from( state );
 
 		if ( watchdog == nullptr || !watchdog->armed ) {
@@ -65,8 +63,6 @@ namespace mcode::ext::detail {
 		auto produced = ( *function )( args );
 
 		if ( !produced ) {
-			// `nil, err` is the environmental-failure channel: the model gets a
-			// message it can act on and the harness does not treat it as a crash.
 			lua_pushnil( state );
 			lua_pushlstring( state, produced.error( ).msg.data( ), produced.error( ).msg.size( ) );
 

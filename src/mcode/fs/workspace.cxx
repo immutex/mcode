@@ -19,20 +19,16 @@ namespace mcode {
 
 		constexpr std::size_t BINARY_PROBE_BYTES = 8192;
 
-		// A file is "binary" when this share of its probed bytes are non-printable
-		// controls. Named because the threshold is a judgement, not a derivation.
+		// A judgement, not a derivation: this share of non-printable probe bytes marks binary.
 		constexpr std::size_t SUSPICIOUS_PERCENT = 10;
 		constexpr std::size_t PERCENT_SCALE = 100;
 
-		// A `**` walk this deep is a pathological tree, and the bound is what keeps
-		// the recursion from being a stack overflow rather than a slow listing.
+		// Bounds the recursion so a pathological tree is a slow listing, not a stack overflow.
 		constexpr std::size_t MAX_GLOB_DEPTH = 64;
 
-		// FNV-1a, 64-bit.
 		constexpr std::uint64_t FNV_OFFSET_BASIS = 1469598103934665603ULL;
 		constexpr std::uint64_t FNV_PRIME = 1099511628211ULL;
 
-		// Sixteen hex digits plus the terminator.
 		constexpr std::size_t HASH_HEX_BUFFER = 17;
 
 		[[nodiscard]] auto segment_matches( const std::string_view pattern, const std::string_view name ) -> bool {
@@ -86,28 +82,18 @@ namespace mcode {
 			return parts;
 		}
 
-		// The walk's accumulators, so the recursion takes a request rather than five
-		// positional parameters.
 		struct glob_request {
 			const std::vector< std::string >& parts;
 			std::vector< std::filesystem::path >& out;
 			std::size_t max_results = 0;
 
-			// Directories already descended into. A symlink loop (a -> b -> a) makes
-			// the `**` branch recurse forever, and the result cap does not stop it
-			// because the cap counts matches, not visits. Keyed by the weakly
-			// canonical path so two routes to one directory count as one.
+			// Guards the `**` branch against a symlink loop, which the match cap cannot.
 			std::set< std::filesystem::path >& visited;
 
-			// A `**` walk is a filesystem traversal, and an unbounded one on a deep
-			// tree is a denial of service even without a cycle.
 			std::size_t depth = 0;
 		};
 
-		// Enters a directory if it is a real directory and has not been visited.
-		// symlink_status does not follow the link, so a symlinked directory is never
-		// descended into -- which is both the loop guard and what keeps a listing
-		// inside the workspace.
+		// symlink_status does not follow the link, so a symlinked directory is never descended.
 		auto enter_directory( const std::filesystem::path& path, glob_request& request )
 			-> bool {
 			auto error_code = std::error_code{ };
@@ -222,8 +208,6 @@ namespace mcode {
 	}
 
 	auto hash_bytes( const std::string_view bytes ) noexcept -> std::string {
-		// FNV-1a, 64-bit. Named because the two constants are the algorithm, and a
-		// transcription error in either is silent.
 		auto hash = FNV_OFFSET_BASIS;
 
 		for ( const auto byte : bytes ) {
@@ -270,10 +254,7 @@ namespace mcode {
 			candidate = canonical_root_ / candidate;
 		}
 
-		// Through the platform seam, not std::filesystem directly: the seam owns the
-		// long-path form, and a second canonicalization here is the duplication that
-		// drifts. The result is stored WITHOUT the extended prefix, so the paths the
-		// model and the logs see stay readable.
+		// Through the seam: it owns the long-path form, and the stored path drops the prefix.
 		auto canonical = platform::canonicalize( candidate );
 
 		if ( !canonical ) {
@@ -289,14 +270,7 @@ namespace mcode {
 	}
 
 	auto workspace::contains( const std::filesystem::path& absolute ) const -> bool {
-		// The root is canonical, so the input must be too or the comparison is
-		// between two spellings of the same directory. Windows makes this concrete:
-		// `%TEMP%` commonly arrives as an 8.3 short name (`RUNNER~1`), which is the
-		// same directory as its long form and compares unequal component-wise.
-		// weakly_canonical resolves the existing prefix and leaves the rest lexical,
-		// so a path that does not exist yet still compares correctly -- and a
-		// sibling that merely shares a string prefix still fails, which is the
-		// guarantee this function exists to provide.
+		// weakly_canonical so a short-name or not-yet-existing path still compares correctly.
 		auto error_code = std::error_code{ };
 		const auto canonical = std::filesystem::weakly_canonical( absolute, error_code );
 
@@ -366,21 +340,14 @@ namespace mcode {
 				std::to_string( MAX_TEXT_FILE_BYTES ) + "-byte read cap: " + resolved->string( ) ) );
 		}
 
-		// The extended form at the syscall boundary only. Windows caps a path at
-		// MAX_PATH unless it carries the \\?\ prefix or the machine sets
-		// LongPathsEnabled -- and that registry value defaults to 0, so a deep cloned
-		// repository fails to open on a stock machine. The prefix is applied here and
-		// not to `resolved`, so the path the caller sees stays the readable one.
+		// The \\?\ prefix only at the syscall: without it a deep path fails on a stock Windows.
 		auto input = std::ifstream{ platform::to_extended_path( *resolved ), std::ios::binary };
 
 		if ( !input ) {
 			return std::unexpected( fail( errc::io, "cannot open " + resolved->string( ) ) );
 		}
 
-		// Read one byte past the cap, not the whole file. The stat above is only a
-		// fast reject: a file that grows between the stat and the read -- ordinary in
-		// a workspace an agent is editing -- would otherwise be slurped in full, and
-		// the cap is the only bound on this path.
+		// Read one byte past the cap: the stat is only a fast reject, and the file can grow.
 		auto content = std::string{ };
 		content.resize( MAX_TEXT_FILE_BYTES + 1 );
 

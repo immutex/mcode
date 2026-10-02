@@ -44,11 +44,7 @@ namespace mcode::perm {
 	auto permission_engine::add_config_rules( const rule_scope scope,
 		const std::vector< std::string >& deny, const std::vector< std::string >& ask )
 		-> void {
-		// A config rule names a pattern, not a class: `permissions.deny = [
-		// "C:/secrets/*" ]` must deny reads AND writes of that path, and
-		// `permissions.deny = [ "sudo rm -rf /" ]` must deny the exec call.
-		// One pattern, one rule per class the matcher can distinguish; each
-		// class's matcher decides whether the pattern fits its resource.
+		// a config rule names a pattern, not a class, so one pattern becomes one rule per class.
 		for ( const auto klass : { tool_class::exec, tool_class::read,
 			tool_class::write } ) {
 			for ( const auto& pattern : deny ) {
@@ -119,9 +115,7 @@ namespace mcode::perm {
 
 	auto permission_engine::evaluate_rules( const permission_request& request ) const
 		-> std::optional< rule_match > {
-		// deny -> ask -> allow, first match wins across the merged list. The
-		// list is ordered managed > user > project > session by construction,
-		// and each pass scans it in that order.
+		// deny -> ask -> allow, first match wins; each pass scans the merged list in scope order.
 		for ( const auto decision : { permission_decision::deny,
 			permission_decision::ask, permission_decision::allow } ) {
 			for ( const auto& [ scope, candidate ] : config_rules_ ) {
@@ -146,10 +140,7 @@ namespace mcode::perm {
 				}
 			}
 
-			// The store's entries join the evaluation as remembered answers.
-			// The key comes from the same function that wrote them, so a
-			// remembered answer is found by the same identity that stored it.
-			// The store holds no ask entries, so only deny and allow participate.
+			// the store holds no ask entries, so only deny and allow participate.
 			if ( decision != permission_decision::ask ) {
 				const auto key = store_key_for( { request.klass, request.tool_name,
 					request.resource } );
@@ -174,11 +165,6 @@ namespace mcode::perm {
 
 	auto permission_engine::default_decision( const permission_request& request ) const
 		-> permission_verdict {
-		// The default rule set from the resolved table. Workspace-internal
-		// writes are allow -- the deliberate, recorded deviation from the
-		// original table. Prompts are for commands and for writes outside the
-		// workspace. `approval = always` prompts for everything, including
-		// reads, which is the setting's entire purpose.
 		switch ( request.klass ) {
 			case tool_class::read: {
 				auto candidate = std::filesystem::path{ request.resource };
@@ -187,9 +173,7 @@ namespace mcode::perm {
 					candidate = space_->root( ) / candidate;
 				}
 
-				// A deny is not a question, so the default-set secret deny
-				// holds even under `approval = always`: the paranoid setting
-				// prompts for everything it may allow, never for a refusal.
+				// a deny is not a question: the secret deny holds even under approval = always.
 				if ( const auto secret = default_secret_deny( candidate.generic_string( ) ) ) {
 					return { permission_decision::deny,
 						{ "default", *secret, permission_decision::deny },
@@ -253,9 +237,7 @@ namespace mcode::perm {
 
 	auto permission_engine::resolve_ask( const permission_request& request,
 		const rule_match& matched ) -> permission_decision {
-		// yolo and approval = "never" disable prompts, not policy: every ask
-		// resolves to allow whatever it is, but the floor and permissions.deny
-		// already decided before this point.
+		// yolo disables prompts, not policy: the floor and permissions.deny decided before here.
 		if ( options_.yolo || options_.approval == "never" ) {
 			last_verdict_ = { permission_decision::allow,
 				{ "yolo", matched.pattern, permission_decision::allow },
@@ -280,8 +262,7 @@ namespace mcode::perm {
 		ask_request.rule = matched.scope + ": " + matched.pattern;
 		ask_request.working_directory = space_->root( ).string( );
 
-		// The detail view renders from the verdict, so it must describe the
-		// pending ask before the source can request it.
+		// the detail view renders from the verdict, so it is set before the source asks.
 		last_verdict_ = { permission_decision::ask, matched,
 			"the rule matched and the user is being asked" };
 
@@ -297,11 +278,7 @@ namespace mcode::perm {
 				return permission_decision::allow;
 
 			case approval_outcome::allow_remember: {
-				// Persist the canonical key, never a prefix. A remembered
-				// `git push` must not authorize `git push --force`. A write
-				// outside the workspace is never auto-persisted -- the table
-				// marks that row "no" -- and `store_key_for` returns nothing
-				// for it.
+				// a write outside the workspace is never auto-persisted.
 				const auto key = store_key_for( { request.klass, request.tool_name,
 					request.resource } );
 
@@ -312,16 +289,12 @@ namespace mcode::perm {
 
 					const auto saved = store_->save( additions );
 
-					// The in-memory layer must reflect the answer either way, or
-					// the second identical call in the same session prompts
-					// again -- the failure the remember store exists to prevent.
+					// the in-memory layer must reflect the answer either way.
 					section_of( stored_, key->section ).insert_or_assign( key->key,
 						store_decision::allow );
 
 					if ( !saved ) {
-						// A failed save is not a failed approval: the session
-						// rule below still applies, and the reason is visible in
-						// the verdict.
+						// a failed save is not a failed approval; the session rule still applies.
 						last_verdict_ = { permission_decision::allow,
 							{ "prompt", matched.pattern, permission_decision::allow },
 							"allowed for the session; the store write failed: " +
@@ -349,10 +322,7 @@ namespace mcode::perm {
 				return permission_decision::deny;
 
 			case approval_outcome::deny_session:
-				// A session-scope deny, never auto-persisted: a permanent deny
-				// written on one keystroke is the decision a user regrets.
-				// `permissions.deny` in a config file is how a permanent deny
-				// is expressed.
+				// a permanent deny written on one keystroke is the decision a user regrets.
 				session_rules_.push_back( rule{ request.klass, request.resource,
 					permission_decision::deny } );
 
@@ -370,8 +340,7 @@ namespace mcode::perm {
 				return permission_decision::deny;
 
 			case approval_outcome::detail:
-				// The terminal source handles `?` internally and never returns
-				// it; reaching here means a source misused the protocol.
+				// the terminal source handles `?` internally and never returns it.
 				last_verdict_ = { permission_decision::deny,
 					{ matched.scope, matched.pattern, permission_decision::deny },
 					"approval source returned detail; failing closed" };
@@ -384,9 +353,7 @@ namespace mcode::perm {
 
 	auto permission_engine::decide( const permission_request& request )
 		-> permission_decision {
-		// 1. The hard-deny floor: ahead of the rule merge and ahead of yolo.
-		//    Not a rule in the list -- a rule can be overridden by a later
-		//    scope and the floor must not be.
+		// the hard-deny floor sits ahead of the rule merge and ahead of yolo.
 		if ( const auto floor = on_floor( request ) ) {
 			last_verdict_ = { permission_decision::deny,
 				{ "floor", request.resource, permission_decision::deny }, *floor };
@@ -394,9 +361,7 @@ namespace mcode::perm {
 			return permission_decision::deny;
 		}
 
-		// 2. An unparsable or compound command arrives as an empty resource.
-		//    No rule may match it -- an allow rule for "" would otherwise
-		//    authorize every unparsable command -- and the default set asks.
+		// an unparsable command arrives as an empty resource, which no rule may match.
 		if ( request.klass == tool_class::exec && request.resource.empty( ) ) {
 			const rule_match unparsable{ "default", "unparsable or compound command",
 				permission_decision::ask };
@@ -407,9 +372,6 @@ namespace mcode::perm {
 			return resolve_ask( request, unparsable );
 		}
 
-		// 3. An exec through a shell or runner wrapper is refused outright:
-		//    the wrapper being allowlisted says nothing about what it runs,
-		//    and a prefix rule against it is documented-bypassable.
 		if ( request.klass == tool_class::exec ) {
 			const auto tokens = parse_command_line( request.resource );
 
@@ -425,7 +387,6 @@ namespace mcode::perm {
 			}
 		}
 
-		// 4. The merged rule list: config scopes, session rules, the store.
 		if ( const auto matched = evaluate_rules( request ) ) {
 			if ( matched->decision == permission_decision::deny ) {
 				last_verdict_ = { permission_decision::deny, *matched,
@@ -441,11 +402,9 @@ namespace mcode::perm {
 				return permission_decision::allow;
 			}
 
-			// An ask rule: resolve through the approval path.
 			return resolve_ask( request, *matched );
 		}
 
-		// 5. The default set.
 		const auto fallback = default_decision( request );
 
 		if ( fallback.decision != permission_decision::ask ) {

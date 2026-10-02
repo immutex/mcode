@@ -34,13 +34,11 @@ namespace mcode::events {
 				}
 
 				if ( dispatching_ ) {
-					// Mid-dispatch removal must not invalidate iteration, so the slot
-					// is tombstoned now and compacted when dispatch finishes.
+					// Tombstoned now, compacted when dispatch finishes: the slot must stay valid.
 					entry_value.alive = false;
 					entry_value.function = nullptr;
 					entry_value.veto_function = nullptr;
 				} else {
-					// O(1) swap-remove.
 					entry_value = std::move( list.back( ) );
 					list.pop_back( );
 				}
@@ -62,11 +60,7 @@ namespace mcode::events {
 	auto bus::dispatch_one( const event& value ) -> std::optional< veto > {
 		auto& list = subscribers_[ static_cast< std::size_t >( value.type ) ];
 
-		// Indexed, against a snapshot of the size. A handler may SUBSCRIBE during
-		// dispatch -- a hook that installs another hook is ordinary -- and that
-		// push_back can reallocate, which would invalidate a range-for's iterators.
-		// The snapshot also means an entry added mid-dispatch is not called for the
-		// event that caused its own registration.
+		// Snapshot the size: a mid-dispatch subscribe can reallocate, and is not called here.
 		const auto count = list.size( );
 
 		for ( auto index = std::size_t{ 0 }; index < count; ++index ) {
@@ -76,14 +70,11 @@ namespace mcode::events {
 				continue;
 			}
 
-			// Dispatch is noexcept at the bus boundary. A throwing handler is caught
-			// and counted rather than allowed to abort dispatch, and it is NOT
-			// auto-removed -- removal would make a transient bug permanent.
+			// A throwing handler is caught and counted, never auto-removed.
 			try {
 				if ( entry_value.veto_function ) {
 					if ( auto decision = entry_value.veto_function( value ) ) {
-						// First veto wins and short-circuits: later handlers for this
-						// event are skipped for this dispatch.
+						// First veto wins: later handlers are skipped for this dispatch.
 						return decision;
 					}
 
@@ -102,14 +93,7 @@ namespace mcode::events {
 	}
 
 	auto bus::drain_pending( ) -> void {
-		// Flat, never recursive: everything published during this drain is appended
-		// to the same deque and handled in the same loop, so the stack depth stays 1
-		// no matter how many events a handler emits.
-		//
-		// Bounded, because "flat" is not the same as "terminating". A handler that
-		// publishes an event of the kind it subscribes to appends work every
-		// iteration, and the deque would grow until memory ran out. The cap turns
-		// that into a counted drop.
+		// Flat, never recursive, so the stack depth stays 1; the cap bounds a self-feeding handler.
 		auto drained = std::size_t{ 0 };
 
 		while ( !pending_.empty( ) ) {
@@ -124,9 +108,7 @@ namespace mcode::events {
 			pending_.pop_front( );
 			++drained;
 
-			// The veto is dropped, and that is correct: a veto answers the publish
-			// that is currently unwinding. A handler that queues an event during
-			// drain has already returned, so there is no call left for it to refuse.
+			// A veto only answers the publish still unwinding, so a queued event's veto is dropped.
 			dispatch_one( next );
 		}
 	}
@@ -136,9 +118,7 @@ namespace mcode::events {
 			value.timestamp_ms = support::epoch_milliseconds( );
 		}
 
-		// Re-entrant publish: queue it. The outer drain will handle it, which keeps
-		// the stack flat and makes infinite recursion impossible by construction
-		// rather than by convention.
+		// Re-entrant publish queues instead of recursing, keeping the stack flat.
 		if ( dispatching_ ) {
 			pending_.push_back( std::move( value ) );
 
@@ -153,7 +133,6 @@ namespace mcode::events {
 
 		dispatching_ = false;
 
-		// Compact every list that gained a tombstone during this dispatch.
 		for ( auto& list : subscribers_ ) {
 			list.erase( std::remove_if( list.begin( ), list.end( ), []( const entry& item ) {
 				return !item.alive;

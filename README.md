@@ -691,6 +691,19 @@ code comments.
     tail now stays in `carry_` until a complete sequence or UTF-8 character
     arrives.
 
+85. **A `tui::token` with no theme entry renders in the wrong colour, silently.**
+    `entry_index` falls back to index 0, so a token added to the enum and left
+    out of `ENTRIES` gets `token::none`'s value instead of failing. That is how
+    `token::thinking` rendered as plain default text. The table's size is now
+    inferred (`std::to_array`) and checked against `TOKEN_COUNT`, so an omission
+    is a compile error rather than a colour nobody notices.
+
+86. **Anything the tests exercise must live in `mcode_core`, not the `mcode`
+    executable.** `mcode_tests` links `mcode_core` only, so a module compiled
+    solely into the executable is untestable -- the test target fails to link
+    with unresolved externals. `cli/slash.cxx` was moved into the library for
+    exactly this reason; `cli_repl.cxx` stays out because nothing links it.
+
 ## Building
 
 ```bash

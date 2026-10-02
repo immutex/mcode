@@ -15,9 +15,7 @@ namespace mcode {
 	inline constexpr std::uintmax_t MAX_TEXT_FILE_BYTES = 8u * 1024u * 1024u;
 	inline constexpr std::size_t DEFAULT_GLOB_LIMIT = 1000;
 
-	// The largest file a tool may create or replace. Above this the content had to
-	// come from somewhere in memory already, and a single write that large is a
-	// mistake rather than an edit.
+	// Above this the content had to come from memory already, so it is a mistake, not an edit.
 	inline constexpr std::uintmax_t MAX_WRITE_FILE_BYTES = 10u * 1024u * 1024u;
 
 	struct read_result {
@@ -28,14 +26,11 @@ namespace mcode {
 		bool truncated = false;
 	};
 
-	// `create` requires the path to be absent, `overwrite` requires it to exist.
-	// The distinction is the whole read-before-write invariant: replacing content
-	// needs a prior read, creating a file does not.
+	// The read-before-write invariant: replacing content needs a prior read, creating does not.
 	enum class write_mode { create, overwrite };
 
 	struct write_receipt {
-		// The hash AFTER the write, which is what the caller records so its own
-		// next edit does not read as stale.
+		// The hash AFTER the write, so the caller's next edit does not read as stale.
 		std::string content_hash;
 		std::uintmax_t bytes_written = 0;
 	};
@@ -58,23 +53,11 @@ namespace mcode {
 		[[nodiscard]] auto read_file( std::string_view relative_path ) const -> result< std::string >;
 		[[nodiscard]] auto content_hash( std::string_view relative_path ) const -> result< std::string >;
 
-		// Creates or replaces a file, atomically.
-		//
-		// Writes a sibling temp file and renames it over the target, so a crash
-		// mid-write leaves the original intact rather than truncated. The content
-		// is bounded by MAX_WRITE_FILE_BYTES.
-		//
-		// Does NOT refuse `.mcode/` or `.git/`: the harness has to write artifacts
-		// under `.mcode/artifacts/`. That denial is actor-scoped and belongs to the
-		// tool layer, which consults `is_protected` -- see `12` and the rule in
-		// `31`. Moving it here would give the model the same access the harness has.
+		// A sibling temp file renamed over the target, so a crash leaves the original intact.
 		[[nodiscard]] auto write_file( std::string_view relative_path, std::string_view content,
 			write_mode mode ) -> result< write_receipt >;
 
-		// True for a path under `.mcode/` or `.git/` at the workspace root.
-		//
-		// A query rather than an enforcement so the caller decides: model-facing
-		// tools must refuse these, the harness's own artifact spill must not.
+		// A query, not an enforcement: model-facing tools must refuse these, the harness must not.
 		[[nodiscard]] auto is_protected( const std::filesystem::path& absolute ) const -> bool;
 
 		[[nodiscard]] auto display_path( const std::filesystem::path& path ) const -> std::string;

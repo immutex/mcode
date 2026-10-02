@@ -4,38 +4,6 @@
 
 namespace mcode::tui {
 
-	namespace {
-
-		// The paste placeholder: a bracketed-paste blob renders as the marker
-		// so a token dump never floods the live region.
-		inline constexpr std::string_view PASTE_MARKER = "[pasted text]";
-
-		// A line longer than this renders as the marker instead of itself.
-		inline constexpr std::size_t PASTE_RENDER_LIMIT = 256;
-
-		// The ghost-text corpus is the session's own history: the first
-		// history entry that starts with the current line suggests the rest.
-		[[nodiscard]] auto longest_prefix_suggestion(
-			const std::vector< std::string >& history, const std::string_view current )
-			-> std::string {
-			if ( current.empty( ) ) {
-				return { };
-			}
-
-			for ( auto index = history.size( ); index > 0; --index ) {
-				const auto& entry = history[ index - 1 ];
-
-				if ( entry.size( ) > current.size( ) &&
-					entry.starts_with( current ) ) {
-					return entry.substr( current.size( ) );
-				}
-			}
-
-			return { };
-		}
-
-	}
-
 	auto input_editor::handle( const key_event& event ) -> std::optional< std::string > {
 		auto& line = lines_[ cursor_row_ ];
 
@@ -67,11 +35,9 @@ namespace mcode::tui {
 				return submission;
 			}
 
-			case key::shift_enter:
-			case key::backslash_newline: {
+			case key::newline: {
 				auto split = editor_line{ };
 				split.text = line.text.substr( line.cursor );
-
 				line.text.resize( line.cursor );
 
 				lines_.insert( lines_.begin( ) +
@@ -90,11 +56,9 @@ namespace mcode::tui {
 				}
 
 				if ( cursor_row_ > 0 ) {
-					// Join with the previous line.
 					const auto previous = cursor_row_ - 1;
-					const auto moved = lines_[ cursor_row_ ].text;
 
-					lines_[ previous ].text += moved;
+					lines_[ previous ].text += lines_[ cursor_row_ ].text;
 					lines_.erase( lines_.begin( ) +
 						static_cast< std::ptrdiff_t >( cursor_row_ ) );
 					cursor_row_ = previous;
@@ -146,7 +110,6 @@ namespace mcode::tui {
 					return std::nullopt;
 				}
 
-				// History navigation.
 				if ( history_.empty( ) ) {
 					return std::nullopt;
 				}
@@ -206,26 +169,13 @@ namespace mcode::tui {
 				return std::nullopt;
 			}
 
-			case key::paste: {
-				// The blob enters the buffer as truth; render() shows the
-				// marker in its place, so a token dump never floods the
-				// live region but the submission carries the real text.
-				line.text.insert( line.cursor, event.text );
-				line.cursor += event.text.size( );
-
-				return std::nullopt;
-			}
-
 			case key::interrupt: {
-				// Ctrl+C clears the pending input; the session continues.
 				reset( );
 
 				return std::nullopt;
 			}
 
 			case key::escape: {
-				// Escape abandons the pending input, the way every other
-				// editor does. The session continues.
 				reset( );
 
 				return std::nullopt;
@@ -242,10 +192,16 @@ namespace mcode::tui {
 		history_position_ = history_.size( );
 	}
 
+	auto input_editor::set_text( std::string text ) -> void {
+		lines_.assign( 1, editor_line{ std::move( text ), 0 } );
+		lines_[ 0 ].cursor = lines_[ 0 ].text.size( );
+		cursor_row_ = 0;
+	}
+
 	auto input_editor::text( ) const -> std::string {
 		auto out = std::string{ };
 
-		for ( std::size_t index = 0; index < lines_.size( ); ++index ) {
+		for ( auto index = std::size_t{ 0 }; index < lines_.size( ); ++index ) {
 			if ( index != 0 ) {
 				out.push_back( ' ' );
 			}
@@ -259,65 +215,23 @@ namespace mcode::tui {
 	auto input_editor::flattened_cursor( ) const noexcept -> std::size_t {
 		auto offset = std::size_t{ 0 };
 
-		for ( std::size_t index = 0; index < lines_.size( ); ++index ) {
+		for ( auto index = std::size_t{ 0 }; index < lines_.size( ); ++index ) {
 			if ( index == cursor_row_ ) {
 				return offset + lines_[ index ].cursor;
 			}
 
-			// One space per row break, matching `text()`, so the two agree.
 			offset += lines_[ index ].text.size( ) + 1;
 		}
 
 		return offset;
 	}
 
-	auto input_editor::suggestion( ) const -> std::string {
-		if ( lines_.empty( ) ) {
-			return { };
-		}
-
-		return longest_prefix_suggestion( history_, lines_.back( ).text );
-	}
-
 	auto input_editor::push_history( std::string entry ) -> void {
-		// The most recent duplicate is dropped so Up walks distinct entries.
 		if ( !history_.empty( ) && history_.back( ) == entry ) {
 			return;
 		}
 
 		history_.push_back( std::move( entry ) );
-	}
-
-	auto input_editor::render( ) const -> std::vector< styled_line > {
-		auto out = std::vector< styled_line >{ };
-
-		for ( auto index = std::size_t{ 0 }; index < lines_.size( ); ++index ) {
-			auto line = styled_line{ };
-			line.push_back( { index == 0 ? std::string{ "> " } : std::string{ "  " },
-				token::accent } );
-
-			auto body = lines_[ index ].text;
-
-			if ( body.find( '\n' ) != std::string::npos || body.size( ) > PASTE_RENDER_LIMIT ) {
-				body = std::string{ PASTE_MARKER };
-			}
-
-			line.push_back( { std::move( body ), token::text } );
-
-			out.push_back( std::move( line ) );
-		}
-
-		const auto ghost = suggestion( );
-
-		if ( !ghost.empty( ) ) {
-			auto line = styled_line{ };
-			line.push_back( { std::string{ "  " }, token::muted } );
-			line.push_back( { ghost, token::muted, token::none, false, false, true } );
-
-			out.push_back( std::move( line ) );
-		}
-
-		return out;
 	}
 
 }

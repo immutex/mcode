@@ -26,7 +26,6 @@ namespace mcode::net::detail {
 					line.pop_back( );
 				}
 
-				// A chunk extension follows a semicolon and carries no size.
 				if ( const auto semicolon = line.find( ';' ); semicolon != std::string::npos ) {
 					line.resize( semicolon );
 				}
@@ -41,8 +40,7 @@ namespace mcode::net::detail {
 						fail( errc::protocol, "malformed chunk size in the SSE body" ) );
 				}
 
-				// The last chunk is followed by an optional trailer, which is not
-				// part of the body.
+				// A zero-size chunk is followed by an optional trailer, not body data.
 				if ( size == 0 ) {
 					done_ = true;
 
@@ -65,7 +63,6 @@ namespace mcode::net::detail {
 				return { };
 			}
 
-			// The CRLF that terminates the chunk data.
 			if ( pending_.size( ) < 2 ) {
 				return { };
 			}

@@ -44,9 +44,7 @@ namespace mcode::mcp {
 
 	auto source::register_server( const std::string& server_name,
 		const std::vector< server_tool >& tools ) -> result< void > {
-		// A restart re-registers the same names. The registry rejects duplicate
-		// names loudly, so the server's prior entries are removed first; when
-		// there are none, the removal is a no-op rather than an error.
+		// the registry rejects duplicate names, so a restart removes the prior entries first
 		registry_->remove_owner( owner_of( server_name ) );
 
 		for ( const auto& tool : tools ) {

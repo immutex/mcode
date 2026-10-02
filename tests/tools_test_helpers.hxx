@@ -1,8 +1,5 @@
 #pragma once
 
-// Shared by test_tools.cxx. Extracted when that file passed the 600-line
-// limit.
-
 #include <catch2/catch_test_macros.hpp>
 
 #include <deque>
@@ -38,8 +35,6 @@ namespace tools_test {
 	inline constexpr std::size_t TOKEN_CHARS_PER_TOKEN = 4;
 	inline constexpr std::size_t CORE_SCHEMA_BUDGET_TOKENS = 3000;
 
-	// A scripted approval source: answers come from a queue, never from a
-	// terminal. Records what it was asked, so tests can assert prompt counts.
 	class scripted_approval_source final : public perm::approval_source {
 	public:
 		auto queue( const perm::approval_outcome answer ) -> void {
@@ -102,9 +97,7 @@ namespace tools_test {
 
 			auto options = perm::permission_engine::options{ };
 			options.yolo = yolo;
-			// The engine must be free to prompt: the scripted source answers
-			// without a terminal. context.headless stays true for the ask_user
-			// tests, which is a separate flag.
+			// false so the engine may prompt: the scripted source answers without a terminal.
 			options.headless = false;
 			engine.set_options( options );
 			engine.set_approval_source( &approval );

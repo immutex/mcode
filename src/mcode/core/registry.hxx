@@ -22,9 +22,7 @@ namespace mcode {
 		}
 	};
 
-	// What a tool does, for the permission engine. The class is assigned by the
-	// registry, never by the tool: an MCP server's `readOnlyHint` is a claim, and
-	// `07` requires it to be treated as untrusted.
+	// Assigned by the registry, never by the tool: an MCP `readOnlyHint` is an untrusted claim.
 	enum class tool_class { read, write, exec, net, spawn, mcp };
 
 	[[nodiscard]] auto to_string( tool_class klass ) noexcept -> std::string_view;
@@ -41,8 +39,7 @@ namespace mcode {
 		std::string owner;
 		bool deferrable = true;
 
-		// Pre-rendered JSON Schema. The loop builds the request's tool array from
-		// the registry, so a tool without one is callable but never advertised.
+		// A tool without one is callable but never advertised to the model.
 		std::string schema_json;
 
 		[[nodiscard]] auto is_core( ) const noexcept -> bool {
@@ -60,9 +57,7 @@ namespace mcode {
 
 		[[nodiscard]] auto owned_by( const std::string_view owner ) const -> std::vector< const tool_def* >;
 
-		// Removes one tool by name. False when the name is absent, which is a
-		// no-op rather than an error: unregistering something already gone is a
-		// legitimate race, not a bug.
+		// False when absent: unregistering something already gone is a race, not a bug.
 		auto remove( std::string_view name ) -> bool;
 
 		auto remove_owner( const std::string_view owner ) -> std::size_t;

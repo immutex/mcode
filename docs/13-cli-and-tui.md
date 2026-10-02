@@ -73,7 +73,7 @@ flowchart LR
 
 **Cell buffer**: `struct Cell { char32_t cp; Style style; uint8_t width; }` in a flat `Vec<Cell>` sized cols×rows. Style = packed fg/bg (truecolor u24 + flag for indexed/named) + attrs byte. Two buffers, swap after flush (ratatui model).
 
-**Frame builder**: pure function `state → buffer`. Rebuilds only the live region + dirty transcript tail; committed lines are written straight to stdout (bypassing buffers) at commit time, so the diff only ever covers the bottom `LIVE_ROWS` (prompt + status line + active spinner block, typically ≤6 rows).
+**Frame builder**: pure function `state → buffer`. Rebuilds only the live region + dirty transcript tail; committed lines are written straight to stdout (bypassing buffers) at commit time, so the diff only ever covers the bottom `LIVE_ROWS`. The region's height is dynamic — prompt + status as the floor, grown by the palette and the active rows, capped at 16 and at the terminal height minus one.
 
 **Render loop**: event-driven, not timer-driven.
 1. Drain queue; coalesce (max 1 frame per wakeup; spinner ticks are the only timer, 80–120ms interval, skipped when idle).

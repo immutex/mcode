@@ -24,18 +24,12 @@ namespace mcode::tools {
 		inline constexpr std::int64_t DEFAULT_BASH_TIMEOUT_MS = 60'000;
 		inline constexpr std::int64_t MAX_BASH_TIMEOUT_MS = 600'000;
 
-		// The registry entries tool_search scores. Kept as a request struct so the
-		// scorer stays a pure function over data.
 		struct scored_tool {
 			std::string name;
 			std::string description;
 			double score = 0.0;
 		};
 
-		// BM25-class scoring over name and description tokens: exact name-token
-		// hits dominate, description hits and prefixes add signal. The corpus is a
-		// handful of tools, so the full IDF/length machinery would be bookkeeping
-		// without effect.
 		[[nodiscard]] auto lower_ascii( std::string_view text ) -> std::string {
 			auto out = std::string{ text };
 
@@ -167,32 +161,20 @@ namespace mcode::tools {
 				false );
 		}
 
-		// The permission decision happens once, in the loop, before any handler
-		// runs. Deciding here as well made a "yes once" answer prompt twice and
-		// let a second answer override the first. This function only shapes the
-		// command and runs it.
+		// the permission decision happens in the loop, before any handler runs -- never here
 
-		// Execute the argv the policy judged, not the raw string: a shell would
-		// re-split, redirect or expand text the gate never approved. The shell
-		// itself is an explicitly denied runner, so nothing here goes through one.
+		// run the argv the gate judged: a shell would re-split or expand text it never approved
 		auto options = process_options{ };
 		options.working_directory = context.space->root( ).string( );
 		options.timeout = std::chrono::milliseconds{ timeout_ms };
 		options.scrub_environment = true;
 
-		// The profile: read and write the workspace and the temp directory,
-		// nothing else, no network. The OS boundary is what makes an
-		// auto-allowed exec safe; the permission engine is a gate, not
-		// isolation. The platform reports what it can actually enforce, and a
-		// refusal to apply is loud rather than a silent downgrade to the
-		// engine alone.
+		// the OS boundary is what makes auto-allowed exec safe; the engine is a gate, not isolation
 		auto profile = platform::sandbox_profile{ };
 		profile.read_paths.push_back( context.space->root( ) );
 		profile.write_paths.push_back( context.space->root( ) );
 
-		// The protected subtrees. The write grant on the workspace root would
-		// otherwise cover them, and the harness's own rule is that no actor
-		// but the harness writes .git or .mcode.
+		// the root write grant would otherwise cover these
 		profile.deny_paths.push_back( context.space->root( ) / ".git" );
 		profile.deny_paths.push_back( context.space->root( ) / ".mcode" );
 

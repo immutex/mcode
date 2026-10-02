@@ -73,14 +73,10 @@ namespace mcode {
 		}
 
 #if defined( _WIN32 )
-		// Everything one sandboxed child needs, held until the spawn returns
-		// and the Job handle takes over ownership of the child's lifetime.
 		struct sandbox_spawn_state {
 			platform::unique_job_windows token;
 			platform::unique_job_windows job;
 
-			// The parent's write end of the child's stdin, held raw until the
-			// child exits and closed explicitly after the wait.
 			void* parent_stdin = nullptr;
 		};
 
@@ -98,9 +94,7 @@ namespace mcode {
 				return std::unexpected( job.error( ) );
 			}
 
-			// The write boundary is the mandatory integrity label: write paths
-			// are lowered to Low IL so the child can write them, deny paths
-			// stay Medium so it cannot.
+			// write paths drop to Low IL so the child can write them; deny paths stay Medium
 			if ( const auto marked = platform::sandbox_windows_mark_write_paths(
 				profile.write_paths, profile.deny_paths ); !marked ) {
 				return std::unexpected( marked.error( ) );
@@ -111,10 +105,7 @@ namespace mcode {
 #endif
 
 #if defined( __linux__ ) || defined( __APPLE__ )
-		// The POSIX form: the profile pointer drives the fork-exec hook, and
-		// null spawns unsandboxed. `sandbox_spawn_state` is Windows-only -- it
-		// holds a token and a Job handle -- so this overload ignores it and
-		// takes the state by value rather than naming a type it cannot see.
+		// sandbox_spawn_state is Windows-only; this overload takes it by value, not by name
 		[[nodiscard]] auto sandbox_initializer( const std::optional< int >&,
 			const platform::sandbox_profile* profile )
 			-> platform::sandbox_posix_initializer {
@@ -200,9 +191,7 @@ namespace mcode {
 			auto environment = process::process_environment{ std::move( environment_strings ) };
 
 #if defined( _WIN32 )
-			// The sandbox state must outlive the spawn call: the Job handle is
-			// what kills the child when this process dies, and the attribute
-			// list must stay valid until CreateProcessW has consumed it.
+			// must outlive the spawn: the Job kills the child; the attr list feeds CreateProcessW
 			auto sandbox_state = std::optional< sandbox_spawn_state >{ };
 
 			if ( options.sandbox != nullptr ) {
@@ -215,18 +204,12 @@ namespace mcode {
 				sandbox_state = std::move( *state );
 			}
 #else
-			// POSIX applies the profile in the child after fork, so the parent
-			// keeps nothing: the initializer carries the pointer and the
-			// platform layer does the rest.
 			auto sandbox_state = std::optional< int >{ };
 #endif
 
 #if defined( _WIN32 )
 			std::optional< process::process > child{ };
 
-			// The raw handles the sandboxed spawn inherits. The parent ends
-			// are assigned to the asio pipes afterwards; the child ends are
-			// inheritable and owned by the child once spawned.
 			void* in_handle = nullptr;
 			void* out_handle = nullptr;
 			void* err_handle = nullptr;
@@ -248,9 +231,7 @@ namespace mcode {
 			}
 
 			if ( sandbox_state ) {
-				// The sandboxed path spawns through CreateProcessAsUserW with
-				// the Low IL token; boost's launcher has no token parameter,
-				// so the stdio pipes are created here and handed over raw.
+				// boost's launcher takes no token, so the pipes are made here and handed over raw
 				auto raw = platform::sandbox_windows_spawn(
 					std::filesystem::path{ options.executable }, options.args,
 					std::filesystem::path{ options.working_directory },
@@ -267,12 +248,7 @@ namespace mcode {
 				out.pipe.assign( raw_pipes->parent_stdout );
 				err.pipe.assign( raw_pipes->parent_stderr );
 
-				// The child's stdin is NOT assigned to an asio pipe: the IOCP
-				// association alters the handle in ways that break the
-				// child's console initialization, and a one-shot command
-				// never writes to stdin anyway. The parent holds the write
-				// end open until the child exits, which is what keeps the
-				// pipe alive.
+				// stdin is NOT an asio pipe: IOCP breaks console init, so the parent holds it open
 				sandbox_state->parent_stdin = raw_pipes->parent_stdin;
 
 				raw_pipes->parent_stdin = nullptr;
@@ -283,8 +259,6 @@ namespace mcode {
 					process::process_stdio{ in, out.pipe, err.pipe }, environment );
 			}
 #else
-			// An optional, like the Windows branch: the drain loop below is
-			// shared and reaches the child through `child->`.
 			auto child = std::optional< process::process >{ };
 			child.emplace( context, options.executable, options.args,
 				process::process_stdio{ in, out.pipe, err.pipe }, environment,
@@ -292,10 +266,7 @@ namespace mcode {
 #endif
 
 #if defined( _WIN32 )
-			// The sandboxed child's stdin is a named-pipe server end. Closing
-			// the parent's client end now would disconnect the pipe and the
-			// child's reads would fail, so it stays open until the child has
-			// exited; the boost path relies on close-for-EOF instead.
+			// closing the parent's client end disconnects the pipe; boost relies on close-for-EOF
 			if ( !sandbox_state ) {
 				in.close( );
 			}
@@ -371,7 +342,6 @@ namespace mcode {
 				child->terminate( ignored );
 			}
 
-			// The child is gone; the stdin write end can go with it.
 #if defined( _WIN32 )
 			if ( sandbox_state && sandbox_state->parent_stdin != nullptr ) {
 				::CloseHandle( static_cast< HANDLE >( sandbox_state->parent_stdin ) );

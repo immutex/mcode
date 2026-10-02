@@ -62,8 +62,7 @@ TEST_CASE( "render_request is byte-stable", "[render]" ) {
 	second.description = "Read a file";
 	second.schema_json = R"({"type":"object"})";
 
-	// Deliberately out of sorted order: the render must sort, so insertion
-	// order must not leak into the bytes.
+	// insertion order must not leak into the bytes
 	request.tools = { first, second };
 
 	const auto descriptor = chat_completions_descriptor( );
@@ -82,7 +81,6 @@ TEST_CASE( "render_request is byte-stable", "[render]" ) {
 	REQUIRE( static_cast< bool >( second_body ) );
 	REQUIRE( *first_body == *second_body );
 
-	// The sort is visible in the bytes: read precedes write.
 	REQUIRE( first_body->find( "\"read\"" ) < first_body->find( "\"write\"" ) );
 }
 
@@ -131,8 +129,7 @@ TEST_CASE( "render_request sorts tool schemas and embeds them as JSON", "[render
 	REQUIRE( zeta != std::string::npos );
 	REQUIRE( alpha < zeta );
 
-	// The schema is embedded as structure, not as a quoted string: a quoted
-	// string would arrive at the provider as a schema it cannot validate.
+	// the schema is embedded as parsed structure, or the provider cannot validate it.
 	REQUIRE( body->find( "\\\"type\\\"" ) == std::string::npos );
 	REQUIRE( body->find( "\"parameters\":{\"type\":\"object\"" ) != std::string::npos );
 }
@@ -186,11 +183,7 @@ TEST_CASE( "breakpoints apply right-to-left", "[render]" ) {
 	REQUIRE( static_cast< bool >( plain ) );
 	REQUIRE( static_cast< bool >( json::document::parse( *plain ) ) );
 
-	// Two breakpoints at distinct offsets, ordered so a left-to-right pass
-	// corrupts the second one. Both offsets sit where a marker is valid JSON:
-	// right after the opening brace of the first message object, and right
-	// after the opening brace of the second — the marker's trailing comma
-	// provides the separator before the object's next member.
+	// markers apply right-to-left, or the first shifts the second and the cache misses.
 	const auto marker_text = std::string{ "\"cache_control\":{\"type\":\"ephemeral\"}," };
 	const auto first_offset = plain->find( "[{" ) + 2;
 	const auto second_offset = plain->find( "},{", first_offset ) + 3;
@@ -203,30 +196,20 @@ TEST_CASE( "breakpoints apply right-to-left", "[render]" ) {
 	const auto marked = model::render_chat_completions( request, descriptor.request );
 	REQUIRE( static_cast< bool >( marked ) );
 
-	// The marked body is valid JSON, which proves neither marker landed
-	// inside a string or between a value and its comma.
 	REQUIRE( static_cast< bool >( json::document::parse( *marked ) ) );
 
-	// The marked body is exactly the plain body with the two markers applied
-	// right to left: each offset addresses the marker-free body and is still
-	// valid when it is used.
 	auto expected = *plain;
 	expected.insert( second_offset, marker_text );
 	expected.insert( first_offset, marker_text );
 
 	REQUIRE( *marked == expected );
 
-	// A left-to-right pass produces different bytes: after the first marker
-	// shifts everything, the second original offset no longer addresses the
-	// intended boundary. The silent cache miss is the failure mode this
-	// ordering rule exists to prevent.
 	auto left_to_right = *plain;
 	left_to_right.insert( first_offset, marker_text );
 	left_to_right.insert( second_offset, marker_text );
 
 	REQUIRE( *marked != left_to_right );
 
-	// Removing both markers recovers the plain body byte for byte.
 	auto recovered = *marked;
 	auto erased = std::size_t{ 0 };
 

@@ -1,7 +1,3 @@
-// The write tool: create and overwrite with the read-before-write invariant.
-// The edit tool lives in write_tools_edit.cxx and the shared write/edit
-// helpers in write_tools_common.
-
 #include "mcode/tools/write_tools_common.hxx"
 
 #include <fstream>
@@ -40,10 +36,7 @@ namespace mcode::tools {
 		}
 
 		if ( !resolved ) {
-			// The engine allowed a path outside the workspace. The workspace's
-			// own writer refuses it, so the write goes to the canonical path
-			// directly. Create-only: an overwrite outside the workspace has no
-			// read-before-write invariant behind it, so it stays refused.
+			// create-only: an overwrite outside the workspace has no read-before-write behind it
 			auto candidate = std::filesystem::path{ space.root( ) } /
 				std::filesystem::path{ *path };
 			auto canonical = platform::canonicalize( candidate );

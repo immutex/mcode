@@ -8,9 +8,6 @@
 
 namespace mcode::tools {
 
-	// Parses a tool-call argument object once and reads typed fields from it.
-	// Every tool goes through this, so a malformed argument gets one error shape
-	// and a missing field gets one message convention.
 	class tool_args {
 	public:
 		[[nodiscard]] static auto parse( std::string_view args_json )

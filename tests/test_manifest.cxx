@@ -26,9 +26,6 @@ TEST_CASE( "a valid manifest loads", "[loader]" ) {
 }
 
 TEST_CASE( "an unknown manifest key is rejected", "[loader]" ) {
-	// `permission` instead of `permissions` would otherwise load with no
-	// permissions at all, and the failure would surface much later as a confusing
-	// denial.
 	auto manifest = ext::load_manifest( extensions_root( ) / "broken-manifest" );
 
 	REQUIRE_FALSE( static_cast< bool >( manifest ) );
@@ -65,7 +62,6 @@ permissions = ["fs_reed"])", "unknown permission" },
 	};
 
 	for ( const auto& [ text, label ] : cases ) {
-		// The directory name must be bad-name for the name checks to be meaningful.
 		write( root / "bad-name" / "ext.toml", text );
 
 		auto manifest = ext::load_manifest( root / "bad-name" );
@@ -84,10 +80,6 @@ TEST_CASE( "a name that is not lowercase-kebab-case is refused", "[loader]" ) {
 	const auto root = scratch_root( );
 
 	for ( const auto* name : { "Bad", "bad_name", "-bad", "bad-", "bad--name" } ) {
-		// Each candidate gets a directory named EXACTLY like itself. Writing them
-		// all into one directory made this test vacuous: the name-versus-directory
-		// check would refuse every candidate regardless of the name pattern, so
-		// deleting the pattern check would not have failed anything.
 		write( root / name / "ext.toml",
 			std::string{ "name = \"" } + name + "\"\nversion = \"0.1.0\"\napi_version = 1\n" );
 
@@ -95,8 +87,6 @@ TEST_CASE( "a name that is not lowercase-kebab-case is refused", "[loader]" ) {
 
 		CHECK_FALSE( static_cast< bool >( manifest ) );
 
-		// And the reason must name the pattern, not the directory, or a real typo
-		// would send the author looking in the wrong place.
 		if ( manifest ) {
 			FAIL( "the name '" << name << "' was accepted" );
 		}
@@ -104,10 +94,6 @@ TEST_CASE( "a name that is not lowercase-kebab-case is refused", "[loader]" ) {
 		CHECK( manifest.error( ).msg.find( "invalid name" ) != std::string::npos );
 	}
 
-	// A space cannot be a directory name on every platform, so it is checked
-	// through the pattern alone: the directory is deliberately the same as the
-	// name minus the space, which is what an author copying a display name would
-	// produce.
 	write( root / "badname" / "ext.toml",
 		"name = \"bad name\"\nversion = \"0.1.0\"\napi_version = 1\n" );
 
@@ -120,7 +106,6 @@ TEST_CASE( "a name that is not lowercase-kebab-case is refused", "[loader]" ) {
 TEST_CASE( "a version that is not MAJOR.MINOR.PATCH is refused", "[loader]" ) {
 	const auto root = scratch_root( );
 
-	// Accepted: the documented shape, including a prerelease or build suffix.
 	for ( const auto* version : { "0.1.0", "1.0.0", "10.20.30", "1.0.0-beta", "1.0.0-rc.1",
 		"1.0.0+build.5" } ) {
 		write( root / "versions" / "ext.toml",
@@ -135,7 +120,6 @@ TEST_CASE( "a version that is not MAJOR.MINOR.PATCH is refused", "[loader]" ) {
 		}
 	}
 
-	// Refused: anything that is not the shape.
 	for ( const auto* version : { "1", "1.2", "1.2.3.4", "v1.2.3", "1..2", "1.2.", "",
 		"1.2.3-", "1.2.3+", "1.2.-3", "a.b.c" } ) {
 		write( root / "versions" / "ext.toml",
@@ -150,9 +134,7 @@ TEST_CASE( "a version that is not MAJOR.MINOR.PATCH is refused", "[loader]" ) {
 		}
 	}
 
-	// A component long enough to overflow the accumulator is refused rather than
-	// wrapping. The bound is checked before the multiply, so this is a clean
-	// rejection and not undefined behaviour.
+	// the version bound is checked before the multiply, so overflow is a clean rejection, not UB
 	write( root / "versions" / "ext.toml",
 		"name = \"versions\"\nversion = \"99999999999999999999.0.0\"\napi_version = 1\n" );
 	CHECK_FALSE( static_cast< bool >( ext::load_manifest( root / "versions" ) ) );
@@ -161,8 +143,7 @@ TEST_CASE( "a version that is not MAJOR.MINOR.PATCH is refused", "[loader]" ) {
 }
 
 TEST_CASE( "a description past the cap is refused", "[loader]" ) {
-	// The cap exists so a manifest cannot carry an unbounded prompt payload into
-	// every session that loads it.
+	// the manifest cap bounds the prompt payload every loading session carries
 	const auto root = scratch_root( );
 
 	write( root / "chatty" / "ext.toml",
@@ -177,8 +158,6 @@ TEST_CASE( "a description past the cap is refused", "[loader]" ) {
 		REQUIRE( manifest.error( ).msg.find( "description" ) != std::string::npos );
 	}
 
-	// Exactly at the cap is accepted, so the boundary is a cap and not an
-	// off-by-one.
 	write( root / "chatty" / "ext.toml",
 		std::string{ "name = \"chatty\"\nversion = \"0.1.0\"\napi_version = 1\ndescription = \"" } +
 			std::string( 1024, 'x' ) + "\"\n" );

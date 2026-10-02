@@ -1,5 +1,3 @@
-// The Win32 console backend. Split from tty.cxx, which owns the
-// platform-neutral capability probe and geometry queries.
 
 #if defined( _WIN32 )
 
@@ -37,14 +35,10 @@ namespace mcode::tui {
 			return std::unexpected( fail( errc::io, "GetConsoleMode failed" ) );
 		}
 
-		// Once the saved modes are captured, saved_ is true, so every exit
-		// path -- including a failed SetConsoleMode below -- restores through
-		// the destructor. Restoring a mode that was never changed is
-		// harmless: the restore writes back the values that were read.
+		// `saved_` is set before the first mode change, so every exit path
+		// restores through the destructor.
 		session.saved_ = true;
 
-		// Raw input: no line discipline, no echo, no signal characters. The
-		// editor owns all of it.
 		const auto raw_input = ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT;
 		const auto vt_output = session.out_mode_ | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
 
@@ -120,8 +114,6 @@ namespace mcode::tui {
 		saved_ = false;
 		raw_active_ = false;
 
-		// Best effort on the way out: a failed restore is worse than a silent
-		// one, but a destructor cannot report it usefully either.
 		SetConsoleMode( input_handle_, in_mode_ );
 		SetConsoleMode( output_handle_, out_mode_ );
 
@@ -205,8 +197,6 @@ namespace mcode::tui {
 				}
 
 				if ( key.uChar.AsciiChar == '\b' ) {
-					// Backspace edits the line, so a typo can be corrected
-					// before Enter commits it.
 					if ( !line.empty( ) ) {
 						line.pop_back( );
 					}
@@ -233,17 +223,15 @@ namespace mcode::tui {
 
 	namespace {
 
-		// One console record to zero or more keys.
-		//
-		// A record carries `wRepeatCount`, which is how Windows reports a held
-		// key: ONE record standing for N presses. Ignoring it made a held key
-		// fire once.
+		// A record carries `wRepeatCount`: ONE record standing for N presses
+		// of a held key.
 		auto decode_windows_key( const KEY_EVENT_RECORD& key ) -> std::vector< key_event > {
 			auto out = std::vector< key_event >{ };
 			auto event = key_event{ };
 
 			switch ( key.wVirtualKeyCode ) {
 				case VK_RETURN: event.type = key_event::kind::enter; break;
+				case VK_TAB: event.type = key_event::kind::tab; break;
 				case VK_BACK: event.type = key_event::kind::backspace; break;
 				case VK_DELETE: event.type = key_event::kind::delete_key; break;
 				case VK_LEFT: event.type = key_event::kind::left; break;

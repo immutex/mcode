@@ -10,11 +10,7 @@ TEST_CASE( "C++23 is the language standard", "[build]" ) {
 }
 
 TEST_CASE( "the error model uses std::expected", "[build]" ) {
-	// The macro is defined by <expected>, so that header must be included before
-	// the macro is tested. Without the include this reported "std::expected is
-	// required" on a toolchain that has it.
-	// `defined` is only valid in a preprocessor conditional, so this stays an
-	// #ifdef rather than a STATIC_REQUIRE.
+	// <expected> must be included before the macro is checked; `defined` needs a guard.
 #if defined( __cpp_lib_expected )
 	SUCCEED( "std::expected is available" );
 #else

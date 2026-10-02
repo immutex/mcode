@@ -41,9 +41,6 @@ namespace {
 	using mcode::test::send_bytes;
 	using mcode::test::socket_handle;
 
-	// A scripted loopback server: one response per accepted connection, in
-	// order. The retry tests need a server that answers differently per
-	// attempt, which a one-shot response cannot do. No external network.
 	class scripted_server {
 	public:
 		explicit scripted_server( std::vector< std::string > responses )
@@ -78,10 +75,7 @@ namespace {
 		~scripted_server( ) {
 			stopped_ = true;
 
-			// A blocked accept() never notices the flag, so the listening socket
-			// is shut down first: a correct client that made fewer requests than
-			// scripted must not hang the test, and a client that made MORE must
-			// still terminate once the script is exhausted.
+			// a blocked accept() never notices the flag, so the socket is shut down before joining
 			shutdown_socket( socket_ );
 			close_socket( socket_ );
 
@@ -120,12 +114,7 @@ namespace {
 		#endif
 	}
 
-		// Serves one scripted response per accepted connection. The loop is
-		// driven by the stop flag, not the response count: the test's point is
-		// often that the client makes FEWER requests than scripted, and a loop
-		// over the script would block in accept() forever exactly when the
-		// implementation is correct. A client that makes more requests than
-		// scripted gets the last response repeated, so it still terminates.
+		// driven by the stop flag, not the response count: the client may make fewer requests
 		auto serve( ) -> void {
 			while ( !stopped_ ) {
 				const auto accepted = ::accept( socket_, nullptr, nullptr );
@@ -143,9 +132,6 @@ namespace {
 
 				(void)send_bytes( accepted, response );
 
-				// Long enough for the client to drain both events of a multi-event
-				// response before the socket goes away; too short and the tail of
-				// the stream is lost to the reset.
 				std::this_thread::sleep_for( std::chrono::milliseconds( 200 ) );
 				close_socket( accepted );
 			}
@@ -205,8 +191,7 @@ namespace {
 
 	auto no_sleep( const std::chrono::milliseconds ) -> void { }
 
-	// Deterministic jitter: always zero, so the retry loop's own sleeps are the
-	// only variable and the tests observe delays through the injected sleeper.
+	// jitter is deterministic zero, so the injected sleeper observes the retry delays
 	auto zero_random( ) -> std::uint64_t { return 0; }
 
 	auto collect( std::vector< model::chat_event >& into ) -> model::event_sink {
@@ -384,9 +369,7 @@ TEST_CASE( "a quota 429 is never retried but a rate-limit 429 is", "[retry]" ) {
 }
 
 TEST_CASE( "a partial stream is never retried", "[retry]" ) {
-	// Two events in one response, then the connection drops with no terminal
-	// event. The sink has already seen text, so replaying would duplicate it
-	// in history.
+	// the sink already saw text, so replaying a partial stream would duplicate it in history
 	auto server = scripted_server{ {
 		sse_response( 200,
 			"data: {\"choices\":[{\"delta\":{\"content\":\"partial \"}}]}\n\n"
@@ -417,7 +400,6 @@ TEST_CASE( "a partial stream is never retried", "[retry]" ) {
 		}
 	}
 
-	// The partial text is surfaced, not swallowed.
 	REQUIRE( text == "partial text" );
 }
 

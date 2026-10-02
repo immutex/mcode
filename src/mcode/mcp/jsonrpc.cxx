@@ -6,13 +6,11 @@ namespace mcode::mcp::jsonrpc {
 
 	namespace {
 
-		// The largest frame the client accepts. A hostile or broken server can send
-		// one enormous line; refusing past this bound keeps the parse bounded.
+		// a hostile or broken server can send one enormous line; this keeps the parse bounded
 		inline constexpr std::size_t MAX_FRAME_BYTES = 8u * 1024u * 1024u;
 
 		[[nodiscard]] auto id_from( const json::document& doc ) -> std::optional< std::uint64_t > {
-			// The id may be a number or a string on the wire; both carry, and a
-			// non-numeric string is refused rather than correlated as zero.
+			// a numeric or string id both carry; a non-numeric string must not correlate as zero
 			if ( doc.has_pointer( "/id" ) ) {
 				if ( const auto number = doc.pointer_int( "/id" ) ) {
 					if ( *number >= 0 ) {
@@ -51,9 +49,7 @@ namespace mcode::mcp::jsonrpc {
 	}
 
 	auto stamp_meta( const std::string_view params_json ) -> result< std::string > {
-		// Empty params become an object so `_meta` has somewhere to live. A null
-		// or non-object params is rewritten the same way: the protocol treats
-		// params as optional, and a request without one still needs the map.
+		// a request without params still needs a map to hold `_meta`
 		auto text = params_json.empty( ) ? std::string{ "{}" } : std::string{ params_json };
 
 		auto parsed = json::document::parse( text );
@@ -64,7 +60,6 @@ namespace mcode::mcp::jsonrpc {
 		}
 
 		if ( parsed->has_pointer( "/_meta" ) ) {
-			// Already stamped; a second stamp would overwrite server-visible data.
 			return text;
 		}
 
@@ -76,9 +71,7 @@ namespace mcode::mcp::jsonrpc {
 
 		auto merged = json::document::make_object( );
 
-		// The params' own members first, then `_meta`, so a server-supplied `_meta`
-		// (there should not be one on an outgoing request) is preserved verbatim
-		// rather than silently dropped.
+		// params' own members first, so a server-supplied `_meta` survives the merge
 		for ( const auto& key : parsed->keys_at( "" ) ) {
 			auto value = json::node_at( *parsed, "/" + key );
 
@@ -97,10 +90,7 @@ namespace mcode::mcp::jsonrpc {
 			return std::unexpected( meta_node.error( ) );
 		}
 
-		// The parsed node IS the `_meta` map's body (the document root is the
-		// object `{ "_meta": {...} }`), so the value to attach is its single
-		// member, not the node itself -- wrapping the node verbatim produced
-		// `{ "_meta": { "_meta": {} } }`, which servers reject.
+		// the node is the map's body; attaching the node yields { "_meta": { "_meta": {} } }
 		const auto* body = meta_node->member( "_meta" );
 
 		if ( body == nullptr ) {
@@ -215,7 +205,6 @@ namespace mcode::mcp::jsonrpc {
 		auto parsed = json::document::parse( line );
 
 		if ( !parsed ) {
-			// A banner, a blank line, or a stray log line. Skipped, never fatal.
 			return std::optional< message >{ };
 		}
 
@@ -254,7 +243,6 @@ namespace mcode::mcp::jsonrpc {
 			return std::optional< message >{ std::move( frame ) };
 		}
 
-		// A response carries id and either result or error. Anything else is noise.
 		const auto id = id_from( *parsed );
 
 		if ( !id ) {

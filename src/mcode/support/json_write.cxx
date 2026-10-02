@@ -13,9 +13,6 @@ namespace mcode::json {
 
 	namespace {
 
-		// Converts a parsed value into the mutable tree. Used by `set_json` so a
-		// pre-rendered schema or argument blob is embedded as parsed structure
-		// rather than as a re-encoded string.
 		auto from_val( yyjson_val* source ) -> result< node > {
 			if ( source == nullptr ) {
 				return std::unexpected( fail( errc::json, "null value" ) );
@@ -121,11 +118,6 @@ namespace mcode::json {
 			return std::unexpected( fail( errc::json, "unsupported JSON value" ) );
 		}
 
-		// Builds one value in `doc`. Recursive, so a scalar, an array and an object
-		// share one code path instead of three that drift.
-		//
-		// The caller decides where the result goes: `yyjson_mut_obj_add_val` for a
-		// member, `yyjson_mut_arr_add_val` for an element.
 		auto to_val( yyjson_mut_doc* doc, const node& source ) -> yyjson_mut_val* {
 			switch ( source.type ) {
 				case node::kind::null_value:
@@ -184,8 +176,6 @@ namespace mcode::json {
 			return nullptr;
 		}
 
-		// Every setter validates the same two preconditions before it touches the
-		// tree, so they live in one place rather than seven.
 		auto check_settable( const bool mutable_document, const std::string_view key,
 			const std::string_view what ) -> status {
 			if ( !mutable_document ) {
@@ -284,9 +274,7 @@ namespace mcode::json {
 
 	namespace {
 
-		// `insert_or_assign` would overwrite an existing scalar before any type check
-		// ran, turning a refusal into a silent replacement. So the existing entry is
-		// examined FIRST and only an absent key is created.
+		// insert_or_assign would overwrite before the type check, so the entry is checked first.
 		auto container_at( node& root, const bool mutable_document, const std::string_view key,
 			const node::kind wanted ) -> node* {
 			if ( !mutable_document || key.empty( ) ) {
@@ -468,7 +456,6 @@ namespace mcode::json {
 			return std::unexpected( dumped.error( ) );
 		}
 
-		// Strip the {"value":...} wrapper the set_node key requires.
 		const auto prefix = std::string_view{ R"({"value":)" };
 
 		if ( dumped->size( ) < prefix.size( ) + 1 || dumped->substr( 0, prefix.size( ) ) != prefix ) {

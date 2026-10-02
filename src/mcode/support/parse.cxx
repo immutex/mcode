@@ -7,13 +7,8 @@ namespace mcode::support {
 
 	namespace {
 
-		// A significand with more digits than this cannot be represented exactly, so
-		// the value would be a rounded guess. Refusing is the honest answer, and the
-		// bound also keeps the accumulator inside a 64-bit integer.
 		constexpr auto MAX_SIGNIFICAND_DIGITS = 18;
 
-		// The exponent loop below runs this many times at most. Anything beyond is
-		// an overflow or an underflow, and both are refusals.
 		constexpr auto MAX_DECIMAL_EXPONENT = 400;
 
 		auto is_digit( const char character ) -> bool {
@@ -29,9 +24,6 @@ namespace mcode::support {
 			++index;
 		}
 
-		// The significand accumulates as an integer, with the decimal point's
-		// position recorded as an exponent. That is what makes the conversion
-		// locale-free and exact for any value a double can hold distinctly.
 		auto significand = std::uint64_t{ 0 };
 		auto digits = std::size_t{ 0 };
 		auto exponent = 0;
@@ -43,7 +35,6 @@ namespace mcode::support {
 			++index;
 		}
 
-		// TOML requires at least one digit before the point.
 		if ( digits == 0 ) {
 			return false;
 		}
@@ -60,7 +51,6 @@ namespace mcode::support {
 				++index;
 			}
 
-			// A point with no digits after it is malformed, not a whole number.
 			if ( fractional == 0 ) {
 				return false;
 			}
@@ -82,8 +72,7 @@ namespace mcode::support {
 			auto explicit_exponent = 0;
 
 			while ( index < text.size( ) && is_digit( text[ index ] ) ) {
-				// Bounded before the multiply: an exponent long enough to overflow
-				// would be undefined behaviour, and the value is untrusted input.
+				// bounded before the multiply: an overflowing exponent is UB.
 				if ( explicit_exponent > MAX_DECIMAL_EXPONENT ) {
 					return false;
 				}
@@ -93,7 +82,6 @@ namespace mcode::support {
 				++index;
 			}
 
-			// An exponent marker with no digits is malformed.
 			if ( exponent_digits == 0 ) {
 				return false;
 			}
@@ -101,7 +89,6 @@ namespace mcode::support {
 			exponent += exponent_negative ? -explicit_exponent : explicit_exponent;
 		}
 
-		// Trailing characters mean the literal is not entirely numeric.
 		if ( index != text.size( ) ) {
 			return false;
 		}
@@ -113,8 +100,7 @@ namespace mcode::support {
 
 		auto value = static_cast< double >( significand );
 
-		// One multiplication or division per decade. Each is a single rounding, and
-		// the loop is bounded by the exponent check above.
+		// one multiplication per decade, each a single rounding.
 		for ( auto step = 0; step < exponent; ++step ) {
 			value *= 10.0;
 		}
@@ -123,8 +109,7 @@ namespace mcode::support {
 			value /= 10.0;
 		}
 
-		// Overflow became an infinity and underflow became zero. Neither is the
-		// value the author wrote, so both are refusals.
+		// overflow became infinity and underflow became zero.
 		if ( !std::isfinite( value ) ) {
 			return false;
 		}

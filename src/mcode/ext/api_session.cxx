@@ -15,10 +15,6 @@ namespace mcode::ext {
 		const auto* provider = self->session_state( );
 
 		if ( provider == nullptr ) {
-			// No session context was installed with the surface. A snapshot of
-			// nothing is an environmental failure, not an empty success: an
-			// extension that believes it saw state it did not is worse than one
-			// that must handle `nil`.
 			lua_pushnil( state );
 			lua_pushliteral( state, "no session context was installed with this "
 				"surface" );

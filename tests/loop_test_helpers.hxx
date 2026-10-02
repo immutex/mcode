@@ -1,14 +1,6 @@
 #pragma once
 
-// Shared by test_loop.cxx only. Extracted when that file passed the
-// 600-line limit; the end-to-end test in test_loop_e2e.cxx drives the real
-// tool registry and shares none of it.
-
-// The ReAct loop, driven by a scripted fake client.
-//
-// The loop's correctness is the state machine's, not the transport's, so every
-// test here drives model_client with queued events and asserts on the visited
-// state sequence -- never on a network.
+// the loop's correctness is the state machine's: tests assert the state sequence, never a network.
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
@@ -53,11 +45,9 @@ namespace loop_test {
 
 	inline constexpr std::int64_t TEST_CONTEXT_WINDOW = 200'000;
 
-	// A scripted client: one queued response per stream() call. Records every
-	// request it saw, so tests can assert on call counts and on request bytes.
 	class scripted_client final : public model::model_client {
 	public:
-		// One scripted turn: the canonical events to emit, in order.
+		// one scripted turn: the events to emit, in this order.
 		struct response {
 			std::string text;
 			std::vector< mcode::tool_call > calls;
@@ -150,8 +140,7 @@ namespace loop_test {
 		tool_registry registry;
 		event_log log;
 
-		// The loop publishes here. A test that asserts on an event subscribes
-		// to this; the loop owns nothing it is handed.
+		// the loop publishes here and owns nothing it is handed.
 		events::bus bus;
 
 		agent_loop::dependencies deps;

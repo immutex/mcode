@@ -14,14 +14,10 @@ namespace mcode::ext {
 		auto* state = host.raw( );
 
 		for ( const auto& tool : tools_ ) {
-			// The registry entry first: a tool the model can see but that has no VM
-			// behind it is worse than a missing one.
 			if ( registry_ != nullptr ) {
 				registry_->remove( tool.name );
 			}
 
-			// The reference is released while the VM is still alive. After the host
-			// is destroyed this would be a call into freed memory.
 			if ( state != nullptr ) {
 				lua_unref( state, tool.function_reference );
 			}
@@ -51,8 +47,6 @@ namespace mcode::ext {
 			return std::unexpected( fail( errc::lua_error, "the host has no thread" ) );
 		}
 
-		// The thread's stack is the only place a call can start. A previous failed
-		// call may have left values behind, so the depth is recorded and restored.
 		const auto depth = lua_gettop( state );
 
 		lua_getref( state, tool->function_reference );
@@ -64,7 +58,6 @@ namespace mcode::ext {
 				"the tool's function is no longer live" ) );
 		}
 
-		// Arguments: one table decoded from the JSON object.
 		if ( auto pushed = push_json( state, arguments_json ); !pushed ) {
 			lua_settop( state, depth );
 
@@ -72,7 +65,6 @@ namespace mcode::ext {
 				"arguments are not a JSON object: " + pushed.error( ).msg ) );
 		}
 
-		// Context: a plain-data table, never a live reference.
 		lua_createtable( state, 0, 3 );
 		lua_pushlstring( state, tool->owner.data( ), tool->owner.size( ) );
 		lua_setfield( state, -2, "extension" );
@@ -90,9 +82,6 @@ namespace mcode::ext {
 			return std::unexpected( fail( errc::lua_error, text ) );
 		}
 
-		// `run` returns `value, err`. An error string alongside a value is still a
-		// failure: the second return is the environmental-failure
-		// channel, and a tool that returns both is reporting a failure.
 		if ( lua_type( state, -1 ) != LUA_TNIL ) {
 			auto length = std::size_t{ 0 };
 			const auto* message = lua_tolstring( state, -1, &length );
@@ -111,10 +100,6 @@ namespace mcode::ext {
 				"the tool returned no result and no error" ) );
 		}
 
-		// A result that is not a string or a number is a contract violation, not an
-		// empty success. `lua_tolstring` coerces numbers, so null here means a
-		// boolean, table, function or thread -- and defaulting to "" would hand the
-		// model a successful empty tool result for a tool that never returned one.
 		auto length = std::size_t{ 0 };
 		const auto* text = lua_tolstring( state, -2, &length );
 

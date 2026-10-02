@@ -1,5 +1,3 @@
-// The headless CLI surface. Split from main.cxx, which is the startup smoke test:
-// these are real command handlers, and the smoke test is not.
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -44,9 +42,7 @@
 
 namespace {
 
-	// Forwards the inner client's events to the loop. In human mode it mirrors
-	// text deltas to stdout as they arrive; in JSON mode the bus subscription
-	// below emits them as lines instead, so raw text never breaks the stream.
+	// In JSON mode the bus subscription emits the deltas, so they are not mirrored here.
 	class streaming_client final : public mcode::model::model_client {
 	public:
 		streaming_client( mcode::model::model_client& inner, std::FILE* out, const bool json )
@@ -73,8 +69,6 @@ namespace {
 
 }
 
-// `mcode exec [options] [prompt]` -- the headless surface.
-	// Returns the process exit code.
 auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	auto parsed = mcode::cli::parse_exec_options( arguments );
 
@@ -85,8 +79,6 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
 	}
 
-	// Unknown flags are refused, never ignored: a typo like `--max-step` would
-	// otherwise run with the default budget and the user would never know.
 	if ( !parsed->unknown_arguments.empty( ) ) {
 		std::fprintf( stderr, "mcode: unknown argument '%s'\n\n",
 			parsed->unknown_arguments.front( ).c_str( ) );
@@ -130,9 +122,6 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
 	}
 
-	// The provider descriptors are declared by the providers extension, so the
-	// loader must have run before this lookup. A name that matches no
-	// descriptor is a fatal, named error, never a silent fallback to a default.
 	auto registry = mcode::model::provider_registry{ };
 	auto bus = mcode::events::bus{ };
 	auto hooks = mcode::ext::hook_registry{ bus };
@@ -142,12 +131,6 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		? std::filesystem::current_path( )
 		: std::filesystem::path{ parsed->working_directory };
 
-	// Sections 10 and 11: the repository's instructions and the skill index.
-	// Assembled once, here, because both are session-start only -- recomputing
-	// either per turn would invalidate the cached request prefix.
-	//
-	// The discovered skills must outlive every loaded extension, because the
-	// `skills` extension resolves `skill_read` against this object.
 	auto skills_options = mcode::skills::session_context_options{ };
 	skills_options.workspace = workspace_path;
 
@@ -172,19 +155,13 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		}
 	}
 
-	// Declared outside the branch: the loaded extensions own the closures their
-	// tools run through, so the result has to outlive the loop.
+	// Must outlive the loop: the registered tools close over it.
 	auto extensions = mcode::ext::load_result{ };
 
-	// Declared here for the same lifetime reason: the store receives every
-	// server an extension declares while loading, and the MCP connect step
-	// reads it after the loader has run. It owns nothing; the supervisors live
-	// in the server set below.
+	// Read by the MCP connect step after the loader has run.
 	auto extension_servers = mcode::ext::mcp_server_store{ };
 
-	// The workspace and its collaborators are opened BEFORE the loader runs:
-	// the surface's `fs.*` entries dispatch through the same tool context the
-	// model's own file tools use, and that context is assembled from these.
+	// Opened before the loader: the surface's `fs.*` entries use this same context.
 	auto space = mcode::workspace::open( workspace_path );
 
 	if ( !space ) {
@@ -206,6 +183,7 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 
 	if ( !parsed->no_extensions ) {
 		auto options = mcode::ext::loader_options{ };
+		// The skills outlive the extensions, which resolve `skill_read` against them.
 		options.register_api = mcode::ext::default_register_api( tool_registry,
 			{ .skills = &skills_context.skills, .servers = &extension_servers,
 				.config = &*config, .space = &*space, .reads = &reads,
@@ -213,15 +191,6 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 
 		auto roots = mcode::ext::default_roots( workspace_path );
 
-		// The shipped providers are declared by an extension, not compiled in,
-		// and the loader only knows the workspace and user roots. The bundled
-		// copy lives beside the binary, so it is added here explicitly.
-		//
-		// Through the platform seam: the directory of the running binary is
-		// Win32's GetModuleFileNameA, macOS's _NSGetExecutablePath and Linux's
-		// /proc/self/exe, and `24` requires that decision to live in `platform`
-		// rather than in portable code. A missing directory is not fatal -- the
-		// bundled extensions are simply absent, which the loader already reports.
 		if ( bundled_directory ) {
 			roots.push_back( *bundled_directory / "extensions" );
 		}
@@ -248,9 +217,6 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
 	}
 
-	// Capabilities are resolved per model id and fail closed: an unknown model
-	// would price every turn at zero and silently disable budget enforcement.
-	// The config may price a model the compiled-in table does not carry.
 	const auto caps = mcode::model::resolve_capabilities( model_name, &*config );
 
 	if ( !caps ) {
@@ -265,8 +231,6 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
 	}
 
-	// The credential. The descriptor names the source; the environment variable
-	// from the config overrides the descriptor's default name.
 	auto auth = descriptor->auth;
 
 	if ( auth.from == mcode::model::auth_spec::source::environment && api_key_env ) {
@@ -287,8 +251,6 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	auto client = mcode::model::http_model_client{ transport };
 	auto loop_client = streaming_client{ client, stdout, parsed->json };
 
-	// The loop publishes on this bus; in JSON mode the stream carries the
-	// progress kinds out as one JSON object per line, flushed as they happen.
 	bus.subscribe( mcode::events::kind::assistant_delta, [&]( const mcode::events::event& value ) {
 		stream.emit_event( value );
 	} );
@@ -317,21 +279,14 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		stream.emit_event( value );
 	} );
 
-	// Two stores, not one. Answers the user gives with `[a]` are remembered in
-	// their own file, which follows them between repositories; the repository's
-	// own `.mcode/permissions.json` is loaded read-only and has every allow
-	// dropped, so a cloned repository cannot grant itself permissions -- and
-	// cannot edit the user's answers either.
+	// Loaded read-only with every allow dropped: a cloned repo cannot grant itself permissions.
 	auto project_store = mcode::perm::remember_store{ space->root( ) / ".mcode"
 		/ "permissions.json" };
 
 	auto headless_source = mcode::perm::headless_approval_source{ };
 	auto terminal_source = mcode::perm::terminal_approval_source{ };
 
-	// A prompt only where someone can answer it. `terminal_size` reports the
-	// size of stdout's console, so it succeeds exactly when stdout is a
-	// terminal -- which is the condition, and asking it through the seam that
-	// already owns that question is better than a second platform branch here.
+	// `terminal_size` reports stdout's console, so it succeeds exactly when a human can answer.
 	const auto interactive = !parsed->json && mcode::platform::terminal_size( ).has_value( );
 
 	if ( parsed->verbose ) {
@@ -362,16 +317,11 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 			engine.add_root( dir );
 		}
 
-		// The user's own deny and ask rules. Read from the merged config, never
-		// from a raw layer: the never-widen rule is enforced during the merge,
-		// and reading a layer directly would bypass it.
+		// Read from the merged config: reading a raw layer would bypass the never-widen rule.
 		engine.add_config_rules( mcode::perm::rule_scope::user,
 			config->get_string_array( "permissions.deny" ),
 			config->get_string_array( "permissions.ask" ) );
 
-		// A store that cannot be read is not a reason to run with no policy:
-		// the engine already reports it, and a failed load leaves the rules
-		// that were merged above in place.
 		if ( const auto loaded = engine.load_store( ); !loaded ) {
 			std::fprintf( stderr, "mcode: %s\n", loaded.error( ).msg.c_str( ) );
 		}
@@ -416,8 +366,6 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		budget.max_usd = parsed->max_budget_usd;
 	}
 
-	// The config endpoint overrides the descriptor's default; this must happen
-	// before the descriptor is copied into the loop's dependencies.
 	auto provider = *descriptor;
 
 	if ( base_url ) {
@@ -441,16 +389,10 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	dependencies.platform_name = std::string{ mcode::cli::PLATFORM_NAME };
 	dependencies.permissions = &engine;
 
-	// Sections 10 and 11. The index is emitted only when `skill_read` is
-	// actually registered, which the prompt builder checks itself -- under
-	// `--no-extensions` there is no such tool, so the section is absent without
-	// this code having to know that.
 	dependencies.instruction_chain = skills_context.chain.text;
 	dependencies.skill_index = skills_context.skill_index;
 
-	// Declared before the loop: the supervisors own the child processes and the
-	// handlers the loop dispatches into, so they must outlive it. Destruction
-	// runs each supervisor's graceful shutdown after the loop is gone.
+	// Must outlive the loop: the supervisors own the child processes the loop dispatches into.
 	auto mcp_servers = mcode::mcp::server_set{ };
 
 	auto loop = mcode::agent_loop{ dependencies };
@@ -459,10 +401,7 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		loop.register_handler( name, std::move( handler ) );
 	}
 
-	// An extension's tool is a definition in the registry plus a closure in the
-	// extension's VM. Without this the loop finds the definition and reports
-	// "no handler registered", which is what happened the first time an
-	// extension registered a *tool* rather than a provider.
+	// A registry definition alone is not enough: the loop reports "no handler registered".
 	for ( const auto& [ name, owner ] : extensions.tool_owners ) {
 		loop.register_handler( name, [ &extensions, tool_name = name ](
 			const std::string_view arguments_json ) -> mcode::result< std::string > {
@@ -470,8 +409,6 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		} );
 	}
 
-	// The MCP servers: parse the merged config, merge the extension-declared
-	// set, start the enabled ones, register their tools and handlers.
 	const auto connected = mcode::mcp::connect_servers(
 		mcode::mcp::connect_input{ .config_values = &config->keys( ),
 			.extension_servers = &extension_servers, .registry = &tool_registry,
@@ -500,15 +437,7 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	if ( outcome->final_state == mcode::loop_state::failed ) {
 		code = mcode::cli::exit_code::provider_error;
 	} else if ( outcome->final_state == mcode::loop_state::handoff ) {
-		// A handoff caused by the budget is resumable and exits differently from one
-		// that merely had no verification gate. Asked of the budget, not inferred
-		// from the log's wording: a reason string that changes would silently turn a
-		// budget exit into a success.
-		//
-		// A denial is checked after the budget because the budget is the more
-		// specific cause: a run that ran out of steps *and* was denied is a budget
-		// exit. The flag is cleared by any later successful call, so a denial the
-		// run recovered from does not reach here.
+		// Budget before denial: a run that ran out of steps and was denied is a budget exit.
 		if ( loop.budget( ).exhausted( ) ) {
 			code = mcode::cli::exit_code::budget_exhausted;
 		} else if ( loop.permission_denied( ) ) {
@@ -535,9 +464,6 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	} else {
 		summary += to_string( outcome->final_state );
 
-		// The loop records why it stopped. Without it a provider failure reports a
-		// bare state name, which is the silent failure the exit codes exist to
-		// prevent: exit 4 tells the caller nothing about the cause.
 		if ( !outcome->summary_json.empty( ) ) {
 			summary += ": ";
 			summary += outcome->summary_json;

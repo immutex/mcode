@@ -33,11 +33,14 @@ is reachable only by typing a fresh command with no memory of the last one.
 - Raw mode with an RAII restore guard, resize via the existing `ResizeSource`
   seam, capability detection at startup
 - A hybrid inline layout: committed transcript in the terminal's own
-  scrollback, a live region of ≤6 rows redrawn by diff
-- Streaming markdown (headings, fences, lists, bold/italic, inline code)
-- Diff rendering with line tinting and word-level emphasis on paired lines
+  scrollback, a bounded live region redrawn by diff
+- Inline markdown formatting (bold, italic, inline code) applied per streamed
+  line; the block parser was cut as unwired scaffolding
 - One live row per active tool call, collapsing to one committed line
-- A multi-line input editor: history, bracketed paste, ghost-text autosuggest
+- The model's reasoning streamed live in its own colour, collapsing to one
+  committed line
+- A multi-line input editor with history
+- A slash-command palette: type `/`, filter by name, Tab to complete
 - An `approval_source` implementation that prompts **inside the UI**
 - `mcode` with no subcommand starts the session; `mcode exec` is unchanged
 - The REPL: consecutive turns in one process, history carried across them
@@ -48,7 +51,6 @@ is reachable only by typing a fresh command with no memory of the last one.
 - A tree-sitter dependency. Fenced blocks are highlighted only if a grammar is
   already loaded; otherwise plain with dimmed punctuation
 - Session persistence. The REPL's history is in memory; resume is M3
-- `/reload`, slash commands, a command palette beyond Ctrl+K's binding list
 - Any change to `perm/`, `ext/`, `mcp/` or the loop's state machine
 
 ## Design
@@ -111,11 +113,17 @@ The only part that cannot be faked, so it is built first and kept small.
   copy-paste works the way a user expects.
 - Two cell buffers, swapped after flush. Diff row-granular first, then
   cell-level within changed rows.
-- The live region is ≤6 rows. Everything above it is already committed.
+- The live region's height is dynamic: a floor of prompt + status, grown by the
+  palette, the active tool rows and the streaming rows, capped at 16 and at the
+  terminal height minus one. Everything above it is already committed.
 - Wrap emission in `CSI ? 2026 h … l` when supported, so partial frames never
   tear.
 - **Zero writes when nothing changed** — the render loop is event-driven, and
   the spinner is the only timer (80–120 ms, skipped when idle).
+- **A height change erases before repainting.** The terminal still shows the
+  old region, so clearing the tracked buffer alone would diff the new frame
+  against a blank model of a screen that is not blank. Growth then scrolls, or
+  the new rows paint over the transcript above the region.
 
 ### Rendering rules that are easy to get wrong
 
@@ -134,12 +142,13 @@ The only part that cannot be faked, so it is built first and kept small.
 
 ### Markdown and diffs
 
-- Markdown is chunk-oriented: only the last open block re-renders per token
-  batch; closed blocks are immutable and committed. Never parse synchronously
-  on the render thread.
-- Diffs: line-level tinting; for paired `-`/`+` lines within a threshold, run a
-  token LCS and emphasise only the changed tokens. Added lines highlighted,
-  removed lines plain. Fold unchanged hunks of ≥3 lines.
+- **Shipped**: inline formatting only — bold, italic and inline code, applied
+  per streamed line by `render_inline`. One pass; emphasis does not nest.
+- **Not shipped**: the chunk-oriented block parser (headings, fences, lists,
+  closed-blocks-are-immutable) and diff rendering (line tinting, token LCS,
+  hunk folding). Both were written and never wired to the renderer, so they
+  were deleted rather than carried as dead weight. Tool output is emitted
+  verbatim.
 - Tool calls: one live row (`spinner + verb + target + elapsed`), collapsing to
   `✓ edit src/x.cxx +12 −3 1.2s`. The status line carries the meter:
   `model ▸ 12.4k tok ▸ $0.031 ▸ 4.2s`. **No progress bars** — a token stream

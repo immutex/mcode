@@ -1,6 +1,3 @@
-// The REPL: two turns in one process, history intact, and the approval
-// semantics the engine depends on.
-
 #include <catch2/catch_test_macros.hpp>
 
 #include <deque>
@@ -24,8 +21,6 @@ using namespace loop_test;
 
 namespace {
 
-	// A scripted client whose script survives across two run( ) calls, which
-	// is the REPL's whole premise.
 	class multi_turn_client final : public model::model_client {
 	public:
 		auto queue( scripted_client::response value ) -> void {
@@ -101,9 +96,7 @@ TEST_CASE( "two turns in one process keep the history and a follow-up sees the "
 	auto registry = tool_registry{ };
 	auto log = event_log{ };
 
-	// The definition must be in the registry, not just the handler: dispatch
-	// looks the tool up there first, and an absent definition is a failed
-	// call that routes the loop through reflect.
+	// the definition must be in the registry, not just the handler, or dispatch fails
 	auto definition = tool_def{ };
 	definition.name = "echo";
 	definition.description = "echoes its argument";
@@ -125,7 +118,6 @@ TEST_CASE( "two turns in one process keep the history and a follow-up sees the "
 
 	auto turn = cli::session{ loop };
 
-	// Turn one: a tool call, then a wrap-up.
 	client.queue( text_response( "planning" ) );
 	client.queue( call_response( "echo", R"({"note":"turn-one-result"})" ) );
 	client.queue( text_response( "first turn done" ) );
@@ -136,8 +128,6 @@ TEST_CASE( "two turns in one process keep the history and a follow-up sees the "
 	const auto history_after_first = turn.history( ).size( );
 	REQUIRE( history_after_first > 0 );
 
-	// Turn two: the follow-up's request must carry the first turn's tool
-	// result in its messages.
 	client.queue( text_response( "planning again" ) );
 	client.queue( text_response( "follow-up done" ) );
 
@@ -161,7 +151,6 @@ TEST_CASE( "two turns in one process keep the history and a follow-up sees the "
 
 	CHECK( saw_result );
 
-	// The history only grew: nothing reset between the turns.
 	CHECK( turn.history( ).size( ) > history_after_first );
 	CHECK( turn.history( ).front( ).text( ) == "do the first thing" );
 }
@@ -215,7 +204,6 @@ TEST_CASE( "the session exit code is the last turn's code", "[tui][repl]" ) {
 
 	auto loop = agent_loop{ deps };
 
-	// Turn one succeeds on the last allowed step; turn two fails at plan.
 	client.queue( text_response( "ok" ) );
 
 	auto lines = std::deque< std::optional< std::string > >{ };
@@ -240,7 +228,6 @@ TEST_CASE( "the session exit code is the last turn's code", "[tui][repl]" ) {
 			return std::move( loop );
 		} );
 
-	// The second turn finds the step budget spent at plan and exits 4.
 	CHECK( code == mcode::cli::to_int( mcode::cli::exit_code::provider_error ) );
 }
 
@@ -314,10 +301,6 @@ TEST_CASE( "the ui approval source keeps the engine's semantics", "[tui][approva
 
 TEST_CASE( "an allow_remember answer survives into the next turn without "
 	"re-prompting", "[tui][repl][approval]" ) {
-	// The remember store is the engine's own; the REPL keeps the engine alive
-	// across turns, which is what makes the answer survive. Asserted at the
-	// engine level with the same store across two decide calls, the way the
-	// session does it.
 	auto space = workspace::open( test::scratch_directory( "mcode-repl-perm" ) );
 	REQUIRE( space.has_value( ) );
 
@@ -338,7 +321,6 @@ TEST_CASE( "an allow_remember answer survives into the next turn without "
 	CHECK( engine.decide( request ) == perm::permission_decision::allow );
 	CHECK( source.asks( ) == 1 );
 
-	// Turn two: the same command, no prompt.
 	CHECK( engine.decide( request ) == perm::permission_decision::allow );
 	CHECK( source.asks( ) == 1 );
 }

@@ -11,9 +11,7 @@ namespace mcode::ext {
 	namespace {
 
 
-		// The discovered entries. A null pointer means discovery never ran --
-		// tests, or a host built without the skills subsystem -- and the honest
-		// answer to any skill query is the empty set, not a crash.
+		// a null installed report means discovery never ran; every query answers the empty set.
 		[[nodiscard]] auto skills_of( const api_surface& self )
 			-> const std::vector< mcode::skills::skill_entry >& {
 			static const std::vector< mcode::skills::skill_entry > none{ };
@@ -39,8 +37,7 @@ namespace mcode::ext {
 
 		const auto& entries = skills_of( *self );
 
-		// A name, never a path: resolution goes through the discovered set, so
-		// this cannot become an arbitrary-file read.
+		// a name, never a path: resolution goes through the discovered set.
 		const auto found = std::find_if( entries.begin( ), entries.end( ),
 			[ & ]( const mcode::skills::skill_entry& entry ) {
 				return entry.name == name;
@@ -133,9 +130,7 @@ namespace mcode::ext {
 			return 2;
 		}
 
-		// A name collision with a discovered skill is refused, not overwritten:
-		// discovery precedence is project-first, and an extension must not shadow
-		// what the user already has.
+		// refused, not overwritten: discovery precedence is project-first.
 		const auto& discovered = skills_of( *self );
 
 		const auto collides = std::find_if( discovered.begin( ), discovered.end( ),

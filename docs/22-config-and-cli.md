@@ -142,7 +142,7 @@ Consolidated. `mcode <command> [flags]`, and running with a bare prompt implies 
 
 Global flags: `--model`, `--max-budget-usd`, `--max-steps`, `--sandbox`, `--approval`, `--yolo`, `--no-sandbox`, `--no-extensions`, `--config key=value`, `--cwd`, `-v/--verbose`, `--version`.
 
-Slash commands in-session: `/help`, `/clear`, `/compact`, `/context`, `/model`, `/tools`, `/skill`, `/mcp`, `/session`, `/reload`, `/exit`. Commands are registered in one registry, so Lua extensions add to the same surface (`18`) rather than a parallel one.
+Slash commands in-session: `/help`, `/cost`, `/model`, `/tools`, `/exit`. Commands are registered in one registry, so Lua extensions add to the same surface (`18`) rather than a parallel one. `/clear` is deliberately absent: the transcript lives in the terminal's own scrollback, so an inline erase cannot work. `/compact`, `/context`, `/skill`, `/mcp`, `/session` and `/reload` are not implemented yet.
 
 ### Exit codes
 

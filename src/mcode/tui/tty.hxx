@@ -28,12 +28,9 @@ namespace mcode::tui {
 		bool is_tty = false;
 	};
 
-	// Environment-derived capability detection. The probe never writes to
-	// the terminal: COLORTERM/TERM/NO_COLOR answer colour. The protocol
-	// features (synchronized output, bracketed paste, Kitty keyboard) are
-	// ASSUMED for a real tty, not probed -- a DECRQM round-trip is out of
-	// scope for this slice, and the flags are only claims the renderer uses
-	// to choose escape sequences a modern terminal ignores gracefully.
+	// The protocol flags are assumed for a real tty, not probed: a DECRQM
+	// round-trip is out of scope, and a terminal that does not know a sequence
+	// ignores it.
 	[[nodiscard]] auto probe_capabilities( std::string_view colorterm,
 		std::string_view term, bool no_color, bool has_tty ) -> capabilities;
 
@@ -42,6 +39,7 @@ namespace mcode::tui {
 		enum class kind : std::uint8_t {
 			character,
 			enter,
+			tab,
 			backspace,
 			delete_key,
 			left,
@@ -52,15 +50,11 @@ namespace mcode::tui {
 			end,
 			interrupt,
 			exit,
-			paste,
 
-			// The wait elapsed with no key. Distinct from `exit`: an idle
-			// prompt polls, it does not end the session.
+			// The wait elapsed with no key. Idle is not exit.
 			timeout,
 
-			// A bare Escape. Not `exit`: Escape is how every other editor
-			// abandons the current input, and ending the session on it made a
-			// stray keypress lose the whole conversation. Ctrl+D exits.
+			// A bare Escape: abandons the input. Ctrl+D is `exit`.
 			escape,
 		};
 
@@ -68,23 +62,18 @@ namespace mcode::tui {
 		std::string text;
 	};
 
-	// Milliseconds from a monotonic clock, for a wait deadline. One definition,
-	// because the timeout arithmetic has to be identical on every platform.
+	// Milliseconds from a monotonic clock. One definition, so the timeout
+	// arithmetic is identical on every platform.
 	[[nodiscard]] auto monotonic_ms( ) -> std::uint64_t;
 
-	// The value of an environment variable, or empty when it is unset. A
-	// platform unit reads TERM and COLORTERM through this.
+	// An environment variable's value, or empty when unset.
 	[[nodiscard]] auto tty_environment( const char* name ) -> std::string_view;
 
-	// The tty session. Owns raw mode and the VT state transitions; the guard
-	// restores the console on every exit path, including a throw.
-	//
-	// Every write is a byte string; there is no formatting layer here. The
-	// platform branch lives entirely inside this class.
+	// Owns raw mode and restores the console on every exit path, including a
+	// throw. Writes are byte strings; there is no formatting layer.
 	class tty_session {
 	public:
-		// Configures raw mode and enables VT processing. Fails closed: a
-		// session that cannot attach reports the error and writes nothing.
+		// Enables raw mode and VT processing. Fails closed.
 		[[nodiscard]] static auto create( ) -> result< tty_session >;
 
 		tty_session( tty_session&& other ) noexcept;
@@ -99,14 +88,11 @@ namespace mcode::tui {
 		// Raw bytes out. Flushes.
 		auto write( std::string_view bytes ) -> void;
 
-		// One line of decoded input, or nothing within the wait. A closed
-		// stdin reports the closed flag; the caller decides what that means.
+		// One decoded line, or nothing within the wait.
 		[[nodiscard]] auto read_line( std::uint32_t wait_ms )
 			-> std::optional< std::string >;
 
-		// One key event, or nothing within the wait. The editor's lowest
-		// layer: printable characters arrive as text, control keys as their
-		// named kind. End-of-input is `exit` on an empty buffer's caller.
+		// One key event, or nothing within the wait.
 		[[nodiscard]] auto read_key( std::uint32_t wait_ms ) -> key_event;
 
 		// Terminal size in cells, through the platform seam.
@@ -130,15 +116,12 @@ namespace mcode::tui {
 		bool raw_active_ = false;
 		bool attached_ = false;
 
-		// Keys decoded but not yet returned. One console read yields several
-		// records, and the caller asks for one key at a time -- so the rest are
-		// parked here. Without this the surplus records were discarded, which
-		// is what lost keystrokes whenever typing outran the poll.
+		// One console read yields several records and the caller asks for one
+		// key, so the surplus waits here rather than being dropped.
 		std::vector< key_event > pending_;
 
-		// A partial escape sequence, when a read split one. POSIX delivers
-		// bytes, and `\x1b[A` can arrive as `\x1b` then `[A`; without this the
-		// lone `\x1b` was read as "quit".
+		// A read can split an escape sequence: `\x1b[A` may arrive as `\x1b`
+		// then `[A`.
 		std::string carry_;
 
 #if defined( _WIN32 )

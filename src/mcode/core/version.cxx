@@ -1,15 +1,10 @@
 #include "mcode/core/version.hxx"
 
-// Every feature-test macro below is defined by its own header. Including them is
-// what makes `detect_library_support` report the truth: without these, GCC 14 and
-// Apple Clang 16 both report false for all four, because the standard library
-// only defines the macro once the header is pulled in.
+// Each feature-test macro is defined by its own header; without these the probe reports false.
 #include <expected>
 #include <version>
 
-// <generator> and <print> are C++23 library features that a given standard
-// library may simply not ship yet. Their absence is what the probe reports, so
-// they are included only when the header exists.
+// Included only when present: a standard library may not ship these C++23 headers yet.
 #if __has_include( <generator> )
 #include <generator>
 #endif

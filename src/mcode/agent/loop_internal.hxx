@@ -55,9 +55,7 @@ namespace mcode::loop_internal {
 		return combined;
 	}
 
-	// The call id is required, not optional: a tool message the model cannot
-	// correlate with the call it answers is a result it cannot use. Rendered with
-	// an empty id, the model reports the result as missing and re-issues the call.
+	// The id is required: without it the model re-issues the call instead of reading the result.
 	inline auto result_block( const tool_outcome& outcome, const std::string_view tool_call_id )
 		-> model::block {
 		auto block = model::block{ };
@@ -79,10 +77,7 @@ namespace mcode::loop_internal {
 		for ( const auto& event : events ) {
 			switch ( event.type ) {
 				case model::chat_event::kind::tool_call_delta: {
-					// Mid-stream events carry one fragment; the applier's finish()
-					// re-emits the whole call as one event. A fragment that extends
-					// what is already accumulated is that snapshot, so it replaces;
-					// anything else concatenates.
+					// A fragment extending what is accumulated is that snapshot, so it replaces.
 					names[ event.index ] = event.tool_name;
 					ids[ event.index ] = event.tool_call_id;
 

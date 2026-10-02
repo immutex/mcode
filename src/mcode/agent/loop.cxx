@@ -110,6 +110,7 @@ namespace mcode {
 
 		auto events = std::vector< model::chat_event >{ };
 		auto text = std::string{ };
+		auto reasoning = std::string{ };
 
 		const auto streamed = client_->stream( stream_request,
 			[ & ]( const model::chat_event& event ) {
@@ -123,6 +124,14 @@ namespace mcode {
 					payload += "\"}";
 
 					publish( events::kind::assistant_delta, std::move( payload ) );
+				} else if ( event.type == model::chat_event::kind::thinking_delta ) {
+					reasoning += event.text;
+
+					auto payload = std::string{ "{\"text\":\"" };
+					json::append_escaped( payload, event.text );
+					payload += "\"}";
+
+					publish( events::kind::assistant_thinking, std::move( payload ) );
 				}
 			} );
 
@@ -199,8 +208,6 @@ namespace mcode {
 
 		auto result = compaction_result{ };
 
-		// The first events and the user task are pinned verbatim; the task is
-		// also carried in pinned_facts so the next request restates it.
 		const auto pinned = std::min( COMPACTION_KEEP_FIRST_EVENTS, history_.size( ) );
 
 		for ( auto index = std::size_t{ 0 }; index < pinned; ++index ) {
@@ -268,8 +275,7 @@ namespace mcode {
 
 		log_->append( "run.end", summary );
 
-		// A run that ended in failure is the one case a consumer most needs to
-		// hear about, and the bus has a kind for it that nothing published.
+		// The bus has a kind for a failed run that nothing else publishes.
 		if ( terminal == loop_state::failed ) {
 			publish( events::kind::error, std::move( summary ) );
 		}
@@ -308,12 +314,7 @@ namespace mcode {
 
 		publish( events::kind::turn_start, "{}" );
 
-		// `turn_end` fires on EVERY exit, including the early returns below.
-		//
-		// It used to sit after the loop, and every terminal state returns from
-		// inside it -- so it was never published at all. A subscriber that
-		// commits the turn's answer on it (the TUI) therefore never committed
-		// anything, and the reply vanished with the live region.
+		// `turn_end` must fire on EVERY exit, including the early returns below.
 		struct turn_end_guard {
 			agent_loop* self;
 
@@ -446,8 +447,7 @@ namespace mcode {
 
 					auto checked = execute( tool_call{ std::string{ }, "bash", arguments } );
 
-					// A non-zero exit is a successful tool call: the result
-					// carries the exit code, and the gate reads it from there.
+					// A non-zero exit is still a successful tool call; the gate reads the code.
 					auto passed = checked.ok;
 
 					if ( passed ) {

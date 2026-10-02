@@ -1,22 +1,8 @@
 #pragma once
 
-// Shared by the three loopback-server tests (test_http_client, test_model_client,
-// test_loop_e2e). They each grew their own copy of this, which meant three places
-// to fix when a platform disagrees -- and two of them were wrong on macOS.
-//
-// Two portability facts this header exists to encode:
-//
-//   * `SOCKET` is a 64-bit unsigned handle on Windows and an `int` descriptor
-//     elsewhere, so the handle is named once rather than cast at every call.
-//
-//   * The byte-order helpers are FUNCTIONS in glibc but CAST-LIKE MACROS in
-//     Darwin's <sys/_endian.h>. `::htonl(x)` is therefore valid on Linux and a
-//     syntax error on macOS, where it expands to `::((__uint32_t)(x))`. They must
-//     be called unqualified.
-//
-//   * `send`/`recv` take the length as `int` on Windows and `size_t` on POSIX.
-//     Passing a `size_t` cast to `int` is a -Wsign-conversion error on POSIX with
-//     warnings-as-errors, so the conversion lives here behind one branch.
+// `SOCKET` is a 64-bit handle on Windows, an `int` descriptor elsewhere.
+// `htonl`/`ntohs` are cast-like macros on Darwin: `::htonl` does not compile there.
+// `send`/`recv` take the length as `int` on Windows and `size_t` on POSIX.
 
 #include <cstddef>
 #include <cstdint>
@@ -43,8 +29,7 @@ namespace mcode::test {
 	inline constexpr socket_handle INVALID_SOCKET_HANDLE = -1;
 #endif
 
-	// Winsock needs a process-wide init that POSIX does not. Idempotent, so every
-	// server may call it.
+	// Winsock needs a process-wide init that POSIX does not.
 	inline auto ensure_sockets( ) -> void {
 	#if defined( _WIN32 )
 		static const auto started = []( ) {
@@ -73,9 +58,7 @@ namespace mcode::test {
 	#endif
 	}
 
-	// Unqualified on purpose: `htonl` is a macro on Darwin and `::htonl` does not
-	// compile there. A cast-like macro expands to an expression, which cannot
-	// follow a leading `::`.
+	// unqualified on purpose: `htonl` is a macro on Darwin, where `::htonl` does not compile.
 	[[nodiscard]] inline auto host_to_network_long( const std::uint32_t value ) -> std::uint32_t {
 		return htonl( value );
 	}
@@ -84,8 +67,7 @@ namespace mcode::test {
 		return ntohs( value );
 	}
 
-	// Returns false when the peer closed or the call failed; the loopback servers
-	// treat either as "stop sending".
+	// false on peer close or call failure; the loopback servers treat either as "stop sending".
 	[[nodiscard]] inline auto send_bytes( const socket_handle handle, const std::string_view data )
 		-> bool {
 		if ( data.empty( ) ) {
@@ -103,12 +85,7 @@ namespace mcode::test {
 	#endif
 	}
 
-	// The number of bytes read, 0 on an orderly close, or -1 on error. Same shape
-	// as `recv` so callers can compare directly.
-	//
-	// Deliberately not `[[nodiscard]]`: the loopback servers drain the client's
-	// request without inspecting it, and forcing a cast at those sites would be a
-	// no-op that hides nothing. The callers that do care compare the result.
+	// bytes read, 0 on orderly close, -1 on error; deliberately not `[[nodiscard]]`.
 	inline auto receive_bytes( const socket_handle handle, const std::span< char > buffer )
 		-> std::ptrdiff_t {
 		if ( buffer.empty( ) ) {

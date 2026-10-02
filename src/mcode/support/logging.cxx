@@ -31,9 +31,7 @@ namespace mcode {
 		if ( name == "critical" ) return log_level::critical;
 		if ( name == "off" ) return log_level::off;
 
-		// Absent, not "info". This is the entry point for a config value or a flag,
-		// and defaulting a typo like "inof" to info tells the user their setting
-		// took effect when it did not.
+		// absent, not "info": defaulting a typo would tell the user their setting took effect.
 		return std::nullopt;
 	}
 
@@ -81,9 +79,7 @@ namespace mcode {
 		auto sinks = std::vector< spdlog::sink_ptr >{ };
 		sinks.push_back( std::make_shared< spdlog::sinks::stdout_color_sink_mt >( ) );
 
-		// Captured rather than returned immediately: the stdout sink is still
-		// installed below, so a caller that ignores this can still see the message
-		// on stderr instead of running with no file log and no indication.
+		// deferred: the stdout sink is still installed, so the message is visible.
 		auto directory_error = std::string{ };
 
 		if ( !log_directory.empty( ) ) {
@@ -107,9 +103,7 @@ namespace mcode {
 
 		created->set_level( to_spdlog( level ) );
 
-		// `%z` and not a literal `Z`. spdlog renders local time by default, so a
-		// hardcoded `Z` labelled every line as UTC and made a log correlated against
-		// any other source off by the local offset -- silently wrong, not merely ugly.
+		// `%z`, not a literal `Z`: spdlog renders local time, so a hardcoded Z mislabels lines.
 		created->set_pattern( "%Y-%m-%dT%H:%M:%S.%e%z [%^%l%$] %v" );
 		created->flush_on( spdlog::level::warn );
 

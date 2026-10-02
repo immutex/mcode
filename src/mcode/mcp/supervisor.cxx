@@ -10,10 +10,7 @@ namespace mcode::mcp {
 
 	namespace {
 
-		// The canonical form of a tool list, for hash-pinning. One rendering:
-		// the pin and the comparison must agree exactly, or a server could
-		// change its tools and have the change go undetected -- or be flagged
-		// for a difference that is not one.
+		// one rendering for both the pin and the comparison, or a change could go undetected
 		[[nodiscard]] auto render_tool_list( const std::vector< server_tool >& tools )
 			-> std::string {
 			auto out = std::string{ };
@@ -76,8 +73,7 @@ namespace mcode::mcp {
 			return std::unexpected( std::move( listed ).error( ) );
 		}
 
-		// Hash-pin the canonicalized list body so a server that changes its
-		// tools after approval is detected rather than silently re-registered.
+		// so a server that changes its tools after approval is detected, not silently re-registered
 		pinned_hash_ = hash_bytes( render_tool_list( *listed ) );
 		tools_ = std::move( *listed );
 
@@ -120,10 +116,7 @@ namespace mcode::mcp {
 
 		state_ = server_state::restarting;
 
-		// A restart sleeps for the backoff, reconnects, re-initializes,
-		// re-lists and re-registers. The old transport is destroyed first, and
-		// its destructor runs the graceful-shutdown sequence on a child that is
-		// already dead -- which is a no-op, not an error.
+		// the old transport's destructor shuts down an already-dead child: a no-op, not an error
 		if ( client_ ) {
 			client_->on_eof( );
 		}

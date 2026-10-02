@@ -1,7 +1,3 @@
-// The Luau extension-layer smoke checks, including the boundary probes: every
-// escape from an extension's namespace must fail. Split from main.cxx for the
-// same reason as smoke_cli_extensions.cxx -- one file listing every check grew
-// past the project's file-length limit.
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -35,7 +31,6 @@ smoke::section( "Luau (extension layer)" );
 		auto value = host->eval_to_string( "x * 21" );
 		smoke::check( value && *value == "42", "evaluated Luau and read the result" );
 
-		// Globals the extension sets land in its own table, not the host's.
 		smoke::check( host->sealed( ), "the API surface was sealed before extension code ran" );
 
 		auto late = host->register_host_function( "too_late", []( const std::string_view )
@@ -50,9 +45,7 @@ smoke::section( "Luau (extension layer)" );
 
 		smoke::section( "Luau boundary (every escape must fail)" );
 
-		// Each probe is an expression that evaluates to "true" when the escape
-		// SUCCEEDED. A probe that cannot run is a failure of the probe, not a
-		// pass for the boundary.
+		// Probes evaluate to "true" when the escape succeeded; a probe that cannot run fails.
 		const struct {
 			const char* expression;
 			const char* label;
@@ -100,12 +93,7 @@ smoke::section( "Luau (extension layer)" );
 			smoke::check( *outcome == "false", probe.label, "escape succeeded: " + *outcome );
 		}
 
-		// Luau keeps these three from Lua 5.1. They are not escalations, so
-		// the boundary is unaffected -- but a doc that claims the base library
-		// is stripped would be wrong, so the smoke test records their presence.
-		// Luau retains these Lua 5.1 shims. They are not escalations, but a doc
-		// claiming the base library is stripped would be wrong, so their presence
-		// is recorded here rather than assumed.
+		// Lua 5.1 shims Luau keeps: not escalations, but their presence is recorded.
 		const struct {
 			const char* name;
 			const char* label;
@@ -123,8 +111,7 @@ smoke::section( "Luau (extension layer)" );
 				kind ? *kind : std::string{ "probe failed" } );
 		}
 
-		// require is a capability, not an absence: it must refuse anything the host
-		// did not hand it, and it must never touch the filesystem itself.
+		// A capability, not an absence: it must refuse anything the host did not hand it.
 		auto require_refuses = host->eval_to_string(
 			"tostring(select(1, pcall(require, '../../../etc/passwd')))" );
 		smoke::check( require_refuses && *require_refuses == "false",

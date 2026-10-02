@@ -1,6 +1,3 @@
-// The interactive loop factory. Split from cli_repl.cxx, which owns the
-// session loop; this is the construction, and it is the part that has to
-// match run_exec step for step.
 #include "mcode/agent/loop.hxx"
 #include "mcode/cli/exec.hxx"
 #include "mcode/cli/repl.hxx"
@@ -43,9 +40,6 @@
 
 #include "cli_session.hxx"
 
-// The loop factory the REPL drives. The same construction order run_exec
-// uses; the parts outlive the loop by declaration order inside the factory's
-// static holder, which keeps one session per process.
 auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 	mcode::perm::approval_source* interactive_approval )
 	-> mcode::result< mcode::agent_loop > {
@@ -68,9 +62,7 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 		mcode::session_budget budget;
 		mcode::agent_loop::dependencies loop_deps;
 
-		// The plain-mode prompt source. It reads `std::cin`, which is correct
-		// here because plain mode never puts the console into raw mode; the TUI
-		// path passes its own raw-mode source instead.
+		// Reads `std::cin`, correct in plain mode which never enters raw mode.
 		mcode::perm::terminal_approval_source terminal_source;
 
 		session_parts( ) : hooks( bus ), client( transport ) { }
@@ -78,9 +70,7 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 
 	static auto parts = std::optional< session_parts >{ };
 
-	// One session per process. A second factory call would build an unwired
-	// loop over shared parts -- every tool call would report "no handler
-	// registered" -- so it is refused rather than half-built.
+	// A second call would build an unwired loop over shared parts, so it is refused.
 	if ( parts ) {
 		return std::unexpected( mcode::fail( mcode::errc::config,
 			"an interactive session is already running in this process" ) );
@@ -134,9 +124,7 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 
 	auto skills_context = mcode::skills::assemble_session_context( skills_options );
 
-	// The workspace and its collaborators are built BEFORE the loader runs, so
-	// the extension surface's `fs.*` entries dispatch through the same tool
-	// context the model's own file tools use.
+	// Built before the loader so the extension surface's `fs.*` entries share this context.
 	auto space = mcode::workspace::open( workspace_path );
 
 	if ( !space ) {
@@ -221,11 +209,7 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 
 		parts->engine->set_options( engine_options );
 
-		// The approval source the session actually asks through. Without one
-		// the engine's null-source path denies every ask, which would make
-		// the interactive session refuse every tool call. Plain mode with a
-		// terminal is still interactive, so it gets the stdin prompt rather
-		// than a deny: only a genuinely headless run has no one to ask.
+		// The engine's null-source path denies every ask, which would refuse every tool call.
 		if ( interactive_approval != nullptr ) {
 			parts->engine->set_approval_source( interactive_approval );
 		} else if ( interactive ) {

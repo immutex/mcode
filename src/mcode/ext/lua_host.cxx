@@ -15,7 +15,6 @@ namespace mcode {
 
 	namespace {
 
-		// The trailing component of a dotted path: `mcode.tool.register` -> `register`.
 		[[nodiscard]] auto last_segment( const std::string_view path ) -> std::string_view {
 			const auto position = path.rfind( '.' );
 
@@ -34,8 +33,6 @@ namespace mcode {
 				return nullptr;
 			}
 
-			// A realloc replaces the old block rather than adding to it, so the
-			// projected total subtracts old_size first.
 			const auto projected = counters->bytes - old_size + new_size;
 
 			if ( counters->limit != 0 && projected > counters->limit ) {
@@ -59,9 +56,6 @@ namespace mcode {
 
 	}
 
-	// The three registry lookups and the chunk loader are declared in
-	// lua_host_internal.hxx because the execution entry points live in
-	// lua_host_execute.cxx and need them too.
 	auto ext::detail::pop_error( lua_State* state ) -> std::string {
 		auto length = std::size_t{ 0 };
 		const auto* message = lua_tolstring( state, -1, &length );
@@ -94,9 +88,7 @@ namespace mcode {
 
 	auto ext::detail::load_chunk( lua_State* thread, const std::string_view source,
 		const std::string_view chunk_name, std::string& message ) -> bool {
-		// luau_load consumes bytecode; source has to go through the compiler first.
-		// Handing it text makes it read the first byte as a bytecode version and
-		// fail with a mismatch.
+		// luau_load consumes bytecode; handing it source reads byte 0 as a version and fails.
 		auto bytecode_size = std::size_t{ 0 };
 		auto* bytecode = luau_compile( source.data( ), source.size( ), nullptr, &bytecode_size );
 
@@ -204,9 +196,6 @@ namespace mcode {
 
 		host.state_ = state;
 
-		// Only the watchdog goes in the registry. The allocator is reached through
-		// the host's own member, and its slot was written but never read -- the one
-		// function that looked it up was dead.
 		lua_pushlightuserdata( state, &ext::detail::g_watchdog_key );
 		lua_pushlightuserdata( state, host.watchdog_.get( ) );
 		lua_rawset( state, LUA_REGISTRYINDEX );
@@ -215,8 +204,6 @@ namespace mcode {
 		lua_pushlightuserdata( state, host.module_loader_.get( ) );
 		lua_rawset( state, LUA_REGISTRYINDEX );
 
-		// Set before any extension code runs: the interrupt is the only mechanism
-		// that can stop a runaway script.
 		lua_callbacks( state )->interrupt = ext::detail::interrupt;
 
 		luaL_openlibs( state );
@@ -294,10 +281,7 @@ namespace mcode {
 		return { };
 	}
 
-	// Walks `a.b.c`, creating tables for the intermediate segments, and leaves the
-	// parent table on the stack. A segment that exists and is not a table is a
-	// collision, refused rather than overwritten -- silently replacing a host
-	// function with a namespace would break a call the author already wrote.
+	// leaves the parent table on the stack; a segment that exists and is not a table is refused.
 	auto lua_host::push_namespace( const std::string_view path ) -> status {
 		lua_getglobal( state_, "mcode" );
 
@@ -321,8 +305,6 @@ namespace mcode {
 				lua_newtable( state_ );
 				lua_pushvalue( state_, -1 );
 				lua_setfield( state_, -3, std::string{ segment }.c_str( ) );
-
-				// The copy on top of the stack becomes the new parent.
 			} else if ( !lua_istable( state_, -1 ) ) {
 				lua_pop( state_, 2 );
 
@@ -331,7 +313,6 @@ namespace mcode {
 					"' already exists and is not a table" ) );
 			}
 
-			// Drop the previous parent, leaving the current one on top.
 			lua_remove( state_, -2 );
 
 			remaining.remove_prefix( position + 1 );
@@ -399,10 +380,6 @@ namespace mcode {
 			return std::unexpected( fail( errc::lua_error, "host has no lua_State" ) );
 		}
 
-		// Makes _G, every library table, and the string metatable readonly, and
-		// marks the global environment safe so the compiler may constant-fold
-		// global reads. Luau enforces readonly on every C API write path, so the
-		// host has no bypass -- this is a one-way door.
 		luaL_sandbox( state_ );
 
 		lua_State* thread = lua_newthread( state_ );
@@ -411,18 +388,10 @@ namespace mcode {
 			return std::unexpected( fail( errc::lua_error, "lua_newthread failed" ) );
 		}
 
-		// Holds the thread alive: lua_newthread leaves it on the parent stack and
-		// an unreferenced thread is collectable. The ref index itself is never
-		// needed -- the reference in the table is what pins the thread -- so it is
-		// not stored.
+		// lua_newthread leaves the thread collectable unless it is referenced.
 		lua_pushvalue( state_, -1 );
-		// The reference in the table is what pins the thread; the returned index is
-		// never needed, so it is dropped rather than stored.
 		lua_ref( state_, -1 );
 
-		// Gives the thread its own globals table that reads through to the frozen
-		// host globals. Extension globals land there, so the host surface stays
-		// readonly while the extension still has a namespace to work in.
 		luaL_sandboxthread( thread );
 
 		lua_pop( state_, 1 );
@@ -468,8 +437,7 @@ namespace mcode {
 			return;
 		}
 
-		// Disarmed, not merely re-armed: a deadline left in the past would fire at
-		// the next safepoint of an unrelated call.
+		// a deadline left in the past would fire at the next safepoint of an unrelated call.
 		watchdog_->armed = false;
 	}
 
@@ -482,10 +450,6 @@ namespace mcode {
 			return std::unexpected( fail( errc::config, "host is not sealed" ) );
 		}
 
-		// Closes upvalues, clears call frames and thread state, and clears the
-		// stack. The thread keeps its own globals table, and the extension's
-		// required modules survive, so the caller must drop its host registrations
-		// too.
 		lua_resetthread( thread_ );
 
 		return { };

@@ -14,13 +14,10 @@ namespace mcode::platform {
 
 #if defined( _WIN32 )
 
-	// Every limit the tier sets. The child is an untrusted command, so a
-	// quota is a guard, not a policy knob.
 	inline constexpr auto JOB_ACTIVE_PROCESS_LIMIT = std::uint32_t{ 32 };
 	inline constexpr auto JOB_MEMORY_LIMIT_BYTES = std::uint64_t{ 2u * 1024u * 1024u * 1024u };
 
-	// The SDDL for a Low integrity label with the no-write-up policy, and for
-	// a Medium label restoring the default on deny subtrees.
+	// low IL with no-write-up, and Medium IL restoring the default on deny subtrees.
 	inline constexpr wchar_t LOW_IL_SDDL[] = L"S:(ML;;NW;;;LW)";
 	inline constexpr wchar_t MEDIUM_IL_SDDL[] = L"S:(ML;;NW;;;ME)";
 
@@ -86,9 +83,7 @@ namespace mcode::platform {
 			return std::unexpected( fail_win( "DuplicateTokenEx", ::GetLastError( ) ) );
 		}
 
-		// Strip every privilege. SE_PRIVILEGE_REMOVED is the documented way to
-		// delete rather than disable: a disabled privilege can be re-enabled,
-		// a removed one cannot.
+		// SE_PRIVILEGE_REMOVED deletes rather than disables.
 		DWORD returned = 0;
 		(void)::GetTokenInformation( primary.get( ), TokenPrivileges, nullptr, 0, &returned );
 
@@ -110,9 +105,6 @@ namespace mcode::platform {
 			return std::unexpected( fail_win( "AdjustTokenPrivileges", ::GetLastError( ) ) );
 		}
 
-		// Low integrity. A Low IL process cannot write to a Medium IL object
-		// (no write-up) but can read it, which is exactly the write boundary
-		// this tier claims.
 		SID_IDENTIFIER_AUTHORITY mandatory_authority = { { 0, 0, 0, 0, 0, 16 } };
 
 		auto sid_buffer = std::vector< unsigned char >( SECURITY_MAX_SID_SIZE );
@@ -186,7 +178,6 @@ namespace mcode::platform {
 
 	namespace {
 
-		// Applies one mandatory label to one path.
 		[[nodiscard]] auto mark_integrity_level( const std::filesystem::path& path,
 			const wchar_t* sddl ) -> status {
 			auto* descriptor = PSECURITY_DESCRIPTOR{ nullptr };
@@ -246,17 +237,10 @@ namespace mcode::platform {
 
 		for ( const auto& path : deny_paths ) {
 			if ( !std::filesystem::exists( path ) ) {
-				// A protected path that does not exist cannot be labelled, and
-				// a Low-IL child can therefore create it. That is a narrower
-				// hole than failing every spawn: the engine still gates the
-				// command, and a directory that does not exist has no contents
-				// to corrupt.
+				// a missing deny path cannot be labelled, so a Low-IL child can create it.
 				continue;
 			}
 
-			// Medium IL restores the default: a Low child is denied write-up,
-			// which is what the deny means. Marking High would also deny
-			// reads-by-registry tools; Medium denies exactly writes.
 			if ( const auto marked = mark_integrity_level( path, MEDIUM_IL_SDDL ); !marked ) {
 				return std::unexpected( marked.error( ) );
 			}
@@ -276,13 +260,10 @@ namespace mcode::platform {
 		security.bInheritHandle = TRUE;
 		security.lpSecurityDescriptor = nullptr;
 
-		// Anonymous pipes cannot carry FILE_FLAG_OVERLAPPED, and the IOCP
-		// handle service refuses a synchronous handle. Named pipes with the
-		// overlapped flag on the parent ends are the documented equivalent.
+		// anonymous pipes cannot carry FILE_FLAG_OVERLAPPED; the IOCP service needs it.
 		constexpr DWORD PIPE_BUFFER_BYTES = 0;
 
-		// A per-call name: a fixed name collides with the previous spawn's
-		// still-open handles, and "all pipe instances are busy" is the result.
+		// A fixed name collides with the previous spawn's still-open handles.
 		static std::atomic< std::uint64_t > pipe_sequence{ 0 };
 		const auto sequence = pipe_sequence.fetch_add( 1 );
 
@@ -322,8 +303,7 @@ namespace mcode::platform {
 				return std::unexpected( fail_win( "CreateFileW(pipe)", error ) );
 			}
 
-			// The end the CHILD uses must be inheritable; the parent's end
-			// must not be, so the child cannot wait on itself.
+			// only the child's end is inheritable, so the child cannot wait on itself.
 			const auto child_end = child_end_inheritable ? server : client;
 			const auto parent_end = child_end_inheritable ? client : server;
 
@@ -343,7 +323,6 @@ namespace mcode::platform {
 
 		auto pipes = sandbox_raw_pipes{ };
 
-		// stdin: child reads, parent writes.
 		auto stdin_pair = make_pair( true, pipe_name( L"-stdin" ) );
 
 		if ( !stdin_pair ) {
@@ -353,7 +332,6 @@ namespace mcode::platform {
 		pipes.child_stdin = stdin_pair->first;
 		pipes.parent_stdin = stdin_pair->second;
 
-		// stdout: child writes, parent reads.
 		auto stdout_pair = make_pair( false, pipe_name( L"-stdout" ) );
 
 		if ( !stdout_pair ) {
@@ -363,7 +341,6 @@ namespace mcode::platform {
 		pipes.child_stdout = stdout_pair->first;
 		pipes.parent_stdout = stdout_pair->second;
 
-		// stderr: child writes, parent reads.
 		auto stderr_pair = make_pair( false, pipe_name( L"-stderr" ) );
 
 		if ( !stderr_pair ) {
@@ -399,9 +376,7 @@ namespace mcode::platform {
 #endif
 
 #if defined( _WIN32 )
-		// The stdio handles the caller owns may have been consumed by an IOCP
-		// association that altered their inheritability. Duplicate them for
-		// the child so the child's copies are independently inheritable.
+		// an IOCP association may have altered the caller's handles, so the child gets copies.
 		auto duplicate_inheritable = []( const void* source ) -> HANDLE {
 			auto duplicate = HANDLE{ nullptr };
 
@@ -418,9 +393,7 @@ namespace mcode::platform {
 		auto child_stdin = duplicate_inheritable( stdin_read );
 		auto child_stdout = duplicate_inheritable( stdout_write );
 		auto child_stderr = duplicate_inheritable( stderr_write );
-		// CreateProcessAsUserW does not search PATH the way CreateProcessW
-		// does: a bare name must be resolved first, or the spawn fails with
-		// "file not found" for a program that exists.
+		// CreateProcessAsUserW does not search PATH the way CreateProcessW does.
 		auto resolved = executable;
 
 		if ( resolved.is_relative( ) || resolved.parent_path( ).empty( ) ) {
@@ -435,12 +408,7 @@ namespace mcode::platform {
 			}
 		}
 
-		// The command line: quoted executable plus arguments quoted only when
-		// they need it. cmd.exe's /c parsing strips the first and last quote
-		// of the command it is given, so quoting every argument blindly turns
-		// `cmd /c "a" "b c"` into a command named `a b c` -- quote-when-needed
-		// keeps /c bare and the command string singly quoted, which is the
-		// form cmd's own rules handle.
+		// quote only when needed: cmd.exe /c strips the first and last quote it is given.
 		auto quote = []( const std::wstring& value ) -> std::wstring {
 			if ( value.find_first_of( L" \"" ) == std::wstring::npos ) {
 				return value;
@@ -473,7 +441,6 @@ namespace mcode::platform {
 			command_line += quote( wide );
 		}
 
-		// The environment block: sorted, double-NUL terminated, UTF-16.
 		auto sorted = std::map< std::wstring, std::wstring, std::less<> >{ };
 		for ( const auto& [ key, value ] : environment ) {
 			auto to_wide = []( const std::string& narrow ) -> std::wstring {
@@ -496,12 +463,8 @@ namespace mcode::platform {
 			env_block += L'\0';
 		}
 
-		// The block is double-NUL terminated: one for the last entry, one for
-		// the end of the block.
 		env_block += L'\0';
 
-		// Inheritable stdio: the three handles must be inheritable, which the
-		// pipe creation in the caller already arranged via SECURITY_ATTRIBUTES.
 		STARTUPINFOEXW startup_info{ };
 		startup_info.StartupInfo.cb = sizeof( startup_info );
 		startup_info.StartupInfo.dwFlags = STARTF_USESTDHANDLES;

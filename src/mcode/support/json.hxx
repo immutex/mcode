@@ -15,24 +15,10 @@ struct yyjson_mut_doc;
 
 namespace mcode::json {
 
-	// Appends `text` escaped as a JSON string body (no surrounding quotes).
-	//
-	// ONE implementation on purpose. Three hand-rolled copies existed, and the one
-	// on the eval-record path escaped only its `detail` field while interpolating
-	// the rest raw -- so a task id containing a quote produced a record no parser
-	// would read back. Every control character below 0x20 is escaped, not just the
-	// five with short forms, because a bare 0x01 is equally invalid in a JSON
-	// string.
+	// appends `text` escaped as a JSON string body, escaping every control character.
 	auto append_escaped( std::string& out, std::string_view text ) -> void;
 
-	// A JSON value being built. Recursive because a request body is nested: an
-	// array of messages, each an object with an array of content blocks.
-	//
-	// Members are held in a map, so an object serializes in sorted key order
-	// regardless of the order it was built in. That is a contract, not a side
-	// effect: the prompt cache hashes the serialized prefix, so two runs that set
-	// the same fields must produce the same bytes. Array order is the caller's and
-	// is preserved.
+	// object members serialize in sorted key order, because the prompt cache hashes the prefix.
 	struct node {
 		enum class kind { null_value, boolean, integer, real, string, array, object };
 
@@ -45,9 +31,6 @@ namespace mcode::json {
 		std::vector< node > items;
 		std::map< std::string, node, std::less<> > members;
 
-		// Factories rather than designated initializers: `node{ .type = ... }` leaves
-		// the other members unspecified and every toolchain warns about it, so the
-		// constructor form is what callers use.
 		[[nodiscard]] static auto make_boolean( bool value ) -> node;
 		[[nodiscard]] static auto make_integer( std::int64_t value ) -> node;
 		[[nodiscard]] static auto make_real( double value ) -> node;
@@ -80,34 +63,21 @@ namespace mcode::json {
 
 		[[nodiscard]] auto get_int( std::string_view key ) const -> result< std::int64_t >;
 		[[nodiscard]] auto get_string( std::string_view key ) const -> result< std::string >;
-		// Renders whatever the pointer addresses to text. Use the typed variants
-		// below when the type matters: a JSON `false` renders as "false", and a
-		// numeric field that arrives as a string would otherwise be invisible.
+		// a JSON false renders as "false"; prefer the typed variants when the type matters.
 		[[nodiscard]] auto pointer( std::string_view path ) const -> result< std::string >;
 
-		// The JSON TEXT at the pointer, verbatim. Unlike `pointer`, a string stays
-		// quoted, so the result can be re-embedded in a document without corruption.
-		// Replay needs this: a payload read back and re-emitted must be byte-equal.
+		// verbatim JSON text: a string stays quoted, so a payload re-emits byte-equal.
 		[[nodiscard]] auto pointer_raw( std::string_view path ) const -> result< std::string >;
 		[[nodiscard]] auto pointer_string( std::string_view path ) const -> result< std::string >;
 		[[nodiscard]] auto pointer_int( std::string_view path ) const -> result< std::int64_t >;
 		[[nodiscard]] auto pointer_bool( std::string_view path ) const -> result< bool >;
 
-		// Reads an array of strings. A non-array, or an array containing a
-		// non-string, is an error rather than a silently filtered list -- a
-		// descriptor with one bad entry should not load with the rest.
+		// a non-array, or a non-string element, is an error rather than a filtered list.
 		[[nodiscard]] auto pointer_string_array( std::string_view path ) const
 			-> result< std::vector< std::string > >;
 
-		// True when the pointer resolves to anything at all. A missing pointer is
-		// the normal case for a streaming delta -- most payloads carry one field --
-		// so this is a query, not an error.
 		[[nodiscard]] auto has_pointer( std::string_view path ) const noexcept -> bool;
 
-		// The member names of the object at `path`; an empty path is the root. Empty
-		// for a document that is not an object, or a pointer that resolves to a
-		// non-object. Used to reject unknown keys: a typo in a descriptor is
-		// otherwise dropped silently and surfaces as a wrong value much later.
 		[[nodiscard]] auto keys_at( std::string_view path ) const -> std::vector< std::string >;
 
 		auto set_string( std::string_view key, std::string_view text ) -> status;
@@ -115,30 +85,19 @@ namespace mcode::json {
 		auto set_bool( std::string_view key, bool value ) -> status;
 		auto set_real( std::string_view key, double value ) -> status;
 
-		// Attaches a whole subtree. The node is moved in, so a caller builds a
-		// message object and appends it to an array without a copy per element.
 		auto set_node( std::string_view key, node value ) -> status;
 		auto append( node value ) -> status;
 
-		// Builds an empty object or array at `key`, returning a pointer into this
-		// document that stays valid until the document is destroyed or re-set. Null
-		// on a non-mutable document, an empty key, or a key already holding a
-		// non-container.
+		// the returned pointer stays valid until the document is destroyed or re-set.
 		[[nodiscard]] auto make_object_at( std::string_view key ) -> node*;
 		[[nodiscard]] auto make_array_at( std::string_view key ) -> node*;
 
-		// Parses `text` and attaches the result at `key`. This is how a
-		// pre-rendered schema or a raw argument blob is embedded without the caller
-		// re-encoding it field by field -- and it is the only path that preserves
-		// the source's own key order.
 		auto set_json( std::string_view key, std::string_view text ) -> status;
 
 		[[nodiscard]] auto dump( bool pretty = false ) const -> result< std::string >;
 		[[nodiscard]] auto size( ) const noexcept -> std::size_t;
 
-		// The whole parsed content as a node tree, for a document that came from
-		// `parse`. Null for a mutable or empty document. This is the read side of
-		// `set_json`: a subtree read back and re-embedded must be byte-equal.
+		// the read side of `set_json`: a subtree read back must re-embed byte-equal.
 		[[nodiscard]] auto root_node( ) const -> result< node >;
 
 	private:
@@ -148,28 +107,15 @@ namespace mcode::json {
 		yyjson_doc* doc_ = nullptr;
 		mut_doc_pointer mut_{ nullptr, nullptr };
 
-		// The mutable document's whole content. One representation rather than a
-		// flat map plus a tree, so nesting cannot drift from the flat path. Its type
-		// is set to `object` by the constructor that makes a document mutable.
 		node root_ = node{ };
 		bool mutable_ = false;
 	};
 
-	// Parses `text` and returns the value as a node tree. This is how a
-	// pre-rendered schema or argument blob is embedded without the caller
-	// re-encoding it field by field -- and it is the only path that preserves
-	// the source's own key order.
 	[[nodiscard]] auto node_from_json( std::string_view text ) -> result< node >;
 
-	// The parsed value at `path` as a node tree, for a document that came from
-	// `parse`. The source's own key order is preserved; the mutable writer
-	// re-sorts on dump.
 	[[nodiscard]] auto node_at( const document& source, std::string_view path ) -> result< node >;
 
-	// Re-serializes `text` with object keys in sorted order.
-	//
-	// Thrash detection hashes tool arguments; two calls that differ only in key
-	// order are the same call, and hashing the raw text would miss that.
+	// sorted keys: thrash detection hashes arguments, and key order is not a difference.
 	[[nodiscard]] auto canonicalize( std::string_view text ) -> result< std::string >;
 
 }

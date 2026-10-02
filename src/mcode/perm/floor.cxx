@@ -11,39 +11,29 @@ namespace mcode::perm {
 
 	namespace {
 
-	// The floor's exec rules, as first tokens. `sudo`, `doas`, `runas` as
-	// the first token is escalation; the same word as an argument is not.
+	// the floor's exec rules, as first tokens; the same word as an argument is not escalation.
 	inline constexpr auto FLOOR_PROGRAMS = std::array< std::string_view, 7 >{
 		"sudo", "sudo.exe", "doas", "doas.exe", "runas", "runas.exe", "mkfs",
 	};
 
-	// mkfs family: mkfs.ext4, mkfs.ntfs, ... all share the `mkfs.` prefix
-	// and there is no legitimate reason for an agent to invoke one. The
-	// near-miss (`man mkfs.ext4`) has a different first token.
 	inline constexpr std::string_view MKFS_PREFIX = "mkfs.";
 
-	// Partition/format tools. `format` on Windows; the same word as an
-	// argument (`man format`) has a different first token.
 	inline constexpr auto FLOOR_FORMAT_PROGRAMS = std::array< std::string_view, 6 >{
 		"fdisk", "fdisk.exe", "diskpart", "diskpart.exe", "format", "format.exe",
 	};
 
-	// Recursive-delete tokens that make the target a deletion target.
 	inline constexpr std::string_view RM_PROGRAM = "rm";
 	inline constexpr std::string_view RM_RECURSE_FORCE = "-rf";
 	inline constexpr std::string_view RM_FORCE_RECURSE = "-fr";
 
-	// `dd`'s output-file option.
 	inline constexpr std::string_view DD_PROGRAM = "dd";
 	inline constexpr std::string_view DD_OF_PREFIX = "of=";
 
-	// Device-path prefixes for the dd target check.
 	inline constexpr std::string_view DEV_PREFIX = "/dev/";
 	inline constexpr std::string_view NVME_PREFIX = "/dev/nvme";
 	inline constexpr std::string_view PHYSICALDRIVE_PREFIX = "\\\\.\\physicaldrive";
 
-	// `~` and the env-var spellings of home. `$HOME` cannot appear in parsed
-	// argv (the parser refuses `$`), so the token arrives only as a literal.
+	// `$HOME` cannot appear in parsed argv (the parser refuses `$`), so only the literal arrives.
 	inline constexpr std::string_view TILDE = "~";
 	inline constexpr std::string_view TILDE_SLASH = "~/";
 	inline constexpr std::string_view HOME_ENV = "HOME";
@@ -65,9 +55,7 @@ namespace mcode::perm {
 		return lower_ascii( token ) == lower_ascii( expected );
 	}
 
-	// The first token, path-stripped and lowercased -- the same
-	// normalisation is_exec_runner applies, so `/bin/sudo` and `SUDO` land
-	// on the floor.
+	// path-stripped and lowercased, so `/bin/sudo` and `SUDO` land on the floor.
 	[[nodiscard]] auto program_name( const std::vector< std::string >& argv )
 		-> std::string {
 		const auto& raw = argv.front( );
@@ -79,25 +67,17 @@ namespace mcode::perm {
 		return lower_ascii( base );
 	}
 
-	// True when the token names a filesystem root. Unconditional: it must not
-	// depend on the home directory being resolvable, or `rm -rf /` stops
-	// firing the floor on a machine with no HOME set -- and then `--yolo`
-	// turns the resulting `ask` into an allow.
+	// unconditional, so `rm -rf /` still fires with no HOME set and --yolo cannot allow it.
 	[[nodiscard]] auto is_filesystem_root( const std::filesystem::path& target ) -> bool {
 		return target == target.root_path( );
 	}
 
-	// True when the token names the user's home directory. The canonical form
-	// is what makes `rm -rf /`, `rm -rf //` and `rm -rf /./` one command; the
-	// tilde spelling resolves to the same directory and is caught by the same
-	// comparison.
 	[[nodiscard]] auto is_home_directory( const std::filesystem::path& target,
 		const std::filesystem::path& home ) -> bool {
 		return !home.empty( ) && ( target == home || target == home.root_path( ) );
 	}
 
-	// Resolves an argv token to a canonical path. Relative tokens resolve
-	// against the workspace root, which is where exec runs.
+	// relative tokens resolve against the workspace root, which is where exec runs.
 	[[nodiscard]] auto resolve_target( const std::string& token,
 		const mcode::workspace& space ) -> std::optional< std::filesystem::path > {
 		auto candidate = std::filesystem::path{ token };
@@ -115,9 +95,7 @@ namespace mcode::perm {
 		return *canonical;
 	}
 
-	// The home directory, canonicalized. Empty when HOME is unset -- the
-	// floor's home rules then simply do not fire, which is fail-closed for
-	// a rule whose subject does not exist on this machine.
+	// empty when HOME and USERPROFILE are unset, so the home rules simply do not fire.
 	[[nodiscard]] auto home_directory( ) -> std::filesystem::path {
 		const auto* value = std::getenv( "HOME" );
 		const auto* alt = std::getenv( "USERPROFILE" );
@@ -138,7 +116,6 @@ namespace mcode::perm {
 
 	}
 
-	// Recursive delete of a filesystem root or the user's home.
 	[[nodiscard]] auto floor_recursive_delete( const std::vector< std::string >& argv,
 		const mcode::workspace& space ) -> std::optional< std::string > {
 		if ( !token_equals( argv.front( ), RM_PROGRAM ) ) {
@@ -172,19 +149,14 @@ namespace mcode::perm {
 		const auto home = home_directory( );
 
 		for ( const auto& target : targets ) {
-			// A literal `~` or `~/...` resolves against the real home, not
-			// the workspace: `rm -rf ~` must fire even though the shell
-			// would expand it to a path outside the workspace.
+			// a literal `~` resolves against the real home, not the workspace.
 			if ( target == TILDE || target.starts_with( TILDE_SLASH ) ) {
 				if ( !home.empty( ) ) {
 					const auto expanded = target == TILDE
 						? home
 						: home / std::filesystem::path{ target.substr( TILDE_SLASH.size( ) ) };
 
-					// The floor names the home itself, not its contents:
-					// `rm -rf ~/scratch/project-a` is the near-miss that
-					// must stay allowed. Compare the canonical expansion
-					// against the home, component-wise.
+					// the floor names the home itself, not its contents.
 					auto canonical = platform::canonicalize( expanded );
 
 					if ( canonical && *canonical == home ) {
@@ -196,9 +168,7 @@ namespace mcode::perm {
 			}
 
 			if ( token_equals( target, HOME_ENV ) ) {
-				// A literal `HOME` token is a relative path named HOME, not
-				// the environment variable -- the parser already refused
-				// `$HOME`. Do not treat it as the home directory.
+				// a literal `HOME` is a path named HOME, not the environment variable.
 				continue;
 			}
 
@@ -220,7 +190,6 @@ namespace mcode::perm {
 		return std::nullopt;
 	}
 
-	// Privilege escalation: sudo / doas / runas as the first token.
 	[[nodiscard]] auto floor_privilege_escalation(
 		const std::vector< std::string >& argv ) -> std::optional< std::string > {
 		const auto program = program_name( argv );
@@ -234,7 +203,6 @@ namespace mcode::perm {
 		return std::nullopt;
 	}
 
-	// Filesystem creation: mkfs and the mkfs.* family as the first token.
 	[[nodiscard]] auto floor_filesystem_creation(
 		const std::vector< std::string >& argv ) -> std::optional< std::string > {
 		const auto program = program_name( argv );
@@ -246,7 +214,6 @@ namespace mcode::perm {
 		return std::nullopt;
 	}
 
-	// Partition/format tools as the first token.
 	[[nodiscard]] auto floor_partition_tools( const std::vector< std::string >& argv )
 		-> std::optional< std::string > {
 		const auto program = program_name( argv );
@@ -260,7 +227,6 @@ namespace mcode::perm {
 		return std::nullopt;
 	}
 
-	// Raw write to a device: dd whose of= target is a device path.
 	[[nodiscard]] auto floor_raw_device_write( const std::vector< std::string >& argv )
 		-> std::optional< std::string > {
 		if ( !token_equals( argv.front( ), DD_PROGRAM ) ) {
@@ -285,16 +251,9 @@ namespace mcode::perm {
 		return std::nullopt;
 	}
 
-	// The floor's reason for this request, or nothing when it is not on the
-	// floor. The order is fixed and the first hit wins; every rule is a
-	// first-token or canonical-target check, so none of them is satisfied by a
-	// near-miss.
 	auto floor_reason( const request_identity& request, const mcode::workspace& space )
 		-> std::optional< std::string > {
 		if ( request.klass == tool_class::write ) {
-			// Writing .git/ or .mcode/ internals. Matched on the canonical
-			// path's first component below a boundary root, so `.gitignore` --
-			// a different name -- is not caught.
 			auto candidate = std::filesystem::path{ request.resource };
 
 			if ( candidate.is_relative( ) ) {
@@ -303,9 +262,7 @@ namespace mcode::perm {
 
 			const auto canonical = platform::canonicalize( candidate );
 
-			// A path that cannot be canonicalized cannot be shown to be outside
-			// the protected set, so it is refused. Falling through here would
-			// let an unresolvable path skip the floor entirely.
+			// an unresolvable path cannot be shown to be outside the protected set.
 			if ( !canonical ) {
 				return "write to an unresolvable path";
 			}
@@ -321,10 +278,7 @@ namespace mcode::perm {
 			return std::nullopt;
 		}
 
-		// The caller hands us the canonical argv as one string. Re-parsing with
-		// the same parser the tool layer used keeps a quoted token containing a
-		// space intact -- splitting on ' ' would turn one token into two and
-		// resolve a path that was never named.
+		// re-parsed with the same parser, so a quoted token containing a space stays one token.
 		const auto parsed = parse_command_line( request.resource );
 
 		if ( !parsed || parsed->empty( ) ) {

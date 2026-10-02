@@ -15,7 +15,6 @@ namespace mcode::ext {
 			"fs_read", "fs_write", "net", "spawn", "mcp", "context", "session_fork",
 		};
 
-		// The keys the frozen manifest accepts. Anything else is a typo.
 		const auto ALLOWED_KEYS = std::vector< std::string_view >{
 			"name", "version", "api_version", "description", "permissions",
 		};
@@ -63,18 +62,12 @@ namespace mcode::ext {
 			return !previous_was_dash;
 		}
 
-		// A component this long is already larger than any real version, and the
-		// cap is what keeps the accumulation below from overflowing.
 		inline constexpr auto MAX_VERSION_DIGITS = 9;
 
-		// The cap exists so a manifest cannot carry an unbounded prompt payload into
-		// every session that loads it.
 		inline constexpr auto MAX_DESCRIPTION_LENGTH = std::size_t{ 1024 };
 
 		auto is_valid_version( const std::string_view version ) -> bool {
-			// MAJOR.MINOR.PATCH, optionally with a prerelease or build suffix. A
-			// full semver implementation is unnecessary; the shape is what matters,
-			// and it is what a typo breaks.
+			// MAJOR.MINOR.PATCH with an optional prerelease or build suffix; not full semver.
 			auto parts = std::vector< std::int64_t >{ };
 			auto current = std::int64_t{ 0 };
 			auto digits = 0;
@@ -97,9 +90,6 @@ namespace mcode::ext {
 				}
 
 				if ( character == '-' || character == '+' ) {
-					// The suffix is validated below. Breaking without recording it
-					// let `1.2.3-` and `1.2.3-!!!` through: the numeric part is
-					// well-formed, so nothing else looked at the rest.
 					suffix = version.substr( index + 1 );
 
 					break;
@@ -109,9 +99,7 @@ namespace mcode::ext {
 					return false;
 				}
 
-				// Bounded before the multiply, not after: `current * 10` is signed
-				// overflow -- undefined behaviour -- for a component long enough to
-				// matter, and a version string is untrusted input.
+				// bounded before the multiply: `current * 10` overflows for a long component.
 				if ( digits >= MAX_VERSION_DIGITS ) {
 					return false;
 				}
@@ -130,8 +118,6 @@ namespace mcode::ext {
 				return false;
 			}
 
-			// A prerelease or build suffix must be present and well-formed: at least
-			// one identifier, each of alphanumerics and hyphens, dot-separated.
 			if ( suffix.empty( ) ) {
 				return index < version.size( ) ? false : true;
 			}
@@ -187,9 +173,6 @@ namespace mcode::ext {
 				path.string( ) + ": " + parsed.error( ).msg ) );
 		}
 
-		// Unknown keys are rejected: `permission = [...]` (a typo for
-		// `permissions`) would otherwise load with no permissions at all and
-		// surface as a confusing denial much later.
 		if ( auto known = parsed->reject_unknown( ALLOWED_KEYS ); !known ) {
 			return std::unexpected( fail( errc::config,
 				path.string( ) + ": " + known.error( ).msg ) );
@@ -211,8 +194,7 @@ namespace mcode::ext {
 				"' (expected lowercase-kebab-case, <=64 chars)" ) );
 		}
 
-		// The name must match the directory, so two extensions cannot claim the same
-		// identity by sitting in different folders.
+		// the name must match the directory, so identity cannot be claimed from two folders.
 		if ( directory.filename( ).string( ) != manifest_value.name ) {
 			return std::unexpected( fail( errc::config,
 				path.string( ) + ": name '" + manifest_value.name +
@@ -247,8 +229,7 @@ namespace mcode::ext {
 				path.string( ) + ": api_version must be >= 1" ) );
 		}
 
-		// An integer floor, never a range. The loader compares two
-		// integers, so there is no constraint parser to get wrong.
+		// an integer floor, never a range: the loader compares two integers.
 		if ( manifest_value.api_version > API_VERSION ) {
 			return std::unexpected( fail( errc::config,
 				path.string( ) + ": requires api_version " + std::to_string( manifest_value.api_version ) +
@@ -272,7 +253,7 @@ namespace mcode::ext {
 			manifest_value.description = **description;
 		}
 
-		// Absent or empty means deny.
+		// absent or empty means deny.
 		if ( parsed->contains( "permissions" ) ) {
 			auto permissions = parsed->get_string_array( "permissions" );
 

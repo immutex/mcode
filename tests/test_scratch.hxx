@@ -1,8 +1,6 @@
 #pragma once
 
-// Every scratch path in the suite must come from here: agents run `ctest` in
-// parallel worktrees, and a fixed path (or an unseeded ::rand) makes two runs
-// delete each other's fixtures, which surfaces as failures in unrelated tests.
+// every scratch path must be unique per process: parallel ctest runs delete each other's fixtures.
 
 #include <atomic>
 #include <chrono>
@@ -19,8 +17,6 @@
 
 namespace mcode::test {
 
-	// The process id, spelled once. `GetCurrentProcessId` is Win32-only and was
-	// called unguarded here, which does not compile on Linux or macOS at all.
 	[[nodiscard]] inline auto process_id( ) -> unsigned long long {
 	#if defined( _WIN32 )
 		return static_cast< unsigned long long >( ::GetCurrentProcessId( ) );
@@ -29,8 +25,7 @@ namespace mcode::test {
 	#endif
 	}
 
-	// A directory unique to this process and this call. The path cannot pre-exist,
-	// so the helper creates it and never removes an existing directory.
+	// unique per process and per call, so the path can never pre-exist.
 	inline auto scratch_directory( const std::string_view prefix ) -> std::filesystem::path {
 		static auto calls = std::atomic< std::uint64_t >{ 0 };
 

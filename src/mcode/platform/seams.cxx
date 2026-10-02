@@ -34,46 +34,24 @@
 namespace mcode::platform {
 
 
-	// The largest plausible process id on this platform.
-	//
-	// On POSIX it is pid_t's positive range, because `kill` reinterprets anything
-	// else as a signal target. On Windows a pid is a DWORD and the allocator uses
-	// the whole unsigned range, so after long uptime a live pid above 2^31 is
-	// ordinary -- bounding it at INT32_MAX would report a running process as dead.
+	// on Windows a pid is a DWORD, so a live pid above INT32_MAX is ordinary.
 #if defined( _WIN32 )
 	inline constexpr auto MAX_PROCESS_ID = std::uint32_t{ 0xFFFFFFFF };
 #else
 	inline constexpr auto MAX_PROCESS_ID = std::uint32_t{ 0x7FFFFFFF };
 #endif
 
-	// What a killed child exits with. Distinct from 0 so a supervisor can tell a
-	// process we terminated from one that finished on its own.
-	//
-	// `unsigned` and not `UINT`: that typedef is Win32-only, and this constant is
-	// declared outside the platform guard.
+	// distinct from 0 so a supervisor can tell a killed child from a finished one.
 	inline constexpr auto TERMINATED_EXIT_CODE = unsigned{ 1 };
 
-	// A path longer than this is not a usable extension root on any platform, and
-	// the lookup loops double their buffer, so the cap is what stops a pathological
-	// case from growing without bound.
 	inline constexpr auto MAX_EXECUTABLE_PATH_BYTES = std::size_t{ 64u * 1024u };
 
-	// Zero and above-max are both not process ids. Zero is the dangerous one: to
-	// `kill` it means the caller's whole process group.
+	// to `kill`, 0 means the caller's whole process group.
 	[[nodiscard]] auto is_plausible_process_id( const std::uint64_t process_id ) noexcept -> bool {
 		return process_id != 0 && process_id <= static_cast< std::uint64_t >( MAX_PROCESS_ID );
 	}
 
-	// M0 ships interfaces and honest stubs. Where a platform cannot do the thing
-	// yet, the call returns `unsupported` and `sandbox_capability_level` says
-	// so -- a stub that silently succeeded would let a caller believe it was
-	// isolated.
-
 	auto pty_session::supported( ) noexcept -> bool {
-		// False until spawn exists. The predicate exists so a caller can decide
-		// whether to use the PTY path at all, and returning true while every
-		// operation returns `unsupported` converts a design-time signal into a
-		// runtime surprise -- exactly the dishonesty this file's rule forbids.
 		return false;
 	}
 
@@ -101,18 +79,11 @@ namespace mcode::platform {
 
 	auto sandbox_capability_level( ) noexcept -> sandbox_capability {
 	#if defined( _WIN32 )
-		// Writes are confined by the Low IL token plus mandatory labels on the
-		// write and deny paths, applied through CreateProcessAsUserW on the
-		// exec path. Reads are not confined -- integrity levels have no
-		// read-down restriction. The MCP spawn path gets the Job Object only.
+		// integrity levels have no read-down restriction, so reads are not confined.
 		return sandbox_capability::write_boundary;
 	#elif defined( __linux__ )
-		// Landlock confines reads and writes. The ABI is a runtime property, so
-		// the spawn path probes it; this is the platform-capability claim.
 		return sandbox_capability::filesystem;
 	#elif defined( __APPLE__ )
-		// Seatbelt applies in-process before the child's first exec, so the
-		// filesystem tier is enforced whenever the profile applies.
 		return sandbox_capability::full;
 	#else
 		return sandbox_capability::unavailable;
@@ -121,9 +92,7 @@ namespace mcode::platform {
 
 	auto sandbox_network_level( ) noexcept -> sandbox_network_support {
 	#if defined( _WIN32 )
-		// The filesystem tier needs no admin; a WFP deny does. Without admin
-		// the network stays open while the filesystem is confined, which is
-		// exactly why this is a separate enum: "full" would be a false claim.
+		// A WFP egress deny needs admin; without it the network stays open.
 		return sandbox_network_support::best_effort;
 	#elif defined( __linux__ )
 		const auto abi = sandbox_linux_abi( );
@@ -132,9 +101,7 @@ namespace mcode::platform {
 			return sandbox_network_support::unavailable;
 		}
 
-		// ABI >= 4 denies at the Landlock layer; below that the seccomp filter
-		// covers it. Both are real denials, so the answer is enforced either
-		// way -- the mechanism string names which one applied.
+		// ABI >= 4 denies at the Landlock layer; below that seccomp covers it.
 		return sandbox_network_support::enforced;
 	#elif defined( __APPLE__ )
 		return sandbox_network_support::enforced;
@@ -157,9 +124,7 @@ namespace mcode::platform {
 
 	auto apply_sandbox( const sandbox_profile& profile ) -> status {
 #if defined( _WIN32 )
-		// The write boundary is the mandatory integrity label on the paths,
-		// not a token change: the caller here is the harness itself, and the
-		// child path through proc/ applies the Low IL token at spawn.
+		// in-process only; the child path applies the Low IL token at spawn.
 		if ( const auto marked = sandbox_windows_mark_write_paths(
 			profile.write_paths, profile.deny_paths ); !marked ) {
 			return std::unexpected( marked.error( ) );
@@ -173,10 +138,6 @@ namespace mcode::platform {
 			return std::unexpected( abi.error( ) );
 		}
 
-		// A newer ABI is a superset and is handled by capping the right set at
-		// LANDLOCK_ABI_MAX. An ABI the ladder does not cover at all cannot
-		// happen above the max on a released kernel, and the ruleset builder
-		// refuses anything below 1.
 		if ( *abi < 1 ) {
 			return std::unexpected( mcode::fail( mcode::errc::unsupported,
 				"the kernel reports no usable Landlock ABI" ) );
@@ -204,9 +165,6 @@ namespace mcode::platform {
 	}
 
 	auto terminate_process( const std::uint64_t process_id, const bool force ) -> status {
-		// The same guard process_is_alive carries, for a stronger reason: kill(0)
-		// signals the CALLER'S process group, so an unvalidated zero would deliver
-		// SIGTERM to mcode itself and everything beside it, and report success.
 		if ( !is_plausible_process_id( process_id ) ) {
 			return std::unexpected( fail( errc::io,
 				"invalid process id " + std::to_string( process_id ) ) );
@@ -220,10 +178,7 @@ namespace mcode::platform {
 			return std::unexpected( fail( errc::io, "OpenProcess failed" ) );
 		}
 
-		// `force` has no Windows equivalent: TerminateProcess is already
-		// unconditional, so the flag is accepted and ignored rather than pretending
-		// to select between a graceful and a hard stop. The exit code is distinct
-		// from 0 so a supervisor can tell a killed child from one that finished.
+		// Windows has no graceful stop; the flag is accepted and ignored.
 		(void)force;
 
 		const auto killed = TerminateProcess( handle, TERMINATED_EXIT_CODE );
@@ -235,9 +190,6 @@ namespace mcode::platform {
 
 		return { };
 	#else
-		// A graceful stop is SIGTERM; `force` is SIGKILL. On Windows there is no
-		// graceful equivalent for an arbitrary process, which is why the flag is
-		// accepted and ignored there rather than pretending.
 		if ( ::kill( static_cast< pid_t >( process_id ), force ? SIGKILL : SIGTERM ) != 0 ) {
 			return std::unexpected( fail( errc::io, "kill failed" ) );
 		}
@@ -248,12 +200,6 @@ namespace mcode::platform {
 
 	auto terminate_process_tree( const std::uint64_t process_id, const bool force ) -> status {
 	#if defined( _WIN32 )
-		// Killing the tree needs a Job Object handle, which is owned by whoever
-		// spawned the child. Without it, this degrades to killing the root, and
-		// saying so is better than implying the children died too.
-		//
-		// The parameters are unnamed in the POSIX branch below only because that
-		// branch does not use them; they stay named here for the signature.
 		(void)process_id;
 		(void)force;
 
@@ -261,10 +207,6 @@ namespace mcode::platform {
 			"process-tree termination needs the spawn-time Job Object handle, "
 			"which M0 does not yet thread through" ) );
 	#else
-		// Only the root, because a group kill needs the child to have been spawned
-		// into its own group and nothing spawns one yet. Saying `unsupported` is
-		// honest; killing the root and letting the caller believe the tree died is
-		// the failure the file's own rule names.
 		(void)process_id;
 		(void)force;
 
@@ -275,18 +217,12 @@ namespace mcode::platform {
 	}
 
 	auto process_is_alive( const std::uint64_t process_id ) -> bool {
-		// Zero and -1 are not pids to `kill`: 0 means the caller's process group and
-		// -1 means every process the caller may signal, and both SUCCEED. So a
-		// truncated 0xFFFFFFFF would report as alive, and a caller passing a
-		// pid-sized value to a kill call would broadcast. Validate before the
-		// syscall.
 		if ( !is_plausible_process_id( process_id ) ) {
 			return false;
 		}
 
 	#if defined( _WIN32 )
-		// SYNCHRONIZE is required for WaitForSingleObject below; a query-only handle
-		// makes the wait fail, which would report every live process as dead.
+		// SYNCHRONIZE is required for the wait below; a query-only handle fails it.
 		const auto handle = OpenProcess( PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE,
 			static_cast< DWORD >( process_id ) );
 
@@ -294,9 +230,7 @@ namespace mcode::platform {
 			return false;
 		}
 
-		// A zero-timeout wait, not the exit code. GetExitCodeProcess returning
-		// STILL_ACTIVE is the classic false-alive: a process that terminated with
-		// exit code 259 reports as alive forever.
+		// not GetExitCodeProcess: STILL_ACTIVE (259) is also a valid exit code.
 		const auto waited = WaitForSingleObject( handle, 0 );
 		CloseHandle( handle );
 
@@ -306,8 +240,7 @@ namespace mcode::platform {
 			return true;
 		}
 
-		// EPERM means the process EXISTS but is not ours to signal. Reporting it as
-		// dead would make a supervisor reap a child that is still running.
+		// EPERM means the process exists but is not ours to signal.
 		return errno == EPERM;
 	#endif
 	}
@@ -338,9 +271,7 @@ namespace mcode::platform {
 
 	auto case_insensitive_paths( ) noexcept -> bool {
 	#if defined( _WIN32 ) || defined( __APPLE__ )
-		// macOS is case-insensitive by default on APFS, though a volume can be
-		// formatted case-sensitive. The workspace boundary compares case-folded on
-		// both, which is the conservative direction.
+		// APFS is case-insensitive by default; a volume may be formatted otherwise.
 		return true;
 	#else
 		return false;
@@ -402,7 +333,6 @@ namespace mcode::platform {
 
 		return suffix.empty( ) ? out : out / suffix;
 	#else
-		// XDG on Linux; macOS uses ~/Library/Application Support by convention.
 		#if defined( __APPLE__ )
 			const auto* home = std::getenv( "HOME" );
 
@@ -444,16 +374,10 @@ namespace mcode::platform {
 	#endif
 	}
 
-	// The directory the running binary sits in.
-	//
-	// Three different mechanisms, and the buffer handling matters more than the
-	// lookup: every one of them reports "too long" differently, and a partial path
-	// silently becomes the wrong directory rather than an error.
+	// A truncated path silently becomes the wrong directory rather than an error.
 	auto executable_directory( ) -> result< std::filesystem::path > {
 	#if defined( _WIN32 )
-		// GetModuleFileNameA truncates and returns the buffer size, with no error
-		// code and a NUL-terminated string, so a full buffer is the only signal
-		// that the path did not fit. Grow and retry rather than accept a prefix.
+		// GetModuleFileNameA truncates, returns the buffer size, and sets no error code.
 		auto capacity = std::size_t{ MAX_PATH };
 		auto buffer = std::vector< char >{ };
 
@@ -479,9 +403,7 @@ namespace mcode::platform {
 			capacity *= 2;
 		}
 	#elif defined( __APPLE__ )
-		// _NSGetExecutablePath reports the required size in its own argument and
-		// returns non-zero when the buffer was too small, so the second call is the
-		// real one. The path it writes may be relative or contain symlinks.
+		// returns non-zero when the buffer was too small; the path may be relative.
 		auto size = std::uint32_t{ 0 };
 
 		(void)::_NSGetExecutablePath( nullptr, &size );
@@ -507,9 +429,7 @@ namespace mcode::platform {
 
 		return resolved.parent_path( );
 	#else
-		// /proc/self/exe is a symlink to the binary; readlink does not NUL-terminate
-		// and returns the length it would have written, so a full buffer means the
-		// result was truncated.
+		// readlink does not NUL-terminate and returns the length it would have written.
 		auto capacity = std::size_t{ 256 };
 
 		for ( ;; ) {
@@ -563,9 +483,7 @@ namespace mcode::platform {
 	}
 
 	auto terminal_size_changed( ) -> bool {
-		// Polling rather than a callback keeps the loop single-threaded: the real
-		// implementations are SIGWINCH, WINDOW_BUFFER_SIZE_EVENT, and in-band
-		// DECSET 2048, and only the first is a signal.
+		// polled to keep the loop single-threaded; only SIGWINCH is a signal.
 		static auto last = terminal_size( );
 
 		auto current = terminal_size( );

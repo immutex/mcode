@@ -1,38 +1,28 @@
 #pragma once
 
-#include <optional>
-#include <string>
-#include <string_view>
-#include <vector>
-
-#include "mcode/tui/cell.hxx"
 #include <cstddef>
 #include <cstdint>
+#include <optional>
+#include <string>
+#include <vector>
 
 namespace mcode::tui {
 
-	// One editable line: content plus the caret's offset into it.
-	//
-	// `cursor` is a BYTE offset into the UTF-8 `text`, not a display column --
-	// the editor owns no width table, and the renderer converts on the way out.
-	// The header previously claimed display columns, which is what made the
-	// mismatch invisible.
+	// One editable line: content plus the caret's BYTE offset into it. The
+	// editor owns no width table, so a column is never stored here.
 	struct editor_line {
 		std::string text;
 		std::size_t cursor = 0;
 	};
 
-	// The multi-line input editor. History, paste placeholder, ghost-text
-	// autosuggest. Every mutation is a named operation the REPL drives; the
-	// editor owns no terminal.
+	// The multi-line input editor. It owns the buffer and the history and
+	// knows nothing about the terminal.
 	class input_editor {
 	public:
-		// Keys the REPL translates from the raw input layer.
 		enum class key : std::uint8_t {
 			character,
 			enter,
-			shift_enter,
-			backslash_newline,
+			newline,
 			backspace,
 			delete_key,
 			left,
@@ -41,7 +31,6 @@ namespace mcode::tui {
 			down,
 			home,
 			end,
-			paste,
 			interrupt,
 			escape,
 		};
@@ -51,49 +40,25 @@ namespace mcode::tui {
 			std::string text;
 		};
 
-		// Applies one key. Returns the completed submission, when Enter
-		// closed a non-empty buffer; empty otherwise.
+		// Applies one key. Returns the completed submission when Enter closed
+		// a non-empty buffer.
 		auto handle( const key_event& event ) -> std::optional< std::string >;
 
-		// True when Ctrl+D arrived on an empty buffer: the session exits.
-		[[nodiscard]] auto exit_requested( ) const noexcept -> bool { return exit_; }
-
-		// The pending input, reset after each submit.
+		// Clears the buffer for the next submission.
 		auto reset( ) -> void;
 
-		// The pending input as one line, its rows joined by a space. The
-		// renderer's prompt row is a single line, so this is what it echoes
-		// while typing; the submitted text is the rows themselves.
+		// Replaces the buffer with one line and parks the caret at its end.
+		auto set_text( std::string text ) -> void;
+
+		// The pending input as one line, rows joined by a space. The prompt row
+		// is a single line, so this is what it echoes while typing.
 		[[nodiscard]] auto text( ) const -> std::string;
 
-		[[nodiscard]] auto lines( ) const noexcept -> const std::vector< editor_line >& {
-			return lines_;
-		}
-
-		[[nodiscard]] auto cursor_row( ) const noexcept -> std::size_t { return cursor_row_; }
-
-		// The caret's BYTE offset within the pending input. The renderer turns
-		// this into a display column; nothing outside should treat it as one.
-		[[nodiscard]] auto cursor_offset( ) const noexcept -> std::size_t {
-			return lines_.empty( ) ? 0 : lines_[ cursor_row_ ].cursor;
-		}
-
-		// The caret's byte offset counted across every row, which is what the
-		// one-line prompt echo needs.
+		// The caret's byte offset across every row, which is what the one-line
+		// prompt echo needs.
 		[[nodiscard]] auto flattened_cursor( ) const noexcept -> std::size_t;
 
-		// The ghost-text suggestion for the current last line, or empty.
-		[[nodiscard]] auto suggestion( ) const -> std::string;
-
-		// History navigation state.
 		auto push_history( std::string entry ) -> void;
-		[[nodiscard]] auto history( ) const noexcept -> const std::vector< std::string >& {
-			return history_;
-		}
-
-		// Renders the pending input as one styled block: the prompt marker,
-		// the lines, and the ghost suggestion in muted.
-		[[nodiscard]] auto render( ) const -> std::vector< styled_line >;
 
 	private:
 		std::vector< editor_line > lines_{ { } };
@@ -101,7 +66,6 @@ namespace mcode::tui {
 		std::vector< std::string > history_;
 		std::optional< std::string > history_draft_;
 		std::size_t history_position_ = 0;
-		bool exit_ = false;
 	};
 
 }

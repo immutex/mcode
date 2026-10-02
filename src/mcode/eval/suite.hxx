@@ -11,23 +11,14 @@
 
 namespace mcode::eval {
 
-	// A deterministic task. No model, no network, no wall-clock dependence: each
-	// task asserts a harness behaviour against the fixture repo, so a failure is
-	// always a real regression and never sampling noise.
-	//
-	// Small-n suites swing wildly at model pass rates.
-	// These tasks sidestep that entirely by not involving a model -- which is also
-	// the only honest thing M0 can do, since there is no model client yet.
+	// No model, no network, no wall-clock dependence, so a failure is always a real regression.
 	struct task {
 		std::string id;
 		std::string description;
 
-		// Returns true on pass. The message explains a failure.
 		std::function< result< bool >( const std::filesystem::path& fixture_root ) > run;
 	};
 
-	// Per-run record, JSONL, one object
-	// per task.
 	struct run_record {
 		std::string run_id;
 		std::string timestamp;
@@ -64,22 +55,15 @@ namespace mcode::eval {
 		}
 	};
 
-	// The ten deterministic tasks. Each names the harness surface it covers.
 	[[nodiscard]] auto builtin_tasks( ) -> std::vector< task >;
 
-	// Runs every task and returns the records.
 	[[nodiscard]] auto run_suite( const std::filesystem::path& fixture_root,
 		std::string_view suite_name = "mcode-fixtures-v1" ) -> suite_result;
 
-	// pass@k: did ANY of k attempts succeed. Capability.
-	// pass^k: did ALL k attempts succeed. Reliability.
-	//
-	// Both are reported, because reporting only pass@k flatters a harness that
-	// works half the time.
+	// pass@k is capability, pass^k reliability; both are reported.
 	[[nodiscard]] auto pass_at_k( const std::vector< bool >& attempts ) -> double;
 	[[nodiscard]] auto pass_power_k( const std::vector< bool >& attempts ) -> double;
 
-	// Serializes a suite result as JSONL, one record per line.
 	[[nodiscard]] auto to_jsonl( const suite_result& result ) -> std::string;
 
 }

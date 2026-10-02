@@ -124,7 +124,6 @@ namespace mcode::skills {
 			report.entries.push_back( std::move( entry ) );
 		}
 
-		// One skill directory per root: `<root>/<name>/SKILL.md`.
 		auto scan_flat( const std::filesystem::path& root, const skill_origin origin,
 			discovery_report& report ) -> void {
 			auto error = std::error_code{ };
@@ -143,8 +142,7 @@ namespace mcode::skills {
 			}
 		}
 
-		// Nested `.mcode/skills/` directories, bounded in depth so a pathological
-		// tree cannot hang startup. `scan` dedupes and validates one root.
+		// Depth-bounded so a pathological tree cannot hang startup.
 		template< typename Scan >
 		auto scan_nested( const std::filesystem::path& directory, const std::size_t depth,
 			Scan&& scan ) -> void {
@@ -174,8 +172,7 @@ namespace mcode::skills {
 			}
 		}
 
-		// Symlinked roots would index the same skill twice, and two identical
-		// index lines waste budget and confuse routing.
+		// Symlinked roots would otherwise index the same skill twice.
 		auto canonical_key( const std::filesystem::path& path ) -> std::string {
 			auto error = std::error_code{ };
 			const auto resolved = std::filesystem::weakly_canonical( path, error );
@@ -217,9 +214,7 @@ namespace mcode::skills {
 	auto discover_skills( const discovery_options& options ) -> discovery_report {
 		auto report = discovery_report{ };
 
-		// The top-level project root is also reachable through the nested walk,
-		// so directories are deduped by canonical path BEFORE validation: a
-		// skill scanned twice would otherwise be rejected twice.
+		// Deduped before validation: a skill scanned twice would be rejected twice.
 		auto scanned = std::unordered_set< std::string >{ };
 
 		auto scan = [ &scanned, &report ]( const std::filesystem::path& directory,
@@ -247,8 +242,7 @@ namespace mcode::skills {
 			scan( root / "skills", skill_origin::extension );
 		}
 
-		// Dedupe by canonical path, then resolve name collisions: the highest
-		// precedence origin wins, and no second index line exists for the losers.
+		// The highest-precedence origin wins; no second index line exists for the losers.
 		std::sort( report.entries.begin( ), report.entries.end( ),
 			[]( const skill_entry& left, const skill_entry& right ) {
 				if ( left.name != right.name ) {

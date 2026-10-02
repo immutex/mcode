@@ -1,7 +1,3 @@
-// The edit tool: anchor replacement with CRLF preservation and a bounded
-// unified diff. Split out of write_tools.cxx when it passed the 600-line
-// limit; the shared write/edit helpers live in write_tools_common.
-
 #include "mcode/tools/write_tools_common.hxx"
 
 #include <algorithm>
@@ -18,7 +14,6 @@ namespace mcode::tools {
 
 	namespace {
 
-		// One diff line: the kept ending is stripped so the diff can add its own.
 		[[nodiscard]] auto diff_line( std::string_view line ) -> std::string {
 			auto out = normalise( line );
 
@@ -29,8 +24,7 @@ namespace mcode::tools {
 			return out;
 		}
 
-		// Splits content into lines keeping line endings attached to each line, so
-		// rejoining is exact and CRLF survives the round trip.
+		// endings stay attached to their line, so rejoining is exact
 		struct split_lines {
 			std::vector< std::string > lines;
 		};
@@ -55,12 +49,7 @@ namespace mcode::tools {
 			return out;
 		}
 
-		// Rebuilds the edited text so each line keeps the line ending its ORIGINAL
-		// had. Lines are matched by index between the normalised before/after; a
-		// line outside the replaced span is byte-identical, so copying its original
-		// bytes (ending included) is exact, and a replaced line inherits the ending
-		// of the original line at the same index. A mixed-ending file keeps its
-		// mixture, and untouched lines are never rewritten.
+		// each line keeps the ending its ORIGINAL had, so a mixed-ending file stays mixed
 		[[nodiscard]] auto splice_with_original_endings( const std::string_view original,
 			const std::string_view normalised_after )
 			-> std::string {
@@ -70,9 +59,7 @@ namespace mcode::tools {
 			auto out = std::string{ };
 			out.reserve( normalised_after.size( ) + new_lines.lines.size( ) );
 
-			// Walk both line lists; where they agree in normalised content, emit
-			// the ORIGINAL bytes verbatim, otherwise emit the new line with the
-			// original's ending at that index (or LF when past the original's end).
+			// agreed lines emit the original bytes; a replaced line takes the ending at that index
 			auto old_index = std::size_t{ 0 };
 			auto new_index = std::size_t{ 0 };
 
@@ -127,8 +114,6 @@ namespace mcode::tools {
 			return out;
 		}
 
-		// A bounded unified diff of the changed region, not the whole file.
-		// File-local: only the edit tool produces diffs.
 		[[nodiscard]] auto make_unified_diff( const std::string_view before,
 			const std::string_view after, const std::string_view path ) -> std::string {
 			auto old_lines = split_keepings_endings( before );
@@ -140,8 +125,6 @@ namespace mcode::tools {
 			diff.append( path );
 			diff += "\n";
 
-			// The anchor is one contiguous replacement: find where the two texts
-			// first differ and where they last agree, and show that window only.
 			auto first_difference = std::size_t{ 0 };
 
 			while ( first_difference < old_lines.lines.size( ) &&
@@ -259,8 +242,7 @@ namespace mcode::tools {
 				"the file exists but could not be read; check it is not binary", false );
 		}
 
-		// Compare on a normalised copy so a CRLF file edited with an LF anchor
-		// still matches; the file's own endings are preserved per line on write.
+		// compare normalised, so an LF anchor matches a CRLF file; endings are restored on write
 		const auto normalised = normalise( *original );
 		const auto anchor = normalise( *old_string );
 		const auto replacement = normalise( *new_string );
@@ -288,10 +270,6 @@ namespace mcode::tools {
 				false );
 		}
 
-		// Build the replacement as normalised text, then splice it back into the
-		// ORIGINAL byte stream at line granularity: each replaced line takes the
-		// ending its original had, and lines outside the replaced span are never
-		// touched. A mixed-ending file keeps its mixture.
 		auto updated = std::string{ };
 
 		if ( occurrences == 1 ) {
@@ -318,12 +296,9 @@ namespace mcode::tools {
 				"the replacement was computed but the write failed; the file is unchanged", false );
 		}
 
-		// Record the new hash so a second edit in the same turn does not read as
-		// stale.
+		// so a second edit in the same turn does not read as stale
 		context.reads->record( *resolved, written->content_hash );
 
-		// The diff compares normalised text on both sides; `updated` carries the
-		// file's original endings after the splice.
 		const auto diff_after = normalise( updated );
 
 		auto out = std::string{ "{\"ok\":true,\"path\":\"" };

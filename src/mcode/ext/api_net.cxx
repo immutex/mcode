@@ -15,13 +15,10 @@ namespace mcode::ext {
 
 	namespace {
 
-		// The bound table: connect + total timeout, and a response byte cap.
-		// Every entry states a bound; these are the network rows.
 		inline constexpr auto NET_TIMEOUT_SECONDS = std::int64_t{ 30 };
 		inline constexpr auto NET_MAX_RESPONSE_BYTES = std::uint64_t{ 4 * 1024 * 1024 };
 
-		// The host an URL is addressed to, lowercased. The allowlist compares
-		// hosts, not full URLs: a path or query is not a different destination.
+		// the allowlist compares lowercased hosts, not full URLs.
 		[[nodiscard]] auto host_of( const std::string_view url ) -> std::string {
 			const auto parsed = mcode::net::parse_url( url );
 
@@ -40,16 +37,13 @@ namespace mcode::ext {
 			return host;
 		}
 
-		// The hosts the calling extension's manifest declares. The manifest's
-		// `net_hosts` key is the allowlist; an absent key with the `net`
-		// permission permits nothing, which is fail-closed.
+		// an absent net_hosts key with the `net` permission permits nothing: fail-closed.
 		[[nodiscard]] auto declared_hosts( const api_surface& self )
 			-> const std::vector< std::string >& {
 			return self.net_hosts( );
 		}
 
-		// The one policy check. Both entry points go through it, so there is
-		// exactly one place a host rule can drift.
+		// the one policy check: both entry points go through it.
 		[[nodiscard]] auto host_allowed( const api_surface& self,
 			const std::string_view url, std::string& reason ) -> bool {
 			if ( !manifest_allows( self, "net" ) ) {
@@ -94,8 +88,6 @@ namespace mcode::ext {
 		auto denial = std::string{ };
 
 		if ( !host_allowed( *self, url, denial ) ) {
-			// A policy refusal is environmental failure, not a contract
-			// violation: the extension can handle `nil, err`.
 			lua_pushnil( state );
 			lua_pushlstring( state, denial.data( ), denial.size( ) );
 
@@ -128,7 +120,6 @@ namespace mcode::ext {
 			return 2;
 		}
 
-		// The result is plain data: status, headers, body.
 		lua_createtable( state, 0, 3 );
 
 		lua_pushnumber( state, static_cast< double >( response->status ) );
@@ -178,9 +169,6 @@ namespace mcode::ext {
 			return 2;
 		}
 
-		// Search is routed through the configured provider, which is a host
-		// concern: the extension names WHAT to search, never WHERE. No host
-		// allowlist applies because the extension does not choose the endpoint.
 		auto* searcher = self->web_searcher( );
 
 		if ( searcher == nullptr ) {

@@ -18,8 +18,6 @@ namespace mcode::model {
 
 	namespace {
 
-		// Retry policy, from the model layer: exponential backoff with full
-		// jitter, capped, at most five attempts per request.
 		inline constexpr unsigned MAX_ATTEMPTS = 5;
 		inline constexpr std::chrono::milliseconds BACKOFF_BASE{ 500 };
 		inline constexpr std::chrono::milliseconds BACKOFF_CAP{ 30'000 };
@@ -27,9 +25,7 @@ namespace mcode::model {
 		inline constexpr unsigned MAX_BACKOFF_SHIFT = 16;
 		inline constexpr std::int64_t MILLISECONDS_PER_SECOND = 1000;
 
-		// Status codes that are fatal regardless of the body. 413 is fatal, not
-		// context overflow: the doc is explicit that an oversized request is a
-		// client bug to fix, not a context to trim.
+		// 413 is fatal, not context overflow: an oversized request is a client bug to fix.
 		[[nodiscard]] auto is_fatal_status( const int status ) noexcept -> bool {
 			switch ( status ) {
 				case 401:
@@ -58,7 +54,6 @@ namespace mcode::model {
 			}
 		}
 
-		// Body markers that name context overflow. Matched lowercased.
 		[[nodiscard]] auto body_names_context_overflow( const std::string_view body ) -> bool {
 			static constexpr std::string_view MARKERS[] = {
 				"context length",
@@ -77,9 +72,7 @@ namespace mcode::model {
 			return false;
 		}
 
-		// The 429 split. A rate limit clears on retry; a quota or spend-cap code
-		// is billing and never will, so retrying burns the user's time on a
-		// request that cannot succeed.
+		// a rate limit clears on retry; a quota or spend-cap code never will.
 		[[nodiscard]] auto body_names_quota( const std::string_view body ) -> bool {
 			static constexpr std::string_view MARKERS[] = {
 				"insufficient_quota",
@@ -97,8 +90,6 @@ namespace mcode::model {
 			return false;
 		}
 
-		// A refusal is its own outcome, distinct from a hard failure: the model
-		// answered, with something the harness must surface rather than retry.
 		[[nodiscard]] auto body_names_content_filter( const std::string_view body ) -> bool {
 			static constexpr std::string_view MARKERS[] = {
 				"content_filter",
@@ -123,23 +114,16 @@ namespace mcode::model {
 			return out;
 		}
 
-		// The sleep the client uses when the caller did not inject one. A real
-		// sleep is the production behaviour; a test always injects.
 		auto thread_sleep( const std::chrono::milliseconds duration ) -> void {
 			std::this_thread::sleep_for( duration );
 		}
 
-		// The default RNG. Seed quality does not matter for jitter; the value
-		// only needs to spread the retries.
 		auto default_random( ) -> std::uint64_t {
 			auto generator = std::random_device{ };
 
 			return ( static_cast< std::uint64_t >( generator( ) ) << 32 ) | generator( );
 		}
 
-		// Builds the transport request from a descriptor and a rendered body.
-		// The auth header and the descriptor's extra headers are merged here, so
-		// the transport sees one flat header set.
 		[[nodiscard]] auto build_http_request( const stream_request& request,
 			const std::string& body ) -> result< net::http_request > {
 			auto header_value = auth_header_value( request.provider.auth, request.api_key );
@@ -296,9 +280,7 @@ namespace mcode::model {
 			},
 			&failure );
 
-		// The stream callback cannot return a failure, so a malformed payload
-		// surfaces here. Whatever reached the sink already did, which is why the
-		// class below is partial_stream rather than a clean error.
+		// the stream callback cannot return a failure, so a malformed payload surfaces here.
 		if ( !sent ) {
 			if ( saw_event ) {
 				outcome = failure_class::partial_stream;
@@ -307,8 +289,6 @@ namespace mcode::model {
 			}
 
 			if ( failure.status == 0 ) {
-				// No response at all: DNS, refused connection, timeout. All
-				// transient by the taxonomy.
 				outcome = failure_class::transient;
 
 				return std::unexpected( sent.error( ) );
@@ -372,8 +352,6 @@ namespace mcode::model {
 					return std::unexpected( fail( result.error( ).code, error_message ) );
 			}
 
-			// The last attempt does not sleep: nothing follows it, so the delay
-			// would be pure latency before the caller sees the error.
 			if ( attempt_index + 1 >= MAX_ATTEMPTS ) {
 				return std::unexpected( fail( result.error( ).code, error_message ) );
 			}

@@ -1,12 +1,3 @@
-// The merge acceptance test: a real turn in which the model calls the real
-// `read` tool over a real HTTP round trip and receives real file content.
-
-// The ReAct loop, driven by a scripted fake client.
-//
-// The loop's correctness is the state machine's, not the transport's, so every
-// test here drives model_client with queued events and asserts on the visited
-// state sequence -- never on a network.
-
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
@@ -52,9 +43,7 @@ namespace {
 	using mcode::test::shutdown_socket;
 	using mcode::test::socket_handle;
 
-	// One SSE response per accepted connection, in order, on loopback. The
-	// teardown shuts the listening socket down before joining so a test that made
-	// fewer requests than scripted never blocks in accept().
+	// shutdown before joining so a test with fewer requests than scripted cannot block accept()
 	class e2e_server {
 	public:
 		explicit e2e_server( std::vector< std::string > responses )
@@ -143,12 +132,7 @@ namespace {
 
 }
 
-// The merge acceptance test: `exec` drives a real turn in which the model calls
-// the real `read` tool over a real HTTP round trip and receives real file
-// content. Not a state sequence, not a schema -- the file's text comes back.
 TEST_CASE( "exec drives a real read tool call over a loopback provider", "[loop][e2e]" ) {
-	// The tests run from the build tree, so the workspace is a temp directory
-	// with one real file the tool reads from disk.
 	const auto fixture_root = test::scratch_directory( "mcode-loop-e2e" );
 
 	const auto marker = std::string{ "marker-e2e-9137" };
@@ -254,8 +238,6 @@ TEST_CASE( "exec drives a real read tool call over a loopback provider", "[loop]
 	REQUIRE( outcome.has_value( ) );
 	CHECK( outcome->final_state == loop_state::handoff );
 
-	// The tool result in the history carries the file's real content, read from
-	// disk by the real handler -- not a stub, not a schema, not a state list.
 	auto found_content = false;
 	auto found_call = false;
 	auto result_is_correlated = false;
@@ -266,10 +248,7 @@ TEST_CASE( "exec drives a real read tool call over a loopback provider", "[loop]
 				&& block.result_json.find( marker ) != std::string::npos ) {
 				found_content = true;
 
-				// A tool result the model cannot correlate with the call it answers
-				// is a result it cannot use. Rendered with an empty id the model
-				// reports the result as missing and re-issues the call -- observed
-				// live, and invisible to a test that only checks the content.
+				// a tool result rendered with an empty id cannot be correlated by the model
 				result_is_correlated = block.tool_call_id == "call_1";
 			}
 

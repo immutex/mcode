@@ -50,13 +50,7 @@ namespace mcode::config {
 				path.string( ) + ": " + parsed.error( ).msg ) );
 		}
 
-		// An unknown section is a typo. `timout = 5` at the root, or `[agnet]`,
-		// would otherwise be stored and never read, so the user would believe the
-		// setting applied.
-		//
-		// Not applied to project scope: the rule below refuses anything outside two
-		// prefixes, so it already subsumes this one -- and its message is the one
-		// that tells a user what a cloned repo is allowed to do.
+		// an unknown section is a typo, and a stored typo looks like it applied.
 		for ( const auto& [ key, entry ] : parsed->keys( ) ) {
 			if ( level == scope::project ) {
 				break;
@@ -80,10 +74,7 @@ namespace mcode::config {
 			}
 		}
 
-		// Project scope may only add restrictions. Anything else is rejected here,
-		// at load, rather than being dropped silently later -- a project file that
-		// appears to widen a permission but does not is the confusing case, and a
-		// project file that DOES widen one is the dangerous case.
+		// project scope may only add restrictions; anything else is rejected at load.
 		if ( level == scope::project ) {
 			for ( const auto& [ key, entry ] : parsed->keys( ) ) {
 				auto permitted = false;
@@ -102,13 +93,7 @@ namespace mcode::config {
 						"'; it may only add 'permissions.deny' or 'permissions.ask'" ) );
 				}
 
-				// The name alone is not enough. `permissions.deny = "everything"` is
-				// valid TOML and names a permitted key, and it collides with the
-				// user's `permissions.deny` list in merge -- every consumer reads the
-				// result through get_string_array, which turns the type mismatch into
-				// an empty list, so the user's deny rules disappear and the blocked
-				// tool becomes callable. Only a list may occupy a whole prefix;
-				// anything BELOW a prefix is an addition and is always allowed.
+				// only a list may occupy a whole prefix; a scalar would collide in merge.
 				const auto exact_prefix = std::any_of( PROJECT_WRITABLE_PREFIXES.begin( ),
 					PROJECT_WRITABLE_PREFIXES.end( ),
 					[&]( const std::string_view prefix ) { return key == prefix; } );
@@ -127,8 +112,6 @@ namespace mcode::config {
 	auto merged_config::merge( std::vector< layer > layers ) -> result< merged_config > {
 		auto out = merged_config{ };
 
-		// Callers pass layers in whatever order they discovered them; sort by
-		// precedence so the merge is order-independent.
 		std::stable_sort( layers.begin( ), layers.end( ),
 			[]( const layer& left, const layer& right ) {
 				return static_cast< int >( left.level ) < static_cast< int >( right.level );
@@ -141,13 +124,8 @@ namespace mcode::config {
 				const auto existing = out.values_.find( key );
 
 				if ( existing != out.values_.end( ) && existing->second.kind == toml::value_kind::array ) {
-					// Lists merge; later entries append. Overriding an array
-					// wholesale would make a project file's extra deny rule erase the
-					// user's, which is the opposite of "may only add".
+					// A wholesale override would erase the user's entries.
 					if ( entry.kind != toml::value_kind::array ) {
-						// A non-list cannot merge with a list, and overwriting would
-						// silently drop restrictions. Fail closed rather than pick a
-						// winner.
 						return std::unexpected( fail( errc::config,
 							"layer " + std::to_string( static_cast< int >( source.level ) ) +
 							" sets '" + key + "' to a single value, but it is a list" ) );
@@ -255,7 +233,6 @@ namespace mcode::config {
 		-> std::vector< std::pair< scope, std::filesystem::path > > {
 		auto out = std::vector< std::pair< scope, std::filesystem::path > >{ };
 
-		// Managed first, so a user or project layer can override it.
 	#if defined( _WIN32 )
 		if ( auto program_data = environment_path( "PROGRAMDATA" ) ) {
 			out.emplace_back( scope::managed, *program_data / "mcode" / "config.toml" );

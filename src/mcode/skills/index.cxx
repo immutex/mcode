@@ -78,9 +78,7 @@ namespace mcode::skills {
 	auto render_index( const std::vector< skill_entry >& entries ) -> std::string {
 		auto out = std::string{ };
 
-		// Through `index_lines`, so the prompt and the CLI agree on the rows,
-		// their order and their sanitization. Two loops over the same data was
-		// how the CLI ended up printing unsanitized, unsorted descriptions.
+		// Through `index_lines`, so the prompt and the CLI share one ordering and sanitization.
 		for ( const auto& line : index_lines( entries ) ) {
 			if ( line.hidden ) {
 				continue;

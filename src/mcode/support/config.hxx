@@ -13,12 +13,7 @@
 
 namespace mcode::config {
 
-	// Config scopes, lowest precedence first.
-	//
-	// The rule that matters: **project scope can never widen.** It may add `ask`
-	// or `deny`, and nothing else. A cloned repository that could set `allow` or
-	// disable a sandbox would be a one-clone compromise, which is the same defect
-	// as auto-loading repo extensions (`12`).
+	// lowest precedence first; project scope may only add restrictions, never widen.
 	enum class scope {
 		managed,
 		user,
@@ -37,24 +32,13 @@ namespace mcode::config {
 		return "user";
 	}
 
-	// Keys a project-scope file may set. Everything else in a project file is
-	// rejected at load rather than ignored, because a silently dropped
-	// security-relevant key is the failure mode this list exists to prevent.
+	// everything else in a project file is rejected at load rather than ignored.
 	inline constexpr auto PROJECT_WRITABLE_PREFIXES = std::array{
 		std::string_view{ "permissions.deny" },
 		std::string_view{ "permissions.ask" },
 	};
 
-	// The top-level sections a config file may define. A key outside these is a
-	// typo, and storing it silently means the user believes a setting took effect
-	// when it did not -- which is the failure the parser exists to prevent.
-	//
-	// A section name lands here in the same change as its reader, never before:
-	// a name without a reader is accepted and then ignored, which is exactly the
-	// silent no-op this list exists to prevent.
-	//
-	// Section granularity, not per-key: the nested keys are owned by the docs that
-	// define them, and a per-key list here would be a second copy that drifts.
+	// A key outside these sections is a typo, and storing it silently looks like it applied.
 	inline constexpr auto CONFIG_SECTIONS = std::array{
 		std::string_view{ "model" },
 		std::string_view{ "agent" },
@@ -64,8 +48,6 @@ namespace mcode::config {
 		std::string_view{ "extensions" },
 		std::string_view{ "permissions" },
 		std::string_view{ "mcp" },
-		// Per-model capability overrides, for a gateway whose ids the
-		// compiled-in table cannot know. See `model/capabilities.hxx`.
 		std::string_view{ "models" },
 	};
 
@@ -77,8 +59,7 @@ namespace mcode::config {
 
 	class merged_config {
 	public:
-		// Layers are applied lowest-precedence first. A later layer overrides a
-		// scalar; arrays merge with later entries appended.
+		// A later layer overrides a scalar; arrays merge with later entries appended.
 		[[nodiscard]] static auto merge( std::vector< layer > layers ) -> result< merged_config >;
 
 		[[nodiscard]] auto get_string( std::string_view key ) const -> std::optional< std::string >;
@@ -88,9 +69,7 @@ namespace mcode::config {
 		[[nodiscard]] auto get_string_array( std::string_view key ) const
 			-> std::vector< std::string >;
 
-		// Which layer supplied a key. Used by `mcode config show` to answer "why is
-		// this value what it is", which is the question that makes scope layering
-		// debuggable rather than mysterious.
+		// which layer supplied a key, for `mcode config show`.
 		[[nodiscard]] auto source_of( std::string_view key ) const -> std::optional< scope >;
 
 		[[nodiscard]] auto keys( ) const noexcept -> const std::map< std::string, toml::value, std::less<> >& {
@@ -107,16 +86,12 @@ namespace mcode::config {
 		std::vector< scope > loaded_;
 	};
 
-	// Standard scope paths, per platform.
 	[[nodiscard]] auto default_layer_paths( ) -> std::vector< std::pair< scope, std::filesystem::path > >;
 
-	// Loads and merges the standard scopes. A missing file is skipped; an
-	// unreadable or malformed one is an error, because a config that half-loads
-	// is worse than one that fails.
+	// A missing file is skipped; an unreadable or malformed one is an error.
 	[[nodiscard]] auto load( const std::filesystem::path& project_root = { } )
 		-> result< merged_config >;
 
-	// Parses one file as a given scope, enforcing the project-scope restriction.
 	[[nodiscard]] auto load_layer( scope level, const std::filesystem::path& path )
 		-> result< layer >;
 

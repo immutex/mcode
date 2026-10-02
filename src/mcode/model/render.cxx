@@ -11,16 +11,8 @@ namespace mcode::model {
 
 	namespace {
 
-		// The one wire shape this branch renders. `request_spec` carries field
-		// names but no field shapes, so a descriptor whose body is not this
-		// layout cannot be rendered from the descriptor alone; refusing by name
-		// beats emitting a body the provider will reject with an opaque 400.
 		inline constexpr std::string_view RENDERABLE_SHAPE = "openai-chat-completions";
 
-		// One message in the [OI] shape. Tool calls render as the assistant
-		// message's `tool_calls` array; a tool result renders as its own message
-		// keyed by the call id. Multiple tool calls in one message are flattened
-		// to one entry per call.
 		[[nodiscard]] auto render_message( const message& source, const request_spec& fields )
 			-> result< json::node > {
 			auto out = json::node::make_object( );
@@ -75,8 +67,7 @@ namespace mcode::model {
 			return out;
 		}
 
-		// Sorted by name, once, here: the array's byte order is part of the cache
-		// prefix, and an unsorted list is a different byte string per run.
+		// sorted by name: the array's byte order is part of the cache prefix.
 		[[nodiscard]] auto render_tools( const std::vector< tool_spec >& tools ) -> result< json::node > {
 			auto sorted = tools;
 			std::sort( sorted.begin( ), sorted.end( ),
@@ -118,11 +109,7 @@ namespace mcode::model {
 			return "";
 		}
 
-		// Cache markers on the rendered body. Offsets address the marker-free
-		// body, and a marker occupies bytes, so applying them right to left keeps
-		// each offset valid when it is used: a left-to-right pass would shift
-		// every later offset and land the markers inside message text, which is a
-		// silent cache miss rather than an error.
+		// applied right to left: a marker occupies bytes, so each offset stays valid when used.
 		inline constexpr std::string_view CACHE_MARKER =
 			"\"cache_control\":{\"type\":\"ephemeral\"},";
 

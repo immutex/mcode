@@ -1,6 +1,3 @@
-// The helpers shared by the write and edit tools: the read-before-write
-// invariant, the permission decision, and the protected-path refusal.
-
 #include "mcode/tools/write_tools_common.hxx"
 
 #include <algorithm>
@@ -96,9 +93,7 @@ namespace mcode::tools {
 		if ( resolved ) {
 			request.resource = resolved->generic_string( );
 		} else {
-			// Outside the workspace: the engine still decides, on the
-			// canonical spelling of the named path. An unresolvable path
-			// stays a hard refusal -- there is nothing to judge.
+			// still judged, on the canonical spelling; an unresolvable path stays a hard refusal
 			auto candidate = std::filesystem::path{ space.root( ) } /
 				std::filesystem::path{ path };
 			auto canonical = platform::canonicalize( candidate );

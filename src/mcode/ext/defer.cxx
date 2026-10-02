@@ -12,9 +12,6 @@ namespace mcode::ext {
 
 	namespace {
 
-		// The deferred queue is bounded. An extension that defers in a loop hits
-		// the cap and gets an error, the same answer an unbounded timer registry
-		// would give.
 		inline constexpr auto MAX_DEFERRED = std::size_t{ 256 };
 
 	}

@@ -6,9 +6,7 @@ namespace mcode::perm {
 
 	namespace {
 
-		// Redirection and newline are command-shape, not token text: `>` writes
-		// where the file tools are forbidden, and an embedded newline is a command
-		// separator the gate would never see.
+		// `>` writes where the file tools are forbidden; a newline is a command separator.
 		inline constexpr auto SHELL_METACHARS = std::array{ '|', ';', '&', '`', '<', '>', '\n', '\r' };
 
 		inline constexpr auto EXEC_RUNNERS = std::array< std::string_view, 10 >{
@@ -28,9 +26,7 @@ namespace mcode::perm {
 			return false;
 		}
 
-		// Both shells expand `$` and `%` forms; either in argv means the executed
-		// text differs from the judged text. Both are rare in legitimate single
-		// commands, so refusing outright is the cheap exact gate.
+		// both shells expand `$` and `%`, so the executed text would differ from the judged text.
 		[[nodiscard]] auto is_substitution( const std::string_view token ) noexcept -> bool {
 			return token.find( '$' ) != std::string_view::npos ||
 				token.find( '%' ) != std::string_view::npos;
@@ -101,9 +97,7 @@ namespace mcode::perm {
 	}
 
 	auto is_exec_runner( const std::string_view program ) noexcept -> bool {
-		// Normalize the spelling the gate sees to the one the OS resolves: strip
-		// any leading path (both separators), lowercase, then compare. `/bin/sh`,
-		// `C:\...\cmd.exe` and `CMD` must all land on the runner list.
+		// `/bin/sh`, `C:\...\cmd.exe` and `CMD` must all land on the runner list.
 		auto name = std::string{ };
 
 		for ( const auto character : program ) {

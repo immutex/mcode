@@ -25,9 +25,7 @@ namespace mcode::mcp {
 
 		auto executable = config.command.front( );
 
-		// A name with a directory part is already a path; only a bare name is
-		// looked up on PATH. An absolute path through find_executable fails on
-		// some platforms even when the file exists.
+		// only a bare name is looked up on PATH: an absolute path fails on some platforms
 		const auto has_directory = executable.find( '/' ) != std::string::npos ||
 			executable.find( '\\' ) != std::string::npos;
 
@@ -118,8 +116,6 @@ namespace mcode::mcp {
 					eof_seen_ = true;
 
 					if ( !chunk->detail.empty( ) ) {
-						// An error rather than a clean close. Kept in the ring's
-						// sibling path: the diagnostic is worth surfacing.
 						auto tail = inbound{ };
 						tail.skipped = true;
 						tail.line_json = "transport: " + chunk->detail;

@@ -1,9 +1,3 @@
-// The [mcp] config section and the mcode.mcp.register extension route.
-//
-// Both funnel into one server_config and one validation, so the tests assert
-// the shared behavior once and the two entry points' differences (defaults,
-// error channels) separately.
-
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
@@ -107,10 +101,7 @@ enabled = false
 TEST_CASE( "the docs 22 example config loads verbatim", "[config][mcp]" ) {
 	auto root = test::scratch_directory( "mcp-config-docs" );
 
-	// Inline tables are outside the TOML subset this build reads, so the
-	// extension `config = { ... }` lines are the one part of docs/22's example
-	// this cannot carry; everything else is copied verbatim, including the
-	// `[mcp]` section that replaced the refused `[telemetry]` one.
+	// inline tables are outside the TOML subset this build reads
 	write_file( root / "config.toml", R"([model]
 provider = "openai-compatible"
 base_url = "https://example.com"
@@ -239,8 +230,6 @@ command = "npx"
 }
 
 TEST_CASE( "an unknown field under a server is refused", "[mcp]" ) {
-	// Inline tables are refused by the TOML reader itself, so the unknown field
-	// is written as a plain key -- the shape a real typo takes.
 	auto servers = parse_servers( R"(
 [mcp.servers.filesystem]
 command = ["npx"]
@@ -288,24 +277,18 @@ command = ["npx"]
 }
 
 TEST_CASE( "the token estimate uses the named heuristic", "[mcp]" ) {
-	// The threshold is 8192 TOKENS; at four characters per token that is 32768
-	// characters, exactly at the threshold: not a warning. One character more
-	// is one token more and crosses it.
+	// the threshold is in tokens at four characters each, so crossing needs an extra token
 	const auto at_threshold = std::string( 32768, 'x' );
 
 	CHECK( mcp::estimate_schema_tokens( at_threshold ) == mcp::MCP_SCHEMA_TOKEN_WARNING );
 	CHECK_FALSE( mcp::estimate_exceeds_warning(
 		mcp::estimate_schema_tokens( at_threshold ) ) );
 
-	// Integer division: one character more still divides to 8192, so the
-	// crossing needs a whole extra token -- 32772 characters is 8193 tokens.
 	const auto over_threshold = std::string( 32772, 'x' );
 
 	CHECK( mcp::estimate_exceeds_warning(
 		mcp::estimate_schema_tokens( over_threshold ) ) );
 
-	// The warning carries the measured cost, so the number the user reads is
-	// the number that was computed.
 	const auto message = mcp::schema_warning_message( "notion", 17161 );
 
 	CHECK( message.find( "17161" ) != std::string::npos );
@@ -348,7 +331,6 @@ end
 	REQUIRE( loaded.report.failed.empty( ) );
 	REQUIRE( loaded.extensions.size( ) == 1 );
 
-	// The declaration was refused: nothing reached the store.
 	REQUIRE( store.all( ).empty( ) );
 
 	std::filesystem::remove_all( root );
@@ -407,10 +389,8 @@ end
 	REQUIRE( declared->tools.size( ) == 2 );
 	REQUIRE( declared->source == mcp::server_source::extension );
 
-	// Not already approved: the extension route does not bypass consent.
 	REQUIRE_FALSE( declared->enabled );
 
-	// The config route produces the identical struct for the same data.
 	auto config_side = mcp::server_config{ };
 	config_side.name = "files";
 	config_side.transport = "stdio";

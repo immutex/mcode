@@ -10,14 +10,6 @@
 
 namespace mcode::model {
 
-	// Canonical provider-neutral model. Providers are thin: translate a
-	// request, parse a stream, own no policy. Everything here is a value type so
-	// a request can be copied for a retry or a branch without aliasing.
-	//
-	// JSON is carried as text, not as a parsed tree. Providers embed it directly
-	// into a request body, and the delta applier in D2 edits it in place; a
-	// parsed form would only add a second representation to keep in sync.
-
 	enum class role {
 		system,
 		user,
@@ -48,18 +40,13 @@ namespace mcode::model {
 	struct block {
 		block_kind kind = block_kind::text;
 
-		// text and thinking
 		std::string text;
 
-		// tool_call: the provider's call id, the tool name, and the arguments as
-		// a JSON object. Tool arguments arrive as string fragments and are only
-		// parsed once the call is complete, so an incomplete
-		// call is represented by an empty args_json, never by partial JSON.
+		// args are fragments until the call completes, so an incomplete call has empty args_json.
 		std::string tool_call_id;
 		std::string tool_name;
 		std::string args_json;
 
-		// tool_result
 		std::string result_json;
 		bool is_error = false;
 	};
@@ -89,8 +76,6 @@ namespace mcode::model {
 		std::string name;
 	};
 
-	// Reasoning effort. Providers that lack it ignore the field; the registry
-	// says which levels a model accepts.
 	enum class effort {
 		provider_default,
 		low,
@@ -99,17 +84,14 @@ namespace mcode::model {
 	};
 
 	enum class cache_mode {
-		// Provider does it automatically; nothing to send.
 		implicit,
-		// Requires explicit breakpoints.
 		explicit_markers,
-		// Not supported; the layout rule still applies, it just costs full price.
+		// not supported; the layout rule still applies, it just costs full price.
 		none,
 	};
 
 	struct cache_plan {
 		cache_mode mode = cache_mode::none;
-		// Byte offsets into the rendered prompt where a cache breakpoint goes.
 		std::vector< std::size_t > breakpoints;
 	};
 
@@ -121,8 +103,6 @@ namespace mcode::model {
 
 		effort reasoning_effort = effort::provider_default;
 
-		// Structured output schema, or empty. Providers that cannot express it
-		// must fail early rather than silently dropping the constraint.
 		std::string response_schema_json;
 
 		cache_plan cache;
@@ -132,7 +112,6 @@ namespace mcode::model {
 		bool stream = true;
 	};
 
-	// One normalized streaming event. The agent loop consumes only these.
 	struct chat_event {
 		enum class kind {
 			text_delta,
@@ -145,27 +124,22 @@ namespace mcode::model {
 
 		kind type = kind::text_delta;
 
-		// text_delta and thinking_delta
 		std::string text;
 
-		// tool_call_delta. `index` distinguishes parallel calls; the first
-		// fragment for an index carries id and name, later ones only args.
+		// the first fragment for an index carries id and name, later ones only args.
 		int index = 0;
 		std::string tool_call_id;
 		std::string tool_name;
 		std::string args_fragment;
 
-		// usage
 		std::int64_t input_tokens = 0;
 		std::int64_t output_tokens = 0;
 		std::int64_t cached_read_tokens = 0;
 		std::int64_t cache_write_tokens = 0;
 		std::int64_t reasoning_tokens = 0;
 
-		// turn_done
 		std::string stop_reason;
 
-		// error
 		errc code = errc::ok;
 		std::string message_text;
 		bool retryable = false;
@@ -182,7 +156,6 @@ namespace mcode::model {
 		[[nodiscard]] auto total_tokens( ) const noexcept -> std::int64_t;
 	};
 
-	// What a model accepts. Compiled-in JSON table, not code.
 	struct capabilities {
 		std::string model;
 
@@ -203,8 +176,7 @@ namespace mcode::model {
 		double price_output = 0.0;
 	};
 
-	// Cost is computed from provider-reported usage only, never estimated from a
-	// tokenizer. An unknown model prices at zero rather than guessing.
+	// computed from provider-reported usage only; an unknown model prices at zero.
 	[[nodiscard]] auto compute_cost( const capabilities& caps, const usage& counts ) -> double;
 
 }

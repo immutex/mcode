@@ -13,13 +13,8 @@ namespace mcode::ext {
 
 	namespace {
 
-		// A notification is one line of user attention. Past this the message is
-		// truncated: an unbounded notify is an unbounded write to the user's
-		// screen.
 		inline constexpr auto MAX_NOTIFY_CHARS = std::size_t{ 2'048 };
 
-		// The levels a notification may carry. Anything else is a contract
-		// violation rather than a silent downgrade.
 		const char* const NOTIFY_LEVELS[] = { "info", "warn", "error" };
 
 		[[nodiscard]] auto is_valid_level( const std::string_view level ) -> bool {
@@ -77,8 +72,6 @@ namespace mcode::ext {
 			return 0;
 		}
 
-		// No notifier installed. Attribution is preserved even on this path, so
-		// the line is still greppable and still named.
 		std::fprintf( stderr, "[%s] notify (%s): %s\n",
 			self->manifest( ).name.c_str( ), level.c_str( ), message.c_str( ) );
 

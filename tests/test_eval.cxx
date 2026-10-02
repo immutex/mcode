@@ -13,42 +13,32 @@ using namespace mcode;
 namespace {
 
 	auto fixture_root( ) -> std::filesystem::path {
-		// The fixture repo lives in the source tree; tests run from the build
-		// directory, so the path is resolved relative to the test binary's cwd via
-		// the CMake-provided definition.
 		return std::filesystem::path{ MCODE_FIXTURE_REPO };
 	}
 
 }
 
 TEST_CASE( "pass@k and pass^k are different questions", "[eval]" ) {
-	// Both are required: reporting only pass@k flatters a harness that works
-	// half the time.
+	// pass@k alone flatters a harness that works half the time, so reliability is required too
 	const auto all_passed = std::vector< bool >{ true, true, true };
 	const auto some_passed = std::vector< bool >{ true, false, true };
 	const auto none_passed = std::vector< bool >{ false, false, false };
 
-	// Capability: did ANY attempt succeed.
 	REQUIRE( eval::pass_at_k( all_passed ) == 1.0 );
 	REQUIRE( eval::pass_at_k( some_passed ) == 1.0 );
 	REQUIRE( eval::pass_at_k( none_passed ) == 0.0 );
 
-	// Reliability: did ALL attempts succeed.
 	REQUIRE( eval::pass_power_k( all_passed ) == 1.0 );
 	REQUIRE( eval::pass_power_k( some_passed ) == 0.0 );
 	REQUIRE( eval::pass_power_k( none_passed ) == 0.0 );
 
-	// The two must disagree on the flaky case, or one of them is redundant.
 	REQUIRE( eval::pass_at_k( some_passed ) != eval::pass_power_k( some_passed ) );
 
-	// An empty attempt list is not a pass.
 	REQUIRE( eval::pass_at_k( { } ) == 0.0 );
 	REQUIRE( eval::pass_power_k( { } ) == 0.0 );
 }
 
 TEST_CASE( "the fixture repo exists and has the expected shape", "[eval]" ) {
-	// A missing fixture would make every task error, which looks like a suite
-	// failure rather than a setup problem.
 	const auto root = fixture_root( );
 
 	REQUIRE( std::filesystem::exists( root ) );
@@ -57,7 +47,6 @@ TEST_CASE( "the fixture repo exists and has the expected shape", "[eval]" ) {
 	REQUIRE( std::filesystem::exists( root / "include" / "calculator.hxx" ) );
 	REQUIRE( std::filesystem::exists( root / "tests" / "test_calculator.cxx" ) );
 
-	// The project config exists and only restricts, which is what task 2 asserts.
 	REQUIRE( std::filesystem::exists( root / ".mcode" / "config.toml" ) );
 }
 
@@ -72,9 +61,7 @@ TEST_CASE( "the builtin suite has ten deterministic tasks with unique ids", "[ev
 		REQUIRE_FALSE( entry.id.empty( ) );
 		REQUIRE_FALSE( entry.description.empty( ) );
 
-		// A std::function is truthy whenever it is non-empty, so asserting that
-		// proved nothing. Running it does: a task whose body cannot execute is a
-		// broken suite, and this is the only place that would notice.
+		// a task body that cannot execute is a broken suite
 		auto outcome = entry.run( fixture_root( ) );
 
 		REQUIRE( static_cast< bool >( outcome ) );
@@ -91,8 +78,6 @@ TEST_CASE( "the builtin suite has ten deterministic tasks with unique ids", "[ev
 }
 
 TEST_CASE( "every task passes against the fixture repo", "[eval]" ) {
-	// This is the suite's own regression gate: if a harness change breaks one of
-	// the ten behaviours, this fails here rather than in CI's eval step.
 	const auto result = eval::run_suite( fixture_root( ) );
 
 	REQUIRE( result.total( ) == 10 );
@@ -108,8 +93,6 @@ TEST_CASE( "every task passes against the fixture repo", "[eval]" ) {
 }
 
 TEST_CASE( "the suite is deterministic across runs", "[eval]" ) {
-	// The whole argument for deterministic fixtures is that small-n suites
-	// swing run to run. Two runs must agree exactly on verdicts.
 	const auto first = eval::run_suite( fixture_root( ) );
 	const auto second = eval::run_suite( fixture_root( ) );
 
@@ -142,9 +125,7 @@ TEST_CASE( "run records serialize to parseable JSONL", "[eval]" ) {
 	REQUIRE( lines.size( ) == result.total( ) );
 
 	for ( const auto& line : lines ) {
-		// Each record must be valid JSON: the record is consumed by tooling, so a
-		// hand-built serializer that emits a malformed line would break the eval
-		// pipeline silently.
+		// records are consumed by tooling so each must be valid JSON
 		auto parsed = json::document::parse( line );
 		REQUIRE( static_cast< bool >( parsed ) );
 
@@ -152,7 +133,6 @@ TEST_CASE( "run records serialize to parseable JSONL", "[eval]" ) {
 			FAIL( "unparseable record: " << line );
 		}
 
-		// And it must carry the fields the schema requires.
 		REQUIRE( parsed->get_string( "run_id" ).has_value( ) );
 		REQUIRE( parsed->get_string( "task_id" ).has_value( ) );
 		REQUIRE( parsed->get_string( "suite" ).has_value( ) );
@@ -162,8 +142,6 @@ TEST_CASE( "run records serialize to parseable JSONL", "[eval]" ) {
 }
 
 TEST_CASE( "a detail message with quotes still produces valid JSON", "[eval]" ) {
-	// The detail field carries error messages, which contain quotes and Windows
-	// paths. An unescaped quote would corrupt the record.
 	auto record = eval::run_record{ };
 	record.run_id = "r";
 	record.timestamp = "t";

@@ -8,9 +8,7 @@ namespace mcode::skills {
 
 		inline constexpr char DELIMITER[] = "---";
 
-		// The first key of a nested mapping or sequence item, plus anchor and
-		// alias markers. A hyphen is legal inside a scalar, so only the
-		// bracketed and quoted forms are refused here.
+		// A hyphen is legal inside a scalar, so only the bracketed and quoted forms are here.
 		inline constexpr char NESTED_KEYS[] = "[{&*!|>%@`";
 
 		auto is_blank( const std::string_view line ) noexcept -> bool {
@@ -45,8 +43,7 @@ namespace mcode::skills {
 			return input.substr( begin, end - begin );
 		}
 
-		// Unquotes a double-quoted scalar. Escapes are not expanded: the value is
-		// data the model reads, not a format the harness interprets.
+		// Escapes are not expanded: the value is data the model reads, not a format we interpret.
 		auto unquote( const std::string_view text ) -> std::string {
 			if ( text.size( ) >= 2 && text.front( ) == '"' && text.back( ) == '"' ) {
 				return std::string{ text.substr( 1, text.size( ) - 2 ) };
@@ -55,7 +52,6 @@ namespace mcode::skills {
 			return std::string{ text };
 		}
 
-		// The subset: a scalar is text with no mapping, sequence or anchor syntax.
 		// A quote must close, or the value is refused rather than guessed at.
 		auto scalar_value( const std::string_view raw, std::string& out ) -> bool {
 			const auto value = trim( raw );
@@ -86,8 +82,7 @@ namespace mcode::skills {
 	auto frontmatter_span( const std::string_view text ) -> result< std::size_t > {
 		auto cursor = std::size_t{ 0 };
 
-		// A byte-order mark is skipped rather than treated as part of the
-		// delimiter, which would fail every file a Windows editor saved with one.
+		// A BOM is skipped, not treated as part of the delimiter.
 		if ( text.starts_with( "\xEF\xBB\xBF" ) ) {
 			cursor = 3;
 		}
@@ -137,9 +132,7 @@ namespace mcode::skills {
 		auto block = text.substr( 0, *span );
 		auto cursor = block.find( '\n' ) + 1;
 
-		// The closing delimiter is part of the block, so the loop must stop
-		// before it: a `---` line has no colon and would read as a parse error.
-		// A span this small cannot carry a content line, so the loop is skipped.
+		// Stop before the closing delimiter: a `---` line has no colon and would parse as an error.
 		const auto content_end = block.size( ) > 5
 			? block.rfind( '\n', block.size( ) - 5 ) : 0;
 
@@ -222,9 +215,7 @@ namespace mcode::skills {
 					"'disable-model-invocation' must be true or false" ) );
 			}
 
-			// Any other key must be a scalar. A list or table under an unused key
-			// is refused: the harness does not read it, so a structure there is
-			// either a mistake or a construct the subset mis-parses.
+			// An unused key must still be a scalar: a structure there is a mistake or a mis-parse.
 			if ( !scalar_value( raw, value ) ) {
 				return std::unexpected( fail( errc::config,
 					"'" + std::string{ key } + "' is not a plain scalar" ) );

@@ -1,6 +1,3 @@
-// The instruction chain: discovery order, closest-wins, byte caps with
-// broadest-first truncation, and the token budget as a warning, not a cut.
-
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
@@ -114,9 +111,7 @@ TEST_CASE( "a chain over the cap truncates the broadest file, not the closest",
 	"[instruct]" ) {
 	const auto root = test::scratch_directory( "chain-chaincap" );
 
-	// Three files of 24 KiB: each under the 32 KiB file cap, together over the
-	// 64 KiB chain cap. The root file is broadest, so it is the one that gets
-	// cut; the closest file survives intact.
+	// 24 KiB each: under the file cap, but 72 KiB total exceeds the 64 KiB chain cap.
 	write_file( root / "AGENTS.md", std::string( 24u * 1024u, 'r' ) );
 	write_file( root / "sub" / "AGENTS.md", std::string( 24u * 1024u, 'm' ) );
 	write_file( root / "sub" / "deep" / "AGENTS.md", std::string( 24u * 1024u, 'n' ) );
@@ -132,14 +127,13 @@ TEST_CASE( "a chain over the cap truncates the broadest file, not the closest",
 	CHECK( !closest.truncated );
 	CHECK( closest.text.size( ) == 24u * 1024u );
 	CHECK( chain.text.find( "nnn" ) != std::string::npos );
-	// The entries sum under the cap; the assembler adds one newline per entry.
+	// the cap sums entry bytes; the join's newline for each entry is outside it.
 	CHECK( chain.text.size( ) <= 64u * 1024u + chain.entries.size( ) );
 }
 
 TEST_CASE( "a fat chain is a warning, never a truncation", "[instruct]" ) {
 	const auto root = test::scratch_directory( "chain-tokenfat" );
 
-	// Well under the byte caps but over the 2K-token estimate.
 	write_file( root / "AGENTS.md", std::string( 12u * 1024u, 'w' ) );
 
 	const auto chain = instruct::assemble_chain( options_with( root ) );
@@ -147,7 +141,7 @@ TEST_CASE( "a fat chain is a warning, never a truncation", "[instruct]" ) {
 	CHECK( chain.estimated_tokens > INSTRUCTION_CHAIN_TOKEN_BUDGET );
 	CHECK( chain.warnings.size( ) == 1 );
 	CHECK( !chain.entries.front( ).truncated );
-	// The file is 12 KiB with no trailing newline; the assembler adds one.
+	// the file has no trailing newline; the assembler adds one.
 	CHECK( chain.text.size( ) == 12u * 1024u + 1 );
 }
 
@@ -167,7 +161,6 @@ TEST_CASE( "the prompt states closest-wins and orders the contradiction correctl
 	"[instruct]" ) {
 	const auto root = test::scratch_directory( "chain-prompt" );
 
-	// Contradictory instructions: the nested file is the closer authority.
 	write_file( root / "AGENTS.md", "indent with spaces\n" );
 	write_file( root / "sub" / "AGENTS.md", "indent with tabs\n" );
 

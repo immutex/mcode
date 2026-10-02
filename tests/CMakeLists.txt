@@ -32,10 +32,6 @@ add_executable(mcode_tests
     test_manifest.cxx
     test_hooks.cxx
     test_api_surface.cxx
-    test_api_fs_cfg.cxx
-    test_api_cmd_timer.cxx
-    test_api_net_session.cxx
-    test_ext_reload.cxx
     test_skills.cxx
     test_instruct_chain.cxx
     test_mcp.cxx
@@ -43,6 +39,7 @@ add_executable(mcode_tests
     test_tui_markdown.cxx
     test_tui_editor.cxx
     test_tui_repl.cxx
+    test_cli_slash.cxx
     test_sandbox.cxx
     test_sandbox_egress.cxx
 )

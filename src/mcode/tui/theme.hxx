@@ -1,20 +1,15 @@
 #pragma once
 
-#include "mcode/tui/cell.hxx"
-#include "mcode/tui/tty.hxx"
 #include <string_view>
 #include <vector>
 
+#include "mcode/tui/cell.hxx"
+#include "mcode/tui/tty.hxx"
+
 namespace mcode::tui {
 
-	// The theme table. Each token declares its {truecolor, ansi256, ansi16}
-	// triple; the renderer resolves the whole table once per session at the
-	// probed depth, never per cell. With no colour at all the resolution is
-	// attributes only: bold for emphasis, no fg or bg changes.
-	//
-	// The token names and the fallback rule are the durable part; the values
-	// are chosen against a real terminal and live in frame.cxx's
-	// token_color, which is the one place a depth is consulted.
+	// One token's value at each depth. `truecolor` is "#rrggbb"; the other two
+	// are SGR parameters, already in their final form.
 	struct theme_entry {
 		token name;
 		const char* truecolor;
@@ -22,12 +17,14 @@ namespace mcode::tui {
 		const char* ansi16;
 	};
 
-	// The table itself, for documentation and tests. The emitter reads
-	// token_color; this is the declared contract the values must match.
+	// The declared theme, for documentation and tests.
 	[[nodiscard]] auto theme_table( ) -> const std::vector< theme_entry >&;
 
-	// Resolves one token at one depth. The single resolution point.
-	[[nodiscard]] auto resolve_token( token value, capabilities::color_depth depth )
+	// Resolves one token at one depth. The single resolution point: the values
+	// live in `theme_table` and nowhere else, so the table cannot drift from
+	// what the emitter writes. Empty means no colour, and attributes carry the
+	// emphasis.
+	[[nodiscard]] auto token_color( token value, capabilities::color_depth depth )
 		-> std::string_view;
 
 }

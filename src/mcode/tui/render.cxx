@@ -2,78 +2,78 @@
 
 #include <algorithm>
 #include <array>
-#include <mutex>
+#include <string>
 #include <utility>
 
 #include "mcode/tui/frame.hxx"
+#include "mcode/tui/theme.hxx"
 
 namespace mcode::tui {
 
 	namespace {
 
-		// The live region: prompt + status + streaming + tool rows, bounded.
-		inline constexpr std::size_t LIVE_ROWS = 6;
-
 		inline constexpr std::array< std::string_view, SPINNER_FRAMES > SPINNER_GLYPHS = {
 			"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
 		};
 
+		// One column wide, so every gutter lines up.
+		inline constexpr std::string_view GUTTER_THOUGHT = "✻";
+		inline constexpr std::string_view GUTTER_DONE = "✓";
+		inline constexpr std::string_view GUTTER_OUTPUT = "│";
+
+		// Measured over every tool, not the visible ones, so the target column
+		// does not shift as calls come and go.
+		[[nodiscard]] auto widest_verb( const std::vector< render_state::active_tool >& tools )
+			-> std::size_t {
+			auto widest = std::size_t{ 0 };
+
+			for ( const auto& tool : tools ) {
+				widest = std::max( widest, string_width( tool.verb, AMBIGUOUS_WIDTH ) );
+			}
+
+			return widest;
+		}
+
+		[[nodiscard]] auto widest_command_name( const std::vector< slash_command >& matches )
+			-> std::size_t {
+			auto widest = std::size_t{ 0 };
+
+			for ( const auto& entry : matches ) {
+				widest = std::max( widest, string_width( entry.name, AMBIGUOUS_WIDTH ) );
+			}
+
+			return widest;
+		}
+
 		[[nodiscard]] auto format_elapsed( const std::uint64_t ms ) -> std::string {
-			auto seconds = ms / 1000;
-			const auto tenths = ( ms % 1000 ) / 100;
-
-			auto out = std::to_string( seconds );
-			out += '.';
-			out += std::to_string( tenths );
-			out += 's';
-
-			return out;
+			return std::to_string( ms / 1000 ) + "." + std::to_string( ( ms % 1000 ) / 100 ) + "s";
 		}
 
 		[[nodiscard]] auto format_tokens( const std::uint64_t tokens ) -> std::string {
-			if ( tokens >= 1000 ) {
-				auto tenths = ( tokens % 1000 ) / 100;
-				auto out = std::to_string( tokens / 1000 );
-				out += '.';
-				out += std::to_string( tenths );
-				out += "k tok";
-
-				return out;
+			if ( tokens < 1000 ) {
+				return std::to_string( tokens ) + " tok";
 			}
 
-			return std::to_string( tokens ) + " tok";
+			return std::to_string( tokens / 1000 ) + "." +
+				std::to_string( ( tokens % 1000 ) / 100 ) + "k tok";
 		}
 
 		[[nodiscard]] auto format_cost( const double cost ) -> std::string {
-			// Three decimals truncate a sub-millicent spend to "$0.000", which
-			// reads as "free". A cheap model costs a fraction of a millicent
-			// per turn, so a non-zero spend gets a digit more rather than
-			// disappearing.
+			// A sub-millicent spend rounded to "$0.000" reads as free.
 			if ( cost > 0.0 && cost < 0.001 ) {
 				auto scaled = static_cast< long long >( cost * 100'000.0 );
 				auto out = std::string{ "$0." };
-
-				if ( scaled < 10 ) {
-					out += "0000";
-				} else if ( scaled < 100 ) {
-					out += "000";
-				} else if ( scaled < 1000 ) {
-					out += "00";
-				} else if ( scaled < 10'000 ) {
-					out += '0';
-				}
-
+				const auto digits = scaled < 10 ? 4 : scaled < 100 ? 3 : scaled < 1000 ? 2
+					: scaled < 10'000 ? 1 : 0;
+				out.append( static_cast< std::size_t >( digits ), '0' );
 				out += std::to_string( scaled );
 
 				return out;
 			}
 
-			auto out = std::string{ "$" };
-			auto whole = static_cast< long long >( cost * 1000 );
-
-			out += std::to_string( whole / 1000 );
-			out += '.';
-			const auto fraction = whole % 1000;
+			auto whole = static_cast< long long >( cost * 1000.0 );
+			auto fraction = whole % 1000;
+			auto out = std::string{ "$" } + std::to_string( whole / 1000 ) + ".";
 
 			if ( fraction < 100 ) {
 				out += '0';
@@ -83,9 +83,36 @@ namespace mcode::tui {
 				out += '0';
 			}
 
-			out += std::to_string( fraction );
+			return out + std::to_string( fraction );
+		}
 
-			return out;
+		// The live row shows only the tail, so a long chain of thought cannot
+		// grow the region without bound.
+		[[nodiscard]] auto tail_of( const std::string& text ) -> std::string_view {
+			const auto last_break = text.rfind( '\n' );
+
+			return last_break == std::string::npos
+				? std::string_view{ text }
+				: std::string_view{ text }.substr( last_break + 1 );
+		}
+
+		// Completion collapses the reasoning to one committed line, like every
+		// other live row. Committing the whole chain of thought would dump
+		// dozens of lines into scrollback per turn.
+		[[nodiscard]] auto thought_summary( const std::string& text, const std::size_t columns )
+			-> std::string {
+			const auto break_at = text.find( '\n' );
+			const auto first_line = std::string_view{ text }.substr( 0, break_at );
+			const auto gutter = string_width( GUTTER_THOUGHT, AMBIGUOUS_WIDTH ) + 1;
+			const auto budget = columns > gutter ? columns - gutter : columns;
+			const auto bounded = truncate_to_width( first_line, budget, AMBIGUOUS_WIDTH );
+
+			// Reserve the final column for the marker, or the line overruns.
+			if ( bounded.size( ) == first_line.size( ) || budget == 0 ) {
+				return bounded;
+			}
+
+			return truncate_to_width( first_line, budget - 1, AMBIGUOUS_WIDTH ) + "…";
 		}
 
 	}
@@ -101,7 +128,6 @@ namespace mcode::tui {
 
 	auto event_queue::drain( ) -> std::vector< item > {
 		auto locked = std::lock_guard< std::mutex >{ guard_ };
-
 		auto out = std::vector< item >{ };
 
 		while ( !items_.empty( ) ) {
@@ -119,7 +145,7 @@ namespace mcode::tui {
 	}
 
 	render_coordinator::render_coordinator( )
-		: previous_( LIVE_ROWS, 80 ), current_( LIVE_ROWS, 80 ) { }
+		: previous_( LIVE_REGION_ROWS, 80 ), current_( LIVE_REGION_ROWS, 80 ) { }
 
 	auto render_coordinator::set_capabilities( const capabilities& value ) -> void {
 		caps_ = value;
@@ -128,25 +154,17 @@ namespace mcode::tui {
 	auto render_coordinator::resize( const std::size_t screen_rows,
 		const std::size_t screen_columns ) -> void {
 		screen_rows_ = screen_rows;
-		// The buffers are the region, not the screen: the transcript above it
-		// lives in the terminal's own scrollback and is never repainted.
-		//
-		// One column is reserved. A row filled to the terminal's last column
-		// makes the terminal wrap the cursor to the next line, which desyncs
-		// every relative movement that follows -- and the row that wrapped is
-		// the prompt's, so the caret would land a line below the text.
-		const auto usable = screen_columns > 1 ? screen_columns - 1 : screen_columns;
 
-		previous_.resize( LIVE_REGION_ROWS, usable );
-		current_.resize( LIVE_REGION_ROWS, usable );
+		// One column is reserved: a row filled to the last column wraps the
+		// cursor, which desyncs every relative move that follows.
+		screen_columns_ = screen_columns > 1 ? screen_columns - 1 : screen_columns;
+
+		previous_.resize( painted_rows_, screen_columns_ );
+		current_.resize( painted_rows_, screen_columns_ );
 	}
 
 	auto render_coordinator::park( ) const -> std::string {
-		auto out = std::string{ "\x1b[" };
-		out += std::to_string( screen_rows_ );
-		out += ";1H";
-
-		return out;
+		return "\x1b[" + std::to_string( screen_rows_ ) + ";1H";
 	}
 
 	auto render_coordinator::invalidate( ) -> void {
@@ -154,14 +172,12 @@ namespace mcode::tui {
 	}
 
 	auto render_coordinator::reserve( ) const -> std::string {
-		// Scroll the screen until the cursor is on its last row, so the region
-		// occupies the BOTTOM `LIVE_REGION_ROWS` rows. Emitting only the
-		// region's height left the cursor near the top, and every frame then
-		// painted over the transcript instead of below it.
 		if ( screen_rows_ <= 1 ) {
 			return { };
 		}
 
+		// Scroll until the cursor is on the last row, so the region sits at the
+		// bottom rather than the top.
 		auto out = std::string{ };
 
 		for ( auto index = std::size_t{ 0 }; index + 1 < screen_rows_; ++index ) {
@@ -173,12 +189,13 @@ namespace mcode::tui {
 
 	auto render_coordinator::set_prompt( std::string text, const std::size_t cursor_byte ) -> void {
 		const auto clamped = std::min( cursor_byte, text.size( ) );
-
-		// Display columns, not bytes: the caret must sit under the glyph, and a
-		// wide cluster advances two.
 		state_.input_cursor = string_width( std::string_view{ text }.substr( 0, clamped ),
 			AMBIGUOUS_WIDTH );
 		state_.input_line = std::move( text );
+	}
+
+	auto render_coordinator::set_palette( slash_palette value ) -> void {
+		state_.palette = std::move( value );
 	}
 
 	auto render_coordinator::set_meter( std::string model_name, const std::uint64_t tokens,
@@ -189,41 +206,62 @@ namespace mcode::tui {
 		state_.turn_elapsed_ms = elapsed_ms;
 	}
 
+	auto render_coordinator::queue_block( std::string text ) -> void {
+		if ( text.empty( ) ) {
+			return;
+		}
+
+		if ( !state_.pending_commit.empty( ) ) {
+			state_.pending_commit += '\n';
+		}
+
+		state_.pending_commit += text;
+
+		if ( state_.pending_commit.back( ) != '\n' ) {
+			state_.pending_commit += '\n';
+		}
+	}
+
+	auto render_coordinator::queue_thought( ) -> void {
+		if ( state_.thinking_text.empty( ) ) {
+			return;
+		}
+
+		queue_block( std::string{ GUTTER_THOUGHT } + " " +
+			thought_summary( state_.thinking_text, screen_columns_ ) );
+		state_.thinking_text.clear( );
+		state_.thinking_line.clear( );
+	}
+
 	auto render_coordinator::apply( const event_queue::item& value ) -> void {
 		switch ( value.type ) {
+			case event_queue::kind::thinking_delta: {
+				state_.thinking_text += value.text;
+				state_.thinking_line = render_inline( tail_of( state_.thinking_text ),
+					token::thinking );
+
+				break;
+			}
+
 			case event_queue::kind::assistant_delta: {
 				state_.streaming_text += value.text;
-
-				// The live region has one row for the answer, so the tail is
-				// what fits. The text accumulates because each delta is a
-				// fragment: rendering only the newest one showed a single chunk
-				// instead of an answer that grows.
-				const auto last_break = state_.streaming_text.rfind( '\n' );
-				const auto tail = last_break == std::string::npos
-					? std::string_view{ state_.streaming_text }
-					: std::string_view{ state_.streaming_text }.substr( last_break + 1 );
-
-				state_.streaming_line = render_inline( tail, token::text );
+				state_.streaming_line = render_inline( tail_of( state_.streaming_text ),
+					token::text );
 
 				break;
 			}
 
 			case event_queue::kind::tool_start: {
-				// Text before a tool call is a finished message. Without this
-				// the preamble and the answer after the call were concatenated
-				// into one run-on line.
-				if ( !state_.streaming_text.empty( ) ) {
-					state_.pending_commit += state_.streaming_text;
-					state_.pending_commit += '\n';
-					state_.streaming_text.clear( );
-					state_.streaming_line.clear( );
-				}
+				queue_thought( );
+
+				queue_block( state_.streaming_text );
+				state_.streaming_text.clear( );
+				state_.streaming_line.clear( );
 
 				auto tool = render_state::active_tool{ };
 				tool.verb = value.text;
+				tool.target = value.target;
 				tool.started_ms = value.stamp_ms;
-				tool.elapsed_ms = 0;
-				tool.spinner_frame = 0;
 
 				state_.tools.push_back( std::move( tool ) );
 
@@ -231,12 +269,7 @@ namespace mcode::tui {
 			}
 
 			case event_queue::kind::tool_end: {
-				// The completed call goes to scrollback, where it stays. It
-				// used to be pushed into a member nothing rendered, so tool
-				// results were collected and then never shown at all.
-				state_.pending_commit += "\u2713 ";
-				state_.pending_commit += value.text;
-				state_.pending_commit += '\n';
+				queue_block( std::string{ GUTTER_DONE } + " " + value.text );
 
 				if ( !state_.tools.empty( ) ) {
 					state_.tools.pop_back( );
@@ -246,11 +279,9 @@ namespace mcode::tui {
 			}
 
 			case event_queue::kind::turn_start: {
-				// A new turn starts with a clean live region. Nothing is
-				// committed here: the previous turn's text was already handed
-				// over by `turn_end`, and committing again would print it
-				// twice.
 				state_.tools.clear( );
+				state_.thinking_text.clear( );
+				state_.thinking_line.clear( );
 				state_.streaming_text.clear( );
 				state_.streaming_line.clear( );
 				state_.turn_elapsed_ms = 0;
@@ -259,29 +290,23 @@ namespace mcode::tui {
 			}
 
 			case event_queue::kind::turn_end: {
-				// The answer moves to the commit queue rather than being
-				// dropped. The live region is cleared on every repaint, so
-				// discarding the text here erased the reply before it could be
-				// read -- the transcript only ever showed tool activity.
-				if ( !state_.streaming_text.empty( ) ) {
-					state_.pending_commit += state_.streaming_text;
-					state_.pending_commit += '\n';
-				}
+				queue_thought( );
+
+				queue_block( state_.streaming_text );
 
 				state_.tools.clear( );
+				state_.thinking_text.clear( );
+				state_.thinking_line.clear( );
 				state_.streaming_text.clear( );
 				state_.streaming_line.clear( );
 
 				break;
 			}
-
 		}
 	}
 
 	auto render_coordinator::advance_tools( const std::uint64_t now_ms ) -> void {
 		for ( auto& tool : state_.tools ) {
-			// A stamp of zero means the producer did not supply one, which
-			// leaves the row at its initial zero rather than inventing a start.
 			if ( tool.started_ms == 0 || now_ms <= tool.started_ms ) {
 				continue;
 			}
@@ -292,33 +317,53 @@ namespace mcode::tui {
 		}
 	}
 
+	auto render_coordinator::region_rows( ) const -> std::size_t {
+		return region_rows_for( state_, screen_rows_ );
+	}
+
 	auto render_coordinator::flush( ) -> std::string {
 		if ( !state_.pending_commit.empty( ) ) {
 			return commit( std::move( state_.pending_commit ) );
 		}
 
-		current_ = build_frame( state_, previous_.rows( ), previous_.columns( ), AMBIGUOUS_WIDTH );
+		const auto rows = region_rows( );
 
-		// The first frame is DRAWN, not just recorded. Returning empty here
-		// left the screen blank until some later frame differed, and at an idle
-		// prompt the only thing that differs is what the user types -- so the
-		// prompt, the status line and every committed row were invisible until
-		// then. `resize` has already blanked `previous_` to the right size, so
-		// emitting against it writes the whole frame.
+		// A height change moves every row. The terminal still shows the old
+		// region, so it is erased first: clearing the tracked buffer alone
+		// would diff the new frame against a blank model of a screen that is
+		// not blank. Growth then scrolls, or the new rows paint over the
+		// transcript above the region.
+		auto scroll = std::string{ };
+
+		if ( rows != painted_rows_ ) {
+			const auto emitter = ansi_emitter{ caps_ };
+
+			scroll = park( );
+			scroll += emitter.clear_region( painted_rows_ );
+
+			if ( rows > painted_rows_ ) {
+				scroll += park( );
+
+				for ( auto index = painted_rows_; index < rows; ++index ) {
+					scroll += '\n';
+				}
+			}
+
+			painted_rows_ = rows;
+			previous_.resize( rows, screen_columns_ );
+			current_.resize( rows, screen_columns_ );
+			previous_.clear( );
+		}
+
+		current_ = build_frame( state_, painted_rows_, screen_columns_, AMBIGUOUS_WIDTH );
+
 		auto emitter = ansi_emitter{ caps_ };
-		auto bytes = emitter.emit( previous_, current_ );
+		auto bytes = std::move( scroll );
+		bytes += emitter.emit( previous_, current_ );
 
-		// Leave the caret on the prompt row, under the typed text. Without this
-		// the cursor stayed wherever the last changed run ended -- the status
-		// line or a tool row -- so the user could not see where typing would
-		// land, and the shell's own cursor flickered around the live region.
-		//
-		// Clamped to the row: a prompt longer than the terminal would otherwise
-		// address a column past the edge and wrap.
-		const auto prompt_row = previous_.rows( ) == 0 ? std::size_t{ 0 }
-			: previous_.rows( ) - 1;
-		const auto widest = previous_.columns( ) == 0 ? std::size_t{ 0 }
-			: previous_.columns( ) - 1;
+		// The caret belongs under the typed text, not where the last run ended.
+		const auto prompt_row = painted_rows_ - 1;
+		const auto widest = screen_columns_ == 0 ? std::size_t{ 0 } : screen_columns_ - 1;
 		const auto column = std::min(
 			std::size_t{ PROMPT_PREFIX_WIDTH } + state_.input_cursor, widest );
 
@@ -334,44 +379,51 @@ namespace mcode::tui {
 
 		auto emitter = ansi_emitter{ caps_ };
 
-		// Move to the region top, erase everything from there down, print the
-		// finished text into scrollback, then re-reserve the region. The
-		// terminal owns the committed line from here on: it scrolls naturally
-		// and survives a crash, which is the point of the hybrid model.
-		auto out = emitter.region_top( LIVE_REGION_ROWS );
+		// Park first: everything below is relative to the parked row.
+		auto out = park();
+		out += emitter.region_top( painted_rows_ );
 		out += "\x1b[0J";
-
-		// A trailing newline would leave the cursor on the row below the text,
-		// so the region is re-reserved from there.
-		if ( !text.empty( ) && text.back( ) != '\n' ) {
-			text += '\n';
-		}
-
 		out += text;
 
-		// Scroll the text clear of the region.
-		//
-		// The text was written starting at the region's TOP row, so its first
-		// lines sit exactly where the region will be redrawn -- and the next
-		// frame overwrote all but the last line. Scrolling by the region's full
-		// height pushes every committed line above it, whatever the text's
-		// length, and leaves the cursor on the screen's last row.
-		for ( auto index = std::size_t{ 0 }; index < LIVE_REGION_ROWS; ++index ) {
+		if ( text.empty( ) || text.back( ) != '\n' ) {
 			out += '\n';
 		}
 
-		// Position absolutely rather than counting: the scroll above may have
-		// moved the cursor by less than the newlines emitted once the screen
-		// stopped scrolling.
-		out += "\x1b[";
-		out += std::to_string( screen_rows_ );
-		out += ";1H";
+		// Scroll the committed text clear of the region, whatever its length.
+		for ( auto index = std::size_t{ 0 }; index < painted_rows_; ++index ) {
+			out += '\n';
+		}
 
-		// The screen no longer shows the old frame, so the next diff must be
-		// against a blank buffer rather than a stale one.
-		previous_ = cell_buffer{ LIVE_REGION_ROWS, previous_.columns( ), AMBIGUOUS_WIDTH };
+		out += park();
+
+		previous_.clear( );
 
 		return out;
+	}
+
+	auto region_rows_for( const render_state& state, const std::size_t screen_rows ) -> std::size_t {
+		// prompt + status
+		auto rows = std::size_t{ 2 };
+
+		if ( state.palette.open && !state.palette.matches.empty( ) ) {
+			rows += state.palette.matches.size( );
+		}
+
+		if ( !state.thinking_line.empty( ) ) {
+			++rows;
+		}
+
+		if ( !state.streaming_line.empty( ) ) {
+			++rows;
+		}
+
+		rows += state.tools.size( );
+
+		// Bounded by the terminal and by the spec's budget.
+		const auto ceiling = std::min( LIVE_REGION_MAX_ROWS,
+			screen_rows > 1 ? screen_rows - 1 : std::size_t{ 1 } );
+
+		return std::clamp( rows, std::size_t{ 2 }, std::max( ceiling, std::size_t{ 2 } ) );
 	}
 
 	auto build_frame( const render_state& state, const std::size_t row_count,
@@ -382,13 +434,9 @@ namespace mcode::tui {
 			return buffer;
 		}
 
-		// Bottom-up: the prompt owns the last row, the status line sits above
-		// it, tool rows and the streaming tail fill upward. The prompt is
-		// anchored so the cursor lands under it regardless of how many tool
-		// rows are live.
 		auto row = row_count;
 
-		const auto write_up = [&]( const styled_line& line ) {
+		const auto write_up = [ & ]( const styled_line& line ) {
 			if ( row == 0 ) {
 				return;
 			}
@@ -397,7 +445,7 @@ namespace mcode::tui {
 			buffer.write_line( row, line );
 		};
 
-		// The prompt row last, so the cursor lands under it.
+		// Bottom-up: prompt, palette, status line, then live content.
 		{
 			auto line = styled_line{ };
 			line.push_back( { std::string{ PROMPT_PREFIX }, token::accent } );
@@ -406,42 +454,84 @@ namespace mcode::tui {
 			write_up( line );
 		}
 
-		// The status line carries the meter; no progress bars.
+		if ( state.palette.open && !state.palette.matches.empty( ) ) {
+			const auto widest = widest_command_name( state.palette.matches );
+
+			// Reversed, because the buffer is filled from the bottom up.
+			for ( auto index = state.palette.matches.size( ); index > 0; --index ) {
+				const auto& entry = state.palette.matches[ index - 1 ];
+				const auto selected = index - 1 == state.palette.selected;
+
+				auto line = styled_line{ };
+				line.push_back( { selected ? "▸ " : "  ",
+					selected ? token::accent : token::muted } );
+				line.push_back( { "/" + entry.name, selected ? token::accent : token::text,
+					token::none, selected, false, false } );
+
+				const auto padding = widest -
+					string_width( entry.name, ambiguous_width ) + 2;
+				line.push_back( { std::string( padding, ' ' ), token::none } );
+				line.push_back( { entry.description, token::muted } );
+
+				write_up( line );
+			}
+		}
+
 		{
 			auto line = styled_line{ };
 			line.push_back( { state.model_name, token::accent } );
-			line.push_back( { " \u25b8 ", token::muted } );
+			line.push_back( { " ▸ ", token::muted } );
 			line.push_back( { format_tokens( state.total_tokens ), token::warn } );
-			line.push_back( { " \u25b8 ", token::muted } );
+			line.push_back( { " ▸ ", token::muted } );
 			line.push_back( { format_cost( state.total_cost ), token::warn } );
-			line.push_back( { " \u25b8 ", token::muted } );
+			line.push_back( { " ▸ ", token::muted } );
 			line.push_back( { format_elapsed( state.turn_elapsed_ms ), token::muted } );
 
 			write_up( line );
 		}
 
-		// The streaming markdown tail.
-		if ( !state.streaming_line.empty( ) ) {
-			write_up( state.streaming_line );
+		// Oldest first, so the newest call sits nearest the status line.
+		{
+			const auto widest = widest_verb( state.tools );
+
+			for ( auto index = state.tools.size( ); index > 0; --index ) {
+				const auto& tool = state.tools[ index - 1 ];
+
+				auto line = styled_line{ };
+				line.push_back( { std::string{ spinner_glyph( tool.spinner_frame ) } + " ",
+					token::accent } );
+				line.push_back( { tool.verb, token::text } );
+
+				if ( !tool.target.empty( ) ) {
+					const auto padding = widest -
+						string_width( tool.verb, ambiguous_width ) + 2;
+					line.push_back( { std::string( padding, ' ' ), token::none } );
+					line.push_back( { tool.target, token::muted } );
+				}
+
+				line.push_back( { "  " + format_elapsed( tool.elapsed_ms ), token::muted } );
+
+				write_up( line );
+			}
 		}
 
-		// One row per active tool call, spinner first, newest nearest the
-		// status line.
-		for ( auto index = state.tools.size( ); index > 0; --index ) {
-			const auto& tool = state.tools[ index - 1 ];
-
+		if ( !state.thinking_line.empty( ) ) {
 			auto line = styled_line{ };
-			line.push_back( { std::string{ spinner_glyph( tool.spinner_frame ) } + " ",
-				token::accent } );
-			line.push_back( { tool.verb + " ", token::text } );
-			line.push_back( { tool.target, token::muted } );
-			line.push_back( { " " + format_elapsed( tool.elapsed_ms ), token::muted } );
+			line.push_back( { std::string{ GUTTER_THOUGHT } + " ", token::thinking } );
+			line.insert( line.end( ), state.thinking_line.begin( ), state.thinking_line.end( ) );
+
+			write_up( line );
+		}
+
+		if ( !state.streaming_line.empty( ) ) {
+			auto line = styled_line{ };
+			line.push_back( { std::string{ GUTTER_OUTPUT } + " ", token::muted } );
+			line.insert( line.end( ), state.streaming_line.begin( ), state.streaming_line.end( ) );
 
 			write_up( line );
 		}
 
 		return buffer;
 	}
-
 
 }

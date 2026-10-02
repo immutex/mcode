@@ -124,8 +124,7 @@ namespace mcode::toml {
 			return std::optional< std::string >{ *text };
 		}
 
-		// Present but the wrong type. Reporting it as absent would drop a setting
-		// the user wrote.
+		// reporting a wrong type as absent would drop a setting the user wrote.
 		return std::unexpected( fail( errc::config,
 			"'" + std::string{ key } + "' is not a string" ) );
 	}
@@ -147,14 +146,9 @@ namespace mcode::toml {
 	}
 
 	auto table::reject_unknown( const std::vector< std::string_view >& allowed ) const -> status {
-		// The values are not read: this checks the KEY, and a section such as
-		// `stream.usage.in` is allowed when its parent is allowed -- the caller
-		// lists the tables it understands, not every leaf.
 		for ( const auto& entry : values_ ) {
 			const auto& key = entry.first;
 
-			// A table section such as `stream.usage.in` is allowed if its parent is
-			// allowed: the caller lists the tables it understands, not every leaf.
 			auto known = false;
 
 			for ( const auto& candidate : allowed ) {

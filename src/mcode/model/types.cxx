@@ -37,10 +37,7 @@ namespace mcode::model {
 	}
 
 	auto usage::add( const chat_event& event ) -> void {
-		// Providers report usage two ways: as deltas per event, or once at the
-		// end with cumulative totals. Treating the values as cumulative is the
-		// safe reading -- a delta-accumulating provider that also emits a final
-		// total would otherwise double-count.
+		// usage arrives as per-event deltas or as one cumulative total; the max reads both right.
 		input = std::max( input, event.input_tokens );
 		output = std::max( output, event.output_tokens );
 		cached_read = std::max( cached_read, event.cached_read_tokens );
@@ -49,8 +46,7 @@ namespace mcode::model {
 	}
 
 	auto usage::total_tokens( ) const noexcept -> std::int64_t {
-		// Cached reads are a subset of input at every provider that reports them,
-		// so they are not added again.
+		// cached reads are a subset of input at every provider that reports them.
 		return input + output;
 	}
 

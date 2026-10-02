@@ -15,14 +15,8 @@ namespace mcode::ext {
 
 	namespace {
 
-		// A timer that fires forever is a leak with a friendly name. The bound
-		// is a named constant because it is part of the frozen surface's bound
-		// table, not a tuning knob.
 		inline constexpr auto MAX_TIMER_FIRES = std::uint64_t{ 1'000 };
 
-		// The registry is bounded: an extension that schedules in a loop hits
-		// the cap and gets an error rather than silently degrading every event
-		// dispatch.
 		inline constexpr auto MAX_ACTIVE_TIMERS = std::size_t{ 256 };
 
 	}
@@ -31,8 +25,6 @@ namespace mcode::ext {
 		: pump_( std::move( pump ) ) { }
 
 	timer_registry::~timer_registry( ) {
-		// Nothing owns the closures but the VM, which dies with the extension.
-		// The map's entries hold only references and a deadline.
 	}
 
 	auto timer_registry::schedule( const std::uint64_t delay_ms, const bool repeating,
@@ -85,8 +77,7 @@ namespace mcode::ext {
 
 		const auto now = std::chrono::steady_clock::now( );
 
-		// Timers due now, collected first: a handler that schedules another
-		// timer must not extend this iteration's scan.
+		// collected before firing: a handler that schedules another must not extend this scan.
 		auto due = std::vector< std::uint64_t >{ };
 
 		for ( auto& [ identifier, entry ] : timers_ ) {
@@ -106,9 +97,7 @@ namespace mcode::ext {
 				continue;
 			}
 
-			// Counted BEFORE the call: a handler that throws must still have
-			// consumed its fire, or a throwing repeating timer would run
-			// forever inside one pump.
+			// counted before the call: a throwing repeating timer must still consume its fire.
 			++entry->fires_done;
 			++fired;
 
@@ -120,8 +109,6 @@ namespace mcode::ext {
 			pump_( );
 		}
 
-		// Drop the exhausted. An every-timer that hit its bound is gone, not
-		// kept as a husk the registry can never shed.
 		for ( auto iterator = timers_.begin( ); iterator != timers_.end( ); ) {
 			if ( iterator->second.fires_done >= iterator->second.fires_limit ) {
 				iterator = timers_.erase( iterator );
@@ -161,10 +148,7 @@ namespace mcode::ext {
 
 	namespace {
 
-		// The handle table's `stop` method. The identifier travels as a
-		// lightuserdata upvalue: it is a number on the host side, not a stored
-		// pointer, and the registry is found through the surface so a handle
-		// from a discarded VM fails closed rather than reaching into a dead map.
+		// the id travels as a lightuserdata upvalue: a number on the host side, not a pointer.
 		auto lua_timer_stop( lua_State* state ) -> int {
 			auto* self = surface_from( state );
 
@@ -225,9 +209,6 @@ namespace mcode::ext {
 
 			const auto identifier = ( *scheduled )->identifier;
 
-			// The handle: a table with a `stop` method closing over the id. The
-			// id is stored as a heap value the closure owns, so the table
-			// survives the scheduling call.
 			auto* stored = static_cast< std::uint64_t* >(
 				std::malloc( sizeof( std::uint64_t ) ) );
 
@@ -281,9 +262,6 @@ namespace mcode::ext {
 			return;
 		}
 
-		// One fire per pump pass: the loop calls this between iterations, so a
-		// handler that schedules another timer sees it on the next pass rather
-		// than recursing here.
 		for ( ;; ) {
 			auto* due = registry->next_due( );
 
@@ -291,9 +269,6 @@ namespace mcode::ext {
 				break;
 			}
 
-			// Counted BEFORE the call: a handler that throws must still have
-			// consumed its fire, or a throwing repeating timer would run
-			// forever inside one pump.
 			const auto reference = due->function_reference;
 
 			if ( due->fires_done + 1 >= due->fires_limit ) {
@@ -316,8 +291,6 @@ namespace mcode::ext {
 				continue;
 			}
 
-			// A timer handler that throws is contained and counted, exactly as
-			// a hook handler is. The fire is consumed either way.
 			if ( lua_pcall( state, 0, 0, 0 ) != 0 ) {
 				lua_settop( state, depth );
 
@@ -327,8 +300,6 @@ namespace mcode::ext {
 			lua_settop( state, depth );
 		}
 
-		// Drop the exhausted. An every-timer that hit its bound is gone, not
-		// kept as a husk the registry can never shed.
 		registry->reap( );
 	}
 

@@ -13,9 +13,6 @@ using namespace mcode;
 
 namespace {
 
-	// model::block has eight fields, so a designated initializer must name them in
-	// declaration order and may not omit any under -Wmissing-designated-field-
-	// initializers. Construct and assign instead.
 	auto text_block( const std::string_view body ) -> model::block {
 		auto block = model::block{ };
 		block.kind = model::block_kind::text;
@@ -96,19 +93,12 @@ TEST_CASE( "role names round-trip", "[model]" ) {
 }
 
 TEST_CASE( "the canonical request is plain data end to end", "[model]" ) {
-	// D1's acceptance is that a request can cross a boundary as plain data. There
-	// is no `chat_request` serializer yet, so this does NOT round-trip the type --
-	// asserting that would need the serializer to exist. What it does assert is
-	// the property that makes one possible: every field is a string, a number, a
-	// bool or a list, and the two fields that hold JSON hold JSON that parses.
 	const auto original = make_request( );
 
 	REQUIRE( original.messages.size( ) == 4 );
 	REQUIRE_FALSE( original.model.empty( ) );
 	REQUIRE( original.max_output_tokens > 0 );
 
-	// Every role a message carries has a wire name, which is what a serializer
-	// would key on. The names are the ones the parser accepts.
 	REQUIRE( model::role_from_string( "system" ) == model::role::system );
 	REQUIRE( model::role_from_string( "user" ) == model::role::user );
 	REQUIRE( model::role_from_string( "assistant" ) == model::role::assistant );
@@ -121,9 +111,6 @@ TEST_CASE( "the canonical request is plain data end to end", "[model]" ) {
 		REQUIRE( model::role_from_string( named ) == message.speaker );
 	}
 
-	// The embedded JSON fields must actually be JSON. A tool call whose arguments
-	// are not parseable is the failure a serializer would surface much later, at
-	// the provider, as an opaque 400.
 	auto call_args = json::document::parse( original.messages[ 2 ].blocks[ 0 ].args_json );
 	REQUIRE( static_cast< bool >( call_args ) );
 
@@ -144,9 +131,7 @@ TEST_CASE( "the canonical request is plain data end to end", "[model]" ) {
 }
 
 TEST_CASE( "usage takes the maximum, never the sum", "[model]" ) {
-	// Providers report usage either as per-event deltas or as a final cumulative
-	// total. Accumulating would double-count the second kind, so the rule is
-	// max-of-observed.
+	// usage is max-of-observed; accumulating double-counts cumulative reports.
 	auto counts = model::usage{ };
 
 	auto first = model::chat_event{ };
@@ -167,7 +152,6 @@ TEST_CASE( "usage takes the maximum, never the sum", "[model]" ) {
 	REQUIRE( counts.input == 100 );
 	REQUIRE( counts.output == 250 );
 
-	// A later, smaller report must not lower the total.
 	auto stale = model::chat_event{ };
 	stale.input_tokens = 40;
 	counts.add( stale );
@@ -189,14 +173,12 @@ TEST_CASE( "cost is computed from reported usage only", "[model]" ) {
 	counts.cache_write = 100'000;
 	counts.output = 200'000;
 
-	// Billed input is input minus the cached portion, which is priced separately.
+	// billed input is input minus the cached portion, which is priced separately.
 	const auto expected = ( 200'000 * 3.0 + 800'000 * 0.3 + 100'000 * 3.75 + 200'000 * 15.0 ) / 1e6;
 	const auto actual = model::compute_cost( caps, counts );
 
 	REQUIRE( actual == Catch::Approx( expected ) );
 
-	// 200k billed input @ $3 + 800k cached @ $0.30 + 100k cache write @ $3.75
-	// + 200k output @ $15, per million tokens.
 	REQUIRE( actual == Catch::Approx( 4.215 ) );
 }
 
@@ -234,10 +216,7 @@ TEST_CASE( "message text concatenates only textual blocks", "[model]" ) {
 }
 
 TEST_CASE( "arguments split across events are not parsed per fragment", "[model]" ) {
-	// Fragments arrive split arbitrarily, so a parser that ran per event would
-	// reject every event but the last. The applier is what concatenates, and the
-	// observable rule is that a fragment which is not valid JSON does NOT make
-	// feed() fail -- only the accumulation is JSON, and only at finish().
+	// fragments are only valid JSON at finish().
 	auto descriptor = model::descriptor_from_json( R"({
 		"name": "splitter",
 		"endpoint": "https://example.invalid/v1/chat/completions",
@@ -259,11 +238,6 @@ TEST_CASE( "arguments split across events are not parsed per fragment", "[model]
 
 	auto applier = model::delta_applier{ *descriptor };
 
-	// Two events, each carrying half of one JSON object. Neither half parses on
-	// its own -- that is the whole point -- so the payload is built through the
-	// JSON API rather than by hand. Handing the fragment to a hand-written
-	// template puts its own quotes into the wire text and produces malformed
-	// JSON, which would test the template instead of the applier.
 	for ( const auto* fragment : { R"({"ci)", R"(ty":"Paris"})" } ) {
 		auto event = json::document::make_object( );
 
@@ -280,8 +254,6 @@ TEST_CASE( "arguments split across events are not parsed per fragment", "[model]
 		REQUIRE( static_cast< bool >( produced ) );
 	}
 
-	// finish() emits the completed call with the fragments joined, and only then
-	// is the result parseable.
 	auto completed = applier.finish( );
 	REQUIRE_FALSE( completed.empty( ) );
 

@@ -15,11 +15,7 @@ namespace mcode::json {
 
 	namespace {
 
-		// One conversion for both accessors. yyjson_is_num admits real numbers, and
-		// yyjson_get_sint returns 0 for anything that is not an integer, so a
-		// gateway that sends a token count as 1530.0 produced zero tokens with no
-		// diagnostic. yyjson_is_int admits uint as well, and get_sint reinterprets a
-		// uint above INT64_MAX as negative.
+		// yyjson_get_sint returns 0 for a non-integer and reinterprets a large uint as negative.
 		auto to_int64( yyjson_val* value, const std::string_view what ) -> result< std::int64_t > {
 			if ( value == nullptr ) {
 				return std::unexpected( fail( errc::json, "missing " + std::string{ what } ) );
@@ -298,7 +294,7 @@ namespace mcode::json {
 				return out;
 			}
 
-			// yyjson's object iterator yields the KEY; the value is looked up from it.
+			// the iterator yields the KEY; the value is looked up from it.
 			while ( auto* name = yyjson_obj_iter_next( &iterator ) ) {
 				if ( yyjson_is_str( name ) ) {
 					out.emplace_back( yyjson_get_str( name ), yyjson_get_len( name ) );

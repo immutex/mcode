@@ -12,9 +12,6 @@ using namespace mcode;
 
 namespace {
 
-	// The reference descriptor, as an extension would register it. This is the
-	// fixture the acceptance criterion names: a descriptor must drive a real
-	// stream end-to-end.
 	const char* GATEWAY_DESCRIPTOR = R"({
 		"name": "my-gateway",
 		"endpoint": "https://api.example.com/v1/chat/completions",
@@ -77,7 +74,6 @@ TEST_CASE( "a descriptor drives a real stream end to end", "[provider]" ) {
 		REQUIRE( d.stream.tool_call_args == "/choices/0/delta/tool_calls/0/function/arguments" );
 	}
 
-	// Debug: is the pointer resolving at all?
 	{
 		auto payload = json::document::parse( R"({"choices":[{"delta":{"content":"Hel"}}]})" );
 		REQUIRE( static_cast< bool >( payload ) );
@@ -100,7 +96,6 @@ TEST_CASE( "a descriptor drives a real stream end to end", "[provider]" ) {
 
 	auto all = std::vector< model::chat_event >{ };
 
-	// Text arrives split across events, as providers do.
 	for ( const auto* payload : {
 		R"({"choices":[{"delta":{"content":"Hel"}}]})",
 		R"({"choices":[{"delta":{"content":"lo, "}}]})",
@@ -110,11 +105,8 @@ TEST_CASE( "a descriptor drives a real stream end to end", "[provider]" ) {
 		}
 	}
 
-	// A keep-alive comment arrives as an empty payload and produces nothing.
 	REQUIRE( collect( applier, "message", "" ).empty( ) );
 
-	// Tool-call arguments split arbitrarily mid-token, which is the case that
-	// breaks any implementation that parses per event.
 	for ( auto& event : collect( applier, "message",
 		R"({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_a","function":{"name":"read","arguments":"{\"pa"}}]}}]})" ) ) {
 		all.push_back( std::move( event ) );
@@ -135,13 +127,11 @@ TEST_CASE( "a descriptor drives a real stream end to end", "[provider]" ) {
 		all.push_back( std::move( event ) );
 	}
 
-	// The terminal sentinel.
 	REQUIRE( collect( applier, "message", "[DONE]" ).empty( ) );
 	REQUIRE( applier.saw_terminal_event( ) );
 
 	auto tail = applier.finish( );
 
-	// --- assertions on what the stream produced ---
 	auto text = std::string{ };
 
 	for ( const auto& event : all ) {
@@ -152,7 +142,6 @@ TEST_CASE( "a descriptor drives a real stream end to end", "[provider]" ) {
 
 	REQUIRE( text == "Hello, world" );
 
-	// The tool call must be reconstructed whole, with JSON that parses.
 	const auto* call = static_cast< const model::chat_event* >( nullptr );
 
 	for ( const auto& event : all ) {
@@ -165,8 +154,7 @@ TEST_CASE( "a descriptor drives a real stream end to end", "[provider]" ) {
 	REQUIRE( call->tool_name == "read" );
 	REQUIRE( call->tool_call_id == "call_a" );
 
-	// finish() reports the complete call, which is the only point at which the
-	// accumulated fragments are guaranteed to be valid JSON.
+	// finish() is the only point where accumulated fragments are guaranteed to be valid JSON.
 	const auto* final_call = static_cast< const model::chat_event* >( nullptr );
 
 	for ( const auto& event : tail ) {
@@ -179,18 +167,15 @@ TEST_CASE( "a descriptor drives a real stream end to end", "[provider]" ) {
 	REQUIRE( final_call->tool_name == "read" );
 	REQUIRE( final_call->args_fragment == R"({"path":"a.txt"})" );
 
-	// The tail ends with turn_done carrying the stop reason.
 	REQUIRE_FALSE( tail.empty( ) );
 	REQUIRE( tail.back( ).type == model::chat_event::kind::turn_done );
 	REQUIRE( tail.back( ).stop_reason == "tool_calls" );
 
-	// Usage accumulated from provider-reported values.
 	REQUIRE( applier.accumulated_usage( ).input == 120 );
 	REQUIRE( applier.accumulated_usage( ).output == 45 );
 }
 
 TEST_CASE( "a descriptor that cannot work is rejected at load", "[provider]" ) {
-	// Each of these would otherwise fail at first token, or worse, silently.
 	const auto cases = std::vector< std::pair< const char*, const char* > >{
 		{ R"({"endpoint":"https://x/v1"})", "no name" },
 		{ R"({"name":"x"})", "no endpoint" },
@@ -217,7 +202,6 @@ TEST_CASE( "a descriptor that cannot work is rejected at load", "[provider]" ) {
 		}
 	}
 
-	// And a malformed one is a JSON error, not a crash.
 	CHECK_FALSE( model::descriptor_from_json( "{not json" ).has_value( ) );
 }
 
@@ -244,7 +228,6 @@ TEST_CASE( "parallel tool calls are tracked by index", "[provider]" ) {
 
 	auto applier = model::delta_applier{ *descriptor };
 
-	// Two interleaved calls, which is what a parallel tool-call stream looks like.
 	collect( applier, "", R"({"i":0,"id":"c0","n":"read","a":"{\"p\":"})" );
 	collect( applier, "", R"({"i":1,"id":"c1","n":"glob","a":"{\"q\":"})" );
 	collect( applier, "", R"({"i":0,"a":"\"a\"}"})" );
@@ -270,7 +253,6 @@ TEST_CASE( "parallel tool calls are tracked by index", "[provider]" ) {
 }
 
 TEST_CASE( "a provider that omits the tool-call index still works", "[provider]" ) {
-	// Some gateways never send more than one call and omit the field entirely.
 	const auto json = R"({
 		"name": "x", "endpoint": "https://x/v1",
 		"stream": { "text_delta": "/t", "tool_calls": { "name": "/n", "args": "/a" } }
@@ -298,8 +280,6 @@ TEST_CASE( "a provider that omits the tool-call index still works", "[provider]"
 }
 
 TEST_CASE( "the escape hatch replaces the mapping entirely", "[provider]" ) {
-	// The hatch had NO unit test, only a benchmark. The benchmark measures its
-	// cost; this asserts its contract.
 	auto descriptor = model::descriptor_from_json( R"({
 		"name": "hatch",
 		"endpoint": "https://example.invalid/v1/messages",
@@ -314,9 +294,7 @@ TEST_CASE( "the escape hatch replaces the mapping entirely", "[provider]" ) {
 
 	auto applier = model::delta_applier{ *descriptor };
 
-	// Declared but not installed must FAIL, not fall through to the declarative
-	// mapping: that descriptor maps nothing, so every event would be accepted and
-	// silently produce an empty turn.
+	// a declared-but-uninstalled hatch fails closed; falling through would accept every event.
 	auto unmapped = applier.feed( "message", R"({"delta":"x"})" );
 
 	REQUIRE_FALSE( static_cast< bool >( unmapped ) );
@@ -326,8 +304,6 @@ TEST_CASE( "the escape hatch replaces the mapping entirely", "[provider]" ) {
 		REQUIRE( unmapped.error( ).msg.find( "escape hatch" ) != std::string::npos );
 	}
 
-	// Installed: the hatch sees the raw event name and payload, and its result is
-	// what feed returns -- the applier adds nothing of its own.
 	auto seen_name = std::string{ };
 	auto seen_data = std::string{ };
 
@@ -356,9 +332,7 @@ TEST_CASE( "the escape hatch replaces the mapping entirely", "[provider]" ) {
 }
 
 TEST_CASE( "a pointer gated on the event name is not applied to other events", "[provider]" ) {
-	// [OI] Responses puts text and tool arguments at the SAME pointer (/delta) and
-	// distinguishes them only by the SSE event name. Without the gate, every text
-	// token is also appended to the tool-call arguments.
+	// responses puts text and tool args at the same /delta pointer, gated by SSE event name.
 	auto descriptor = model::descriptor_from_json( R"({
 		"name": "gated",
 		"endpoint": "https://example.invalid/v1/responses",
@@ -378,7 +352,6 @@ TEST_CASE( "a pointer gated on the event name is not applied to other events", "
 
 	auto applier = model::delta_applier{ *descriptor };
 
-	// A text event: text only, and no tool call starts.
 	auto text = applier.feed( "response.output_text.delta", R"({"delta":"hello"})" );
 
 	REQUIRE( static_cast< bool >( text ) );
@@ -389,7 +362,6 @@ TEST_CASE( "a pointer gated on the event name is not applied to other events", "
 		REQUIRE( ( *text )[ 0 ].text == "hello" );
 	}
 
-	// A tool-argument event: the arguments are NOT text.
 	auto args = applier.feed( "response.function_call_arguments.delta",
 		R"({"item_id":"call_1","delta":"{\"a\":1}"})" );
 
@@ -401,7 +373,6 @@ TEST_CASE( "a pointer gated on the event name is not applied to other events", "
 		}
 	}
 
-	// The completed call carries the arguments, and only them.
 	auto completed = applier.finish( );
 
 	auto call = std::find_if( completed.begin( ), completed.end( ),
@@ -418,9 +389,7 @@ TEST_CASE( "a pointer gated on the event name is not applied to other events", "
 }
 
 TEST_CASE( "a tool-call index off the wire is bounded", "[provider]" ) {
-	// The index addresses an array and is stored as an int. A negative or huge
-	// value was a truncating cast followed by unbounded growth -- ten bytes in,
-	// megabytes retained, per event.
+	// the tool-call index is stored as a bounded int.
 	auto descriptor = model::descriptor_from_json( R"({
 		"name": "indexed",
 		"endpoint": "https://example.invalid/v1/chat/completions",
@@ -454,9 +423,6 @@ TEST_CASE( "a tool-call index off the wire is bounded", "[provider]" ) {
 }
 
 TEST_CASE( "an unknown descriptor key is refused at every level", "[provider]" ) {
-	// The header promises rejection, and a typo like `steam` for `stream` would
-	// otherwise load with the field unset -- surfacing as a first-token failure
-	// with no hint about the cause.
 	const auto cases = std::vector< std::pair< const char*, const char* > >{
 		{ R"({"name":"x","endpoint":"https://x/v1","steam":{"text_delta":"/t"}})", "root typo" },
 		{ R"({"name":"x","endpoint":"https://x/v1","on_event":true,"nope":1})", "root extra" },
@@ -481,14 +447,11 @@ TEST_CASE( "an unknown descriptor key is refused at every level", "[provider]" )
 			FAIL( "case '" << label << "' loaded but should not have" );
 		}
 
-		// The message must name the offending key, or the author has to guess.
 		if ( !descriptor ) {
 			CHECK( descriptor.error( ).msg.find( "unknown descriptor key" ) != std::string::npos );
 		}
 	}
 
-	// And a descriptor that uses only known keys still loads, at every level, so
-	// the check is not simply refusing everything.
 	auto accepted = model::descriptor_from_json( R"({
 		"name": "full",
 		"endpoint": "https://x/v1",
@@ -517,16 +480,13 @@ TEST_CASE( "an unknown descriptor key is refused at every level", "[provider]" )
 		FAIL( accepted.error( ).msg );
 	}
 
-	// Every pointer survived, including the reasoning one that used to be absent
-	// from the validation array.
 	REQUIRE( accepted->stream.usage_reasoning == "/ur" );
 	REQUIRE( accepted->stream.text_events.size( ) == 1 );
 	REQUIRE( accepted->stream.tool_call_events.size( ) == 1 );
 }
 
 TEST_CASE( "a pointer the applier cannot honour is refused at load", "[provider]" ) {
-	// The header says `/-` and wildcards are unsupported. Checking only the first
-	// character let them through to resolve to nothing at first token.
+	// wildcards are unsupported in pointers.
 	for ( const auto* pointer : { "/a/-", "/a/*/b", "*/b" } ) {
 		auto text = std::string{ R"({"name":"x","endpoint":"https://x/v1","stream":{"text_delta":")" };
 		text += pointer;
@@ -543,9 +503,6 @@ TEST_CASE( "a pointer the applier cannot honour is refused at load", "[provider]
 }
 
 TEST_CASE( "reasoning tokens are mapped, not dropped", "[provider]" ) {
-	// `usage_reasoning` is parsed and declared, but it was missing from the
-	// validation array -- so a typo in the pointer loaded fine and silently
-	// reported zero reasoning tokens for the life of the session.
 	auto descriptor = model::descriptor_from_json( R"({
 		"name": "reasoning",
 		"endpoint": "https://example.invalid/v1/chat/completions",
@@ -578,7 +535,6 @@ TEST_CASE( "reasoning tokens are mapped, not dropped", "[provider]" ) {
 
 	REQUIRE( static_cast< bool >( produced ) );
 
-	// The reasoning count reaches the usage event, not just the accumulator.
 	REQUIRE_FALSE( produced->empty( ) );
 
 	auto usage_event = std::find_if( produced->begin( ), produced->end( ),

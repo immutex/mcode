@@ -13,17 +13,12 @@ namespace mcode::platform {
 
 #if defined( __APPLE__ )
 
-	// The entry point is undocumented but production-standard: Chrome, Firefox
-	// and Nix all resolve it from libSystem at runtime. Declaring it directly
-	// would need a private header; dlsym keeps the SDK contract public.
+	// undocumented but production-standard; dlsym keeps the SDK contract public.
 	using sandbox_init_with_parameters_fn =
 		int ( * )( const char* profile, uint64_t parameters_length,
 			const char* const parameters[], char** errorbuf );
 
-	// The deny-default profile. Static, not generated: a generated profile is a
-	// parser, and a parser for a security policy is a vulnerability. The
-	// (deny default) is mandatory -- (allow default) profiles are structurally
-	// escapable -- and system.sb imports the rules every process needs to boot.
+	// deny-default and static; (allow default) profiles are structurally escapable.
 	auto seatbelt_profile( const sandbox_profile& profile,
 		const std::filesystem::path& temp_dir ) -> std::string {
 		auto text = std::string{ "(version 1)\n" };
@@ -37,11 +32,7 @@ namespace mcode::platform {
 		text += "(allow sysctl-read)\n";
 		text += "(allow mach-lookup)\n";
 
-		// `/dev`, `/etc` and `/tmp` are symlinks into `/private`, and Seatbelt
-		// matches the resolved path -- so `(subpath "/dev")` alone does not
-		// cover `/dev/null`, whose real path is `/private/dev/null`. Both
-		// spellings are listed because which one a caller passes is not
-		// knowable here.
+		// Seatbelt matches the resolved path, and /dev and /etc are symlinks into /private.
 		text += "(allow file-read* (subpath \"/System\") (subpath \"/usr\") (subpath \"/bin\")"
 			" (subpath \"/sbin\") (subpath \"/dev\") (subpath \"/private/dev\")"
 			" (subpath \"/private/etc\"))\n";
@@ -60,18 +51,13 @@ namespace mcode::platform {
 			text += "(allow file-read* (subpath \"" + temp_dir.string( ) + "\"))\n";
 		}
 
-		// The .git deny is explicit: a write grant on the workspace root would
-		// otherwise cover it, and the harness's own write rules treat .git as
-		// protected for every actor but the harness itself.
+		// A write grant on the workspace root would otherwise cover these.
 		for ( const auto& path : profile.write_paths ) {
 			text += "(deny file-write* (subpath \"" + path.string( ) + "/.git\"))\n";
 			text += "(deny file-write* (subpath \"" + path.string( ) + "/.mcode\"))\n";
 		}
 
-		// Read on `/dev` is already allowed above; write is granted only on the
-		// sinks, because `/dev` also holds the raw disks. A redirect to
-		// `/dev/null` is not a nicety -- without it `grep x /dev/null` exits 2
-		// rather than 1, because the shell cannot open the file.
+		// write only on the sinks, because /dev also holds the raw disks.
 		text += "(allow file-write* (literal \"/dev/null\") (literal \"/private/dev/null\")"
 			" (literal \"/dev/zero\") (literal \"/private/dev/zero\"))\n";
 
@@ -113,11 +99,7 @@ namespace mcode::platform {
 		const auto profile_text = seatbelt_profile( profile, temp_dir );
 		char* errorbuf = nullptr;
 
-		// Flags MUST be zero: the profile is the text itself. Passing
-		// SANDBOX_NAMED_EXTERNAL (0x0003) instead tells sandbox_init the first
-		// argument is a path to a profile file, so it tries to open a
-		// kilobyte of policy text as a filename and fails with ENAMETOOLONG --
-		// which is what the spawn error reported before this was fixed.
+		// flags MUST be zero: otherwise sandbox_init reads the profile text as a filename.
 		const auto applied = init_fn( profile_text.c_str( ), 0, nullptr, &errorbuf );
 
 		if ( applied != 0 ) {

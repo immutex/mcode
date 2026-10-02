@@ -1,9 +1,9 @@
-// The frame builder, the diff, and the emitter, asserted on bytes.
-
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cctype>
 #include <string>
+#include <string_view>
 
 #include "mcode/tui/cell.hxx"
 #include "mcode/tui/frame.hxx"
@@ -22,31 +22,26 @@ namespace {
 TEST_CASE( "the width function truncates on cluster boundaries", "[tui][width]" ) {
 	const auto ambiguous = std::size_t{ 1 };
 
-	// A CJK string: two wide clusters.
 	const auto cjk = std::string{ "\xE4\xB8\x96\xE7\x95\x8C" };
 	REQUIRE( string_width( cjk, ambiguous ) == 4 );
 
-	// Truncating to 3 columns keeps the first cluster whole and drops the
-	// second entirely; it never splits a cluster.
+	// a truncation never splits a grapheme cluster.
 	const auto cut = truncate_to_width( cjk, 3, ambiguous );
 	CHECK( cut == std::string{ "\xE4\xB8\x96" } );
 
-	// A combining mark joins its base: one cluster, one column.
 	const auto combining = std::string{ "e\xCC\x81x" };
 	CHECK( string_width( combining, ambiguous ) == 2 );
 
 	const auto mark_cut = truncate_to_width( combining, 1, ambiguous );
 	CHECK( mark_cut == std::string{ "e\xCC\x81" } );
 
-	// A ZWJ emoji sequence is one cluster at two columns; a truncation that
-	// does not fit drops the whole sequence.
+	// a truncation that does not fit drops the whole ZWJ sequence.
 	const auto family = std::string{ "\xF0\x9F\x91\xA8\xE2\x80\x8D\xF0\x9F\x91\xA9"
 		"\xE2\x80\x8D\xF0\x9F\x91\xA7" };
 	CHECK( string_width( family, ambiguous ) == 2 );
 	CHECK( truncate_to_width( family, 1, ambiguous ).empty( ) );
 	CHECK( truncate_to_width( family, 2, ambiguous ) == family );
 
-	// ASCII is the boring case.
 	CHECK( string_width( "hello", ambiguous ) == 5 );
 	CHECK( truncate_to_width( "hello", 3, ambiguous ) == "hel" );
 }
@@ -134,7 +129,6 @@ TEST_CASE( "the emitter writes only changed runs with SGR deltas", "[tui][frame]
 	auto emitter = ansi_emitter{ caps };
 	const auto bytes = emitter.emit( previous, current );
 
-	// One cursor move for the changed row, one SGR, one cell, nothing else.
 	CHECK( bytes.find( "x" ) != std::string::npos );
 	CHECK( bytes.find( "abc" ) == std::string::npos );
 	CHECK( bytes.find( "def" ) == std::string::npos );
@@ -162,15 +156,16 @@ TEST_CASE( "NO_COLOR produces attributes-only output", "[tui][frame]" ) {
 }
 
 TEST_CASE( "the theme resolves one depth per session", "[tui][theme]" ) {
-	CHECK( resolve_token( token::accent, capabilities::color_depth::truecolor ) ==
+	CHECK( token_color( token::accent, capabilities::color_depth::truecolor ) ==
 		"38;2;122;162;247" );
-	CHECK( resolve_token( token::accent, capabilities::color_depth::ansi256 ) ==
-		"38;5;111" );
-	CHECK( resolve_token( token::accent, capabilities::color_depth::ansi16 ) == "94" );
-	CHECK( resolve_token( token::accent, capabilities::color_depth::none ).empty( ) );
+	CHECK( token_color( token::accent, capabilities::color_depth::ansi256 ) == "38;5;111" );
+	CHECK( token_color( token::accent, capabilities::color_depth::ansi16 ) == "94" );
+	CHECK( token_color( token::accent, capabilities::color_depth::none ).empty( ) );
 
-	const auto& table = theme_table( );
-	CHECK( table.size( ) == 11 );
+	for ( const auto& entry : theme_table( ) ) {
+		CHECK_FALSE( token_color( entry.name, capabilities::color_depth::truecolor ).empty( ) );
+		CHECK_FALSE( std::string_view{ entry.truecolor }.empty( ) );
+	}
 }
 
 TEST_CASE( "the capability probe honours NO_COLOR and the depth ladder", "[tui][tty]" ) {
@@ -217,10 +212,6 @@ TEST_CASE( "spinner glyphs are single-width and cycle", "[tui][render]" ) {
 }
 
 TEST_CASE( "the first frame is drawn, not swallowed", "[tui][render]" ) {
-	// The prompt has to reach the terminal before the first key is read. The
-	// frame builder was only ever reached from a bus event, so an idle session
-	// showed nothing at all -- no prompt, no status line -- until something was
-	// typed, which reads as a program that hung.
 	auto coordinator = render_coordinator{ };
 
 	auto caps = capabilities{ };
@@ -238,9 +229,6 @@ TEST_CASE( "the first frame is drawn, not swallowed", "[tui][render]" ) {
 }
 
 TEST_CASE( "an erased cell reaches the terminal as a space", "[tui][render]" ) {
-	// A blank cell has no text. Appending its `text` wrote nothing, so the
-	// previous frame's glyph stayed on screen -- every backspace, and every
-	// line that got shorter, left ghost characters behind.
 	auto caps = capabilities{ };
 	caps.depth = capabilities::color_depth::none;
 
@@ -252,15 +240,12 @@ TEST_CASE( "an erased cell reaches the terminal as a space", "[tui][render]" ) {
 	const auto typed = coordinator.flush( );
 	REQUIRE( typed.find( "hello" ) != std::string::npos );
 
-	// Backspace: one cell shorter, and the removed column must be repainted.
 	coordinator.set_prompt( "hell", 4 );
 	const auto erased = coordinator.flush( );
 
 	CHECK_FALSE( erased.empty( ) );
 
-	// Only the changed cell is re-emitted, so the visible text of this frame is
-	// the erase itself: a single space where the 'o' was. Emitting nothing
-	// would leave the 'o' on screen.
+	// the removed column must be repainted, or the old glyph stays on screen.
 	auto visible = std::string{ };
 
 	for ( std::size_t index = 0; index < erased.size( ); ++index ) {
@@ -281,8 +266,6 @@ TEST_CASE( "an erased cell reaches the terminal as a space", "[tui][render]" ) {
 
 TEST_CASE( "the caret lands on the prompt row, under the typed text",
 	"[tui][render]" ) {
-	// The frame is painted with absolute addressing and leaves the cursor at
-	// the end of the last changed run, which is not where the user is typing.
 	auto caps = capabilities{ };
 	caps.depth = capabilities::color_depth::none;
 
@@ -293,11 +276,7 @@ TEST_CASE( "the caret lands on the prompt row, under the typed text",
 
 	const auto bytes = coordinator.flush( );
 
-	// The prompt is the last row of the live region, and the caret sits after
-	// "> hi" -- four columns in, which is column 5 in the 1-based CHA the
-	// terminal speaks. The row needs no movement: the emitter parks the cursor
-	// on that row, which is what makes the addressing relative rather than
-	// pinned to a fixed screen row.
+	// the caret column is 1-based CHA.
 	const auto expected = std::string{ "\x1b[5G" };
 
 	CHECK( bytes.ends_with( expected ) );
@@ -312,19 +291,13 @@ TEST_CASE( "the caret column is measured in display cells, not bytes",
 	coordinator.set_capabilities( caps );
 	coordinator.resize( 24, 40 );
 
-	// Two bytes, one column: a caret placed by byte count would sit one cell
-	// too far right.
+	// two bytes, one column: a byte-count caret would sit one cell too far right.
 	coordinator.set_prompt( "\u00e9", 2 );
 
 	CHECK( coordinator.state( ).input_cursor == 1 );
 }
 
 TEST_CASE( "every escape the emitter writes is well formed", "[tui][render]" ) {
-	// A sequence that closed early left its parameters to be printed as text:
-	// the frame carried "\x1b[0m" followed by ";90;37m", so the terminal
-	// executed the reset and then drew the literal characters ";90;37m" on
-	// screen. Parsing the output back is the only assertion that catches it --
-	// the bytes are "valid" ANSI, just in the wrong place.
 	auto caps = capabilities{ };
 	caps.depth = capabilities::color_depth::ansi16;
 
@@ -341,9 +314,6 @@ TEST_CASE( "every escape the emitter writes is well formed", "[tui][render]" ) {
 
 	while ( cursor < bytes.size( ) ) {
 		if ( bytes[ cursor ] != '\x1b' ) {
-			// A `;` here is a parameter that escaped its sequence and is about
-			// to be drawn as text -- the exact shape of the bug. Inside a
-			// sequence it is legal, which is why this is checked only outside.
 			CHECK( bytes[ cursor ] != ';' );
 			++cursor;
 
@@ -356,8 +326,7 @@ TEST_CASE( "every escape the emitter writes is well formed", "[tui][render]" ) {
 
 		cursor += 2;
 
-		// Only digits, ';' and '?' may appear before the final byte, which must
-		// be a letter. A parameter after the terminator is the bug.
+		// only digits, ';' and '?' may appear before the final letter byte.
 		while ( cursor < bytes.size( ) && !std::isalpha(
 			static_cast< unsigned char >( bytes[ cursor ] ) ) ) {
 			const auto character = bytes[ cursor ];
@@ -377,11 +346,6 @@ TEST_CASE( "every escape the emitter writes is well formed", "[tui][render]" ) {
 }
 
 TEST_CASE( "an active tool row names the tool and runs its clock", "[tui][render]" ) {
-	// Two defects on one row. `elapsed_ms` and `spinner_frame` were written
-	// once at `tool_start` and never advanced, so a running call showed a
-	// frozen spinner and `0.0s` for its whole life; and the verb came from a
-	// `tool_call` payload that had already been moved into the event log, so
-	// the row read `\u280b   0.0s` with no tool name at all.
 	auto coordinator = render_coordinator{ };
 
 	auto caps = capabilities{ };
@@ -395,8 +359,6 @@ TEST_CASE( "an active tool row names the tool and runs its clock", "[tui][render
 	start.stamp_ms = 1'000;
 	coordinator.apply( start );
 
-	// The producer's stamp is the call's start, so four seconds later the row
-	// must read 4.0s rather than 0.0s.
 	coordinator.advance_tools( 5'000 );
 
 	CHECK( coordinator.state( ).tools.size( ) == 1 );
@@ -410,8 +372,7 @@ TEST_CASE( "an active tool row names the tool and runs its clock", "[tui][render
 	CHECK( coordinator.state( ).tools.front( ).elapsed_ms == 4'000 + SPINNER_INTERVAL_MS * 3 );
 	CHECK( coordinator.state( ).tools.front( ).spinner_frame != first_frame );
 
-	// A stamp of zero means the producer supplied none, which leaves the row
-	// at its initial value rather than inventing a start time.
+	// a stamp of zero means no start time was supplied, so the row keeps its initial value.
 	auto unstamped = render_coordinator{ };
 	unstamped.set_capabilities( caps );
 	unstamped.resize( 24, 40 );
@@ -426,8 +387,6 @@ TEST_CASE( "an active tool row names the tool and runs its clock", "[tui][render
 }
 
 TEST_CASE( "a finished tool call is written to scrollback", "[tui][render]" ) {
-	// Tool results were collected into a member nothing rendered, so the
-	// transcript showed the spinner and then nothing at all.
 	auto coordinator = render_coordinator{ };
 
 	auto caps = capabilities{ };
@@ -453,8 +412,7 @@ TEST_CASE( "a finished tool call is written to scrollback", "[tui][render]" ) {
 
 TEST_CASE( "a committed answer is erased from the region and printed",
 	"[tui][render]" ) {
-	// The commit must erase the region before printing, or the text lands on
-	// the rows the next frame repaints and is overwritten.
+	// the region must be erased before printing, or the next frame repaints over the text.
 	auto coordinator = render_coordinator{ };
 
 	auto caps = capabilities{ };
@@ -477,10 +435,67 @@ TEST_CASE( "a committed answer is erased from the region and printed",
 	CHECK( bytes.find( "Red" ) != std::string::npos );
 }
 
+TEST_CASE( "a chain of thought commits as one line", "[tui][render]" ) {
+	// the live row shows only the tail, so committing the whole text would
+	// dump dozens of lines into scrollback per turn.
+	auto coordinator = render_coordinator{ };
+
+	auto caps = capabilities{ };
+	caps.depth = capabilities::color_depth::none;
+	coordinator.set_capabilities( caps );
+	coordinator.resize( 24, 40 );
+
+	auto delta = event_queue::item{ };
+	delta.type = event_queue::kind::thinking_delta;
+	delta.text = "first thought\nsecond thought\nthird thought";
+	coordinator.apply( delta );
+
+	auto end = event_queue::item{ };
+	end.type = event_queue::kind::turn_end;
+	coordinator.apply( end );
+
+	const auto bytes = coordinator.flush( );
+
+	CHECK( bytes.find( "first thought" ) != std::string::npos );
+	CHECK( bytes.find( "second thought" ) == std::string::npos );
+	CHECK( bytes.find( "third thought" ) == std::string::npos );
+}
+
+TEST_CASE( "a long chain of thought is bounded to the terminal width",
+	"[tui][render]" ) {
+	auto coordinator = render_coordinator{ };
+
+	auto caps = capabilities{ };
+	caps.depth = capabilities::color_depth::none;
+	coordinator.set_capabilities( caps );
+	coordinator.resize( 24, 40 );
+
+	auto delta = event_queue::item{ };
+	delta.type = event_queue::kind::thinking_delta;
+	delta.text = std::string( 200, 'x' );
+	coordinator.apply( delta );
+
+	auto end = event_queue::item{ };
+	end.type = event_queue::kind::turn_end;
+	coordinator.apply( end );
+
+	const auto bytes = coordinator.flush( );
+
+	// No committed line may exceed the terminal width.
+	auto longest = std::size_t{ 0 };
+	auto run = std::size_t{ 0 };
+
+	for ( const auto character : bytes ) {
+		run = character == 'x' ? run + 1 : 0;
+		longest = std::max( longest, run );
+	}
+
+	CHECK( longest > 0 );
+	CHECK( longest < 40 );
+}
+
 TEST_CASE( "a turn's answer survives the turn ending", "[tui][render]" ) {
-	// `turn_end` clears the live region. Discarding the accumulated text there
-	// erased the reply before it could be read, so the transcript only ever
-	// showed tool activity.
+	// turn_end clears the live region, so the answer must be committed before it.
 	auto coordinator = render_coordinator{ };
 
 	auto caps = capabilities{ };

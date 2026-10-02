@@ -1,7 +1,3 @@
-// The permission engine, the approval prompt and the modes. The hard-deny
-// floor lives in test_floor.cxx and the remember store in
-// test_permission_store.cxx.
-
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
@@ -23,7 +19,6 @@ namespace permission_test {
 		CHECK( setup.exec( "git status" ) == perm::permission_decision::allow );
 		CHECK( setup.approval.asks( ) == 1 );
 
-		// A deny answer is honoured too.
 		setup.approval.queue( perm::approval_outcome::deny_once );
 		CHECK( setup.exec( "git push" ) == perm::permission_decision::deny );
 		CHECK( setup.approval.asks( ) == 2 );
@@ -57,19 +52,16 @@ namespace permission_test {
 
 		const auto outside_text = outside_file.generic_string( );
 
-		// 1. A deny rule denies it without prompting.
 		auto denied = rig{ };
 		denied.engine.add_config_rules( perm::rule_scope::user, { outside_text }, { } );
 		CHECK( denied.read( outside_text ) == perm::permission_decision::deny );
 		CHECK( denied.approval.asks( ) == 0 );
 
-		// 2. approval = always prompts.
 		auto always = rig{ false, "always" };
 		always.approval.queue( perm::approval_outcome::allow_once );
 		CHECK( always.read( outside_text ) == perm::permission_decision::allow );
 		CHECK( always.approval.asks( ) == 1 );
 
-		// 3. The default set prompts and the answer is honoured.
 		auto prompted = rig{ };
 		prompted.approval.queue( perm::approval_outcome::deny_once );
 		CHECK( prompted.read( outside_text ) == perm::permission_decision::deny );
@@ -84,11 +76,9 @@ namespace permission_test {
 		auto widened = rig{ };
 		widened.engine.add_root( outside );
 
-		// Under the added root: no prompt, allowed as an in-boundary read.
 		CHECK( widened.read( inside_added ) == perm::permission_decision::allow );
 		CHECK( widened.approval.asks( ) == 0 );
 
-		// The same read without the flag prompts.
 		auto narrow = rig{ };
 		narrow.approval.queue( perm::approval_outcome::deny_once );
 		CHECK( narrow.read( inside_added ) == perm::permission_decision::deny );
@@ -121,8 +111,7 @@ namespace permission_test {
 		setup.approval.queue( perm::approval_outcome::allow_remember );
 		CHECK( setup.write( target ) == perm::permission_decision::allow );
 
-		// The `always` answer must NOT have been persisted: writes outside the
-		// workspace are never auto-persisted.
+		// writes outside the workspace are never auto-persisted.
 		const auto layer = setup.store.load( );
 		REQUIRE( layer.has_value( ) );
 
@@ -138,7 +127,6 @@ namespace permission_test {
 		options.headless = true;
 		setup.engine.set_options( options );
 
-		// No approval source attached at all: the engine must deny, not crash.
 		CHECK( setup.exec( "git push" ) == perm::permission_decision::deny );
 
 		const auto& verdict = setup.engine.last_verdict( );
@@ -149,15 +137,12 @@ namespace permission_test {
 	TEST_CASE( "yolo allows an ask but still denies the floor", "[perm][yolo]" ) {
 		auto setup = rig{ true };
 
-		// The ask resolves to allow without prompting.
 		CHECK( setup.exec( "git push --force origin main" ) == perm::permission_decision::allow );
 		CHECK( setup.approval.asks( ) == 0 );
 
-		// The floor survives yolo. Both halves asserted; the second is the one a
-		// careless implementation drops.
+		// the floor is checked ahead of the rule merge, so a managed-scope allow cannot lift it.
 		CHECK( setup.exec( "rm -rf ~" ) == perm::permission_decision::deny );
 
-		// And the near-miss is still allowed under yolo.
 		CHECK( setup.exec( "rm -rf ./build" ) == perm::permission_decision::allow );
 	}
 
@@ -165,10 +150,7 @@ namespace permission_test {
 		"[perm][argv]" ) {
 		auto setup = rig{ };
 
-		// The loop maps an unparsable command to an empty resource. No rule may
-		// match it -- even a user-authored allow for "" -- so it always resolves
-		// through the default set's ask. With no answer available the resolution
-		// is a deny, never an allow.
+		// an unparsable command is an empty resource no rule may match, so it denies by default.
 		setup.engine.add_config_rules( perm::rule_scope::user, { }, { "" } );
 
 		CHECK( setup.exec( "" ) == perm::permission_decision::deny );
@@ -185,13 +167,11 @@ namespace permission_test {
 
 		CHECK( setup.exec( "git push --force origin main" ) == perm::permission_decision::deny );
 
-		// The detail text reached the source: full argv, cwd, and the rule.
 		const auto& detail = setup.approval.last_detail( );
 		CHECK( detail.find( "git push --force origin main" ) != std::string::npos );
 		CHECK( detail.find( "cwd:" ) != std::string::npos );
 		CHECK( detail.find( "rule:" ) != std::string::npos );
 
-		// The prompt itself names the action and the subject.
 		CHECK( setup.approval.last_request( ).subject == "git push --force origin main" );
 		CHECK( setup.approval.last_request( ).action == "run" );
 	}
@@ -202,13 +182,11 @@ namespace permission_test {
 		setup.approval.queue( perm::approval_outcome::deny_session );
 		CHECK( setup.exec( "terraform destroy" ) == perm::permission_decision::deny );
 
-		// The session deny outranks any later allow from a lower scope.
 		setup.engine.add_config_rules( perm::rule_scope::user, { }, { "terraform destroy" } );
 
 		CHECK( setup.exec( "terraform destroy" ) == perm::permission_decision::deny );
 		CHECK( setup.approval.asks( ) == 1 );
 
-		// And it was not persisted: [d] never writes the store.
 		const auto layer = setup.store.load( );
 		REQUIRE( layer.has_value( ) );
 
@@ -219,9 +197,6 @@ namespace permission_test {
 
 	TEST_CASE( "exit-5 plumbing: the loop's flag clears on a later success",
 		"[perm][loop]" ) {
-		// Covered end-to-end in test_loop; asserted here at the unit level through
-		// the engine's verdict contract: a deny sets the reason, a later allow
-		// replaces it.
 		auto setup = rig{ };
 
 		setup.approval.queue( perm::approval_outcome::deny_once );

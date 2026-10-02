@@ -26,12 +26,6 @@ namespace {
 	using mcode::test::send_bytes;
 	using mcode::test::socket_handle;
 
-	// A one-shot HTTP server on an ephemeral loopback port.
-	//
-	// The SSE path cannot be tested without a real socket: framing, the buffer
-	// left over from the header read, and the failure status are all properties of
-	// the transport, and a mocked transport would assert the mock rather than the
-	// client. No external network is touched.
 	class loopback_server {
 	public:
 		loopback_server( const std::string& response, const bool close_immediately = false )
@@ -48,8 +42,7 @@ namespace {
 			address.sin_addr.s_addr = host_to_network_long( INADDR_LOOPBACK );
 			address.sin_port = 0;
 
-			// A failure here is not recoverable and the test would hang on connect,
-			// so the port stays zero and `url` produces a refused connection.
+			// a failed bind leaves the port at zero, so the connect is refused, not hung
 			const auto bound = ::bind( socket_, reinterpret_cast< sockaddr* >( &address ),
 				sizeof( address ) ) == 0;
 
@@ -99,8 +92,7 @@ namespace {
 				return;
 			}
 
-			// Drain the request so the client's write completes. A single read is
-			// enough for a body this size.
+			// the request must be read or the client's write can fail
 			auto scratch = std::array< char, 4096 >{ };
 			receive_bytes( accepted, scratch );
 
@@ -114,7 +106,7 @@ namespace {
 				return;
 			}
 
-			// Let the peer read what was sent before the socket goes away.
+			// without the pause the client can lose the response to the close
 			std::this_thread::sleep_for( std::chrono::milliseconds( 50 ) );
 			close_socket( accepted );
 		}
@@ -129,9 +121,7 @@ namespace {
 }
 
 TEST_CASE( "a failed SSE response reports its status, headers and body", "[http]" ) {
-	// The whole reason the failure struct exists: whether a 429 is retryable lives
-	// in the body, and the delay lives in a header. A status-only error makes both
-	// undecidable.
+	// the failure struct exists because retryability lives in the body and the delay in a header
 	const auto body = std::string{ R"({"error":{"type":"insufficient_quota"}})" };
 	const auto response = std::string{ "HTTP/1.1 429 Too Many Requests\r\n"
 		"Content-Type: application/json\r\n"
@@ -156,7 +146,6 @@ TEST_CASE( "a failed SSE response reports its status, headers and body", "[http]
 	CHECK( failure.status == 429 );
 	CHECK( failure.body.find( "insufficient_quota" ) != std::string::npos );
 
-	// The header is what drives the backoff delay.
 	auto retry_after = failure.headers.find( "Retry-After" );
 
 	if ( retry_after == failure.headers.end( ) ) {
@@ -168,9 +157,7 @@ TEST_CASE( "a failed SSE response reports its status, headers and body", "[http]
 }
 
 TEST_CASE( "an SSE event arriving with the headers is not dropped", "[http]" ) {
-	// `read_header` can leave body bytes in its buffer, and a server that writes the
-	// first event in the same segment as the response headers puts them there.
-	// Reading straight from the socket after the header would lose them.
+	// read_header can leave body bytes buffered, so the first event may share the header's segment
 	const auto response = std::string{ "HTTP/1.1 200 OK\r\n"
 		"Content-Type: text/event-stream\r\n"
 		"Connection: close\r\n\r\n" } + "data: {\"delta\":\"first\"}\n\ndata: [DONE]\n\n";
@@ -187,18 +174,13 @@ TEST_CASE( "an SSE event arriving with the headers is not dropped", "[http]" ) {
 
 	REQUIRE( static_cast< bool >( result ) );
 
-	// Both events, including the one that shared the header's segment.
 	REQUIRE( received.size( ) == 2 );
 	CHECK( received[ 0 ].data.find( "first" ) != std::string::npos );
 	CHECK( received[ 1 ].data == "[DONE]" );
 }
 
 TEST_CASE( "a throwing event callback becomes a failure, not a terminate", "[http]" ) {
-	// The model client reports an unusable stream event by throwing out of the
-	// callback. Nothing between it and the transport catches, so a throw that
-	// escaped here reached std::terminate: observed as 0xC0000409 against a real
-	// gateway, on whichever request first delivered an event the applier rejected.
-	// The boundary must convert it into a failure.
+	// a throw out of the event callback must become a failure, not escape to terminate
 	const auto response = std::string{ "HTTP/1.1 200 OK\r\n"
 		"Content-Type: text/event-stream\r\n"
 		"Connection: close\r\n\r\n" } + "data: {\"delta\":\"first\"}\n\n";
@@ -216,12 +198,6 @@ TEST_CASE( "a throwing event callback becomes a failure, not a terminate", "[htt
 }
 
 TEST_CASE( "a chunked SSE body is decoded before it is parsed", "[http]" ) {
-	// Cloudflare fronts the gateway and sends the stream chunked. The body is read
-	// straight off the socket, so the framing reached the event parser: a chunk
-	// boundary inside an event split its JSON across two lines, the continuation
-	// was discarded as a line with no colon, and the truncated payload was
-	// rejected. Observed against the real endpoint as 0xC0000409; a de-chunking
-	// loopback proxy hid it.
 	const auto first = std::string{ "data: {\"del" };
 	const auto second = std::string{ "ta\":\"split\"}\n\n" };
 
@@ -283,10 +259,7 @@ TEST_CASE( "a successful stream leaves the failure struct untouched", "[http]" )
 }
 
 TEST_CASE( "https is not refused", "[http][tls]" ) {
-	// T1's acceptance: the https path is wired, not stubbed. The connection to
-	// the loopback TLS-less port fails as an IO error, not as `unsupported` --
-	// `unsupported` here would mean TLS is not linked, which is the regression
-	// this test exists to catch. No external network: the host is loopback.
+	// an unsupported error here would mean tls is not linked, which is the regression this catches
 	auto request = http_request{ };
 	request.url = "https://127.0.0.1:1/v1/chat";
 	request.timeout_seconds = 1;

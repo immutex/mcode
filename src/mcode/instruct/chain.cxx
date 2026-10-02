@@ -14,16 +14,12 @@ namespace mcode::instruct {
 		inline constexpr std::uintmax_t CHAIN_BYTE_CAP = 64u * 1024u;
 		inline constexpr std::size_t MAX_WALK_DEPTH = 32;
 
-		// The pointer a truncated file leaves, so the model can `read` the rest
-		// instead of the harness silently dropping instructions.
+		// The pointer left behind, so the model can `read` the rest rather than lose it.
 		auto truncation_pointer( const std::filesystem::path& file ) -> std::string {
 			return "[truncated: read " + file.string( ) + " for the rest]\n";
 		}
 
-		// text::truncate appends a three-byte ellipsis after the cut, so a cut
-		// to `keep` yields `keep + 3` bytes. The slack is subtracted up front,
-		// otherwise every truncation lands the chain a few bytes over the cap
-		// and the loop cuts the next file for no reason.
+		// text::truncate appends a 3-byte ellipsis, so the slack must come off the cap first.
 		inline constexpr std::uintmax_t TRUNCATION_ELLIPSIS_BYTES = 3;
 
 		auto read_head( const std::filesystem::path& file ) -> result< std::string > {
@@ -47,9 +43,7 @@ namespace mcode::instruct {
 			return std::filesystem::exists( directory / ".git", error ) && !error;
 		}
 
-		// First match per directory wins: AGENTS.md, else CLAUDE.md, else
-		// GEMINI.md. Reading all three would triple the budget for the common
-		// case where they are copies.
+		// First match per directory wins: AGENTS.md, else CLAUDE.md, else GEMINI.md.
 		auto instruction_file( const std::filesystem::path& directory ) -> std::filesystem::path {
 			for ( const auto* name : { "AGENTS.md", "CLAUDE.md", "GEMINI.md" } ) {
 				const auto candidate = directory / name;
@@ -64,9 +58,7 @@ namespace mcode::instruct {
 			return { };
 		}
 
-		// The walk collects closest first, so it is reversed before returning:
-		// the chain is broadest first and closest last, which is what makes the
-		// closest file win on contradiction.
+		// Collected closest first, reversed before returning: broadest first, closest last.
 		auto walk_ancestors( const std::filesystem::path& start ) -> std::vector< std::filesystem::path > {
 			auto files = std::vector< std::filesystem::path >{ };
 			auto directory = std::filesystem::absolute( start ).lexically_normal( );
@@ -125,9 +117,7 @@ namespace mcode::instruct {
 			chain.entries.push_back( std::move( entry ) );
 		}
 
-		// The broadest file is cut first when the chain exceeds its cap: the
-		// closest file is the one the user is standing in, and it wins on
-		// contradiction, so it is never the one dropped.
+		// The broadest file is cut first; the closest wins on contradiction and is never dropped.
 		auto total = std::uintmax_t{ 0 };
 
 		for ( const auto& entry : chain.entries ) {
@@ -155,8 +145,7 @@ namespace mcode::instruct {
 				entry.text += pointer;
 				entry.truncated = true;
 
-				// The truncate helper appends an ellipsis, so the new size is not
-				// exactly `keep + pointer.size( )`. Recount rather than predict.
+				// The ellipsis makes the new size inexact, so recount rather than predict.
 				total = std::uintmax_t{ 0 };
 
 				for ( const auto& counted : chain.entries ) {
@@ -176,9 +165,7 @@ namespace mcode::instruct {
 		chain.estimated_tokens = static_cast< std::int64_t >(
 			chain.text.size( ) / CHARS_PER_TOKEN_ESTIMATE );
 
-		// The token budget is a lint warning, never a truncation. Dropping user
-		// instructions to hit a token figure is worse than saying the chain is
-		// fat.
+		// A lint warning, never a truncation: dropping user instructions is worse.
 		if ( chain.estimated_tokens > INSTRUCTION_CHAIN_TOKEN_BUDGET ) {
 			chain.warnings.push_back( "instruction chain is about " +
 				std::to_string( chain.estimated_tokens ) + " tokens, over the " +

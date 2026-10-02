@@ -1,5 +1,3 @@
-// The event entry points of the frozen surface: subscribe, unsubscribe and
-// emit. Split from api.cxx, which owns the tool, provider and log entries.
 #include "mcode/ext/api.hxx"
 #include "mcode/ext/api_internal.hxx"
 
@@ -38,10 +36,6 @@ namespace mcode::ext {
 
 		const auto name = std::string_view{ name_text, name_length };
 
-		// `tool.precal` is a typo, not a custom event, and a hook that can never fire
-		// is worse than a load error -- the author would believe their guard was
-		// active. A name whose first segment belongs to the session vocabulary must
-		// be a session event.
 		if ( ext::has_reserved_prefix( name ) ) {
 			const auto message = std::string{ "mcode.on: '" } + std::string{ name } +
 				"' is not a session event, but '" +
@@ -52,8 +46,6 @@ namespace mcode::ext {
 			lua_error( state );
 		}
 
-		// A custom name must be namespaced, so it cannot collide with a future
-		// session event and cannot be mistaken for one.
 		if ( !ext::session_event_kind( name ) && name.find( '.' ) == std::string_view::npos ) {
 			const auto message = std::string{ "mcode.on: '" } + std::string{ name } +
 				"' is not a session event and is not namespaced like a custom event "
@@ -63,8 +55,6 @@ namespace mcode::ext {
 			lua_error( state );
 		}
 
-		// The handler is kept by reference, for the same reason a tool's `run` is:
-		// a Luau function is a value in this VM and cannot be copied into C++.
 		lua_pushvalue( state, 2 );
 		const auto reference = lua_ref( state, -1 );
 		lua_pop( state, 1 );
@@ -90,16 +80,12 @@ namespace mcode::ext {
 
 		const auto number = luaL_checknumber( state, 1 );
 
-		// A fractional or non-positive id addresses nothing. Truncating it would
-		// unsubscribe whatever id the cast happened to land on.
 		if ( number < 1.0 || number != std::floor( number ) ) {
 			return 0;
 		}
 
 		const auto identifier = static_cast< std::uint64_t >( number );
 
-		// Unknown ids are a no-op rather than an error: unsubscribing twice is a
-		// legitimate pattern, and a raise here would make teardown code fragile.
 		self->hooks_->unsubscribe( identifier );
 
 		return 0;
@@ -118,9 +104,6 @@ namespace mcode::ext {
 
 		const auto name = std::string_view{ text != nullptr ? text : "", length };
 
-		// An extension may only emit under its OWN namespace. Subscribing to another
-		// extension's events is legitimate; emitting them is spoofing, and the two
-		// are deliberately asymmetric.
 		{
 			const auto separator = name.find( '.' );
 			const auto prefix = separator == std::string_view::npos
@@ -136,8 +119,6 @@ namespace mcode::ext {
 			}
 		}
 
-		// The payload is plain data by contract: no functions, no
-		// userdata, no cycles. Encoding enforces it rather than documenting it.
 		auto payload = std::string{ "{}" };
 
 		if ( lua_type( state, 2 ) == LUA_TTABLE ) {

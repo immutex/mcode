@@ -15,8 +15,6 @@ namespace mcode::perm {
 
 	namespace {
 
-		// The three verb sections and their key prefix in the JSON file.
-		// One table rather than three copies of the same walk.
 		struct section_spec {
 			std::string_view key;
 		};
@@ -61,15 +59,11 @@ namespace mcode::perm {
 			return value == store_decision::allow ? "allow" : "deny";
 		}
 
-		// Reads the whole file as one object, if it exists.
 		[[nodiscard]] auto read_json( const std::filesystem::path& file )
 			-> result< std::optional< json::node > > {
 			auto input = std::ifstream{ platform::to_extended_path( file ), std::ios::binary };
 
 			if ( !input ) {
-				// Missing is the normal first-run case. Distinguishable from an
-				// open failure on an existing file? Not through ifstream, and the
-				// distinction does not matter: both mean "no entries loaded".
 				return std::optional< json::node >{ };
 			}
 
@@ -95,10 +89,7 @@ namespace mcode::perm {
 			return std::optional< json::node >{ std::move( *parsed ) };
 		}
 
-		// Builds the store file's text directly. The JSON writer's setters all
-		// refuse an empty key, so the root object cannot be attached through
-		// document::set_node; the shape is flat and the values are fixed
-		// literals, so rendering here is exact and keeps sorted keys.
+		// rendered by hand: the JSON writer's setters all refuse an empty key.
 		[[nodiscard]] auto render( const store_layer& layer ) -> std::string {
 			auto out = std::string{ "{\n\t\"version\": " };
 			out += std::to_string( STORE_VERSION );
@@ -236,9 +227,7 @@ namespace mcode::perm {
 	}
 
 	auto remember_store::save( const store_layer& additions ) -> status {
-		// Load-merge-write, not write-what-was-passed: two "always" answers to
-		// two different commands in one session must both survive, and the
-		// second save would otherwise erase the first.
+		// load-merge-write: two answers in one session must both survive.
 		auto existing = load( );
 
 		if ( !existing ) {
@@ -280,10 +269,7 @@ namespace mcode::perm {
 			}
 		}
 
-		// A sibling temp file, so the rename is same-filesystem and atomic. A
-		// crash between the write and the rename leaves the previous contents
-		// intact -- an unreadable store would silently re-prompt for everything
-		// or, worse, be treated as empty and allow nothing.
+		// a sibling temp file, so the rename is same-filesystem and atomic.
 		static auto counter = std::atomic< std::uint64_t >{ 0 };
 
 		const auto stamp = std::to_string( support::epoch_milliseconds( ) ) + "-" +
@@ -329,7 +315,7 @@ namespace mcode::perm {
 	[[nodiscard]] auto store_key_for( const request_identity& request )
 		-> std::optional< store_key > {
 		if ( request.resource.empty( ) && request.klass == tool_class::exec ) {
-			// An unparsable command has no canonical form to remember.
+			// an unparsable command has no canonical form to remember.
 			return std::nullopt;
 		}
 
@@ -338,8 +324,7 @@ namespace mcode::perm {
 		}
 
 		if ( request.klass == tool_class::read || request.klass == tool_class::write ) {
-			// The user's own `paths` entries are hand-written globs; we
-			// never auto-persist one, so there is nothing to key here.
+			// the user's own `paths` entries are hand-written globs, never auto-persisted.
 			return std::nullopt;
 		}
 
@@ -388,10 +373,7 @@ namespace mcode::perm {
 			return { };
 		}
 
-		// Merged rather than assigned, so two stores can be layered: the user's
-		// remembered answers and the repository's own file. A later layer wins
-		// on a key collision, and a deny survives the merge because the drop
-		// below only ever removes allows.
+		// merged rather than assigned, so a later layer wins on a key collision.
 		for ( const auto& spec : SECTIONS ) {
 			const auto* source = find_section( const_cast< store_layer& >( **loaded ), spec.key );
 
@@ -406,10 +388,7 @@ namespace mcode::perm {
 			}
 		}
 
-		// A project-scoped store cannot widen: drop every allow it carries,
-		// with a warning, because a cloned repo must not be able to grant
-		// itself permissions. Denies survive. The store's origin decides: a
-		// file under the workspace root is the project's.
+		// a project-scoped store cannot widen: drop every allow it carries.
 		const auto store_text = store->file( ).generic_string( );
 		const auto root_text = space.root( ).generic_string( );
 

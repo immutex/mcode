@@ -10,8 +10,7 @@ namespace mcode::tools {
 
 	namespace {
 
-		// One process-wide spill sequence; the run-id directory already separates
-		// runs, so this only has to separate calls within one.
+		// the run-id directory separates runs; this only separates calls within one
 		auto spill_sequence = std::atomic< std::uint64_t >{ 0 };
 
 		auto artifact_path( std::string_view run_id, std::string_view tool_name ) -> std::string {
@@ -45,9 +44,7 @@ namespace mcode::tools {
 		const auto path = artifact_path( run_id, tool_name );
 		auto spilled = space.write_file( path, text, write_mode::create );
 
-		// A failed spill must not masquerade as a delivered result. Hard-cut
-		// instead, with the failure stated, so the model knows the full text is
-		// NOT retrievable.
+		// a failed spill must not look like a delivered result: state that the full text is gone
 		if ( !spilled ) {
 			const auto keep = cut_at_codepoint( text, HARD_RESULT_CHARS );
 			auto out = std::string{ text.substr( 0, keep ) };

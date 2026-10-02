@@ -1,6 +1,3 @@
-// The input editor against synthetic key events: multi-line, history, paste,
-// autosuggest.
-
 #include <catch2/catch_test_macros.hpp>
 
 #include <string>
@@ -38,20 +35,17 @@ TEST_CASE( "typing builds a line and enter submits it", "[tui][editor]" ) {
 
 	REQUIRE( submission.has_value( ) );
 	CHECK( *submission == "fix the test" );
-	CHECK( editor.lines( ).size( ) == 1 );
-	CHECK( editor.lines( ).front( ).text.empty( ) );
+	CHECK( editor.text( ).empty( ) );
 }
 
-TEST_CASE( "shift-enter splits the line at the cursor", "[tui][editor]" ) {
+TEST_CASE( "a newline splits the line at the cursor", "[tui][editor]" ) {
 	auto editor = input_editor{ };
 
 	std::ignore = editor.handle( character( "ab" ) );
-	std::ignore = editor.handle( key( input_editor::key::shift_enter ) );
+	std::ignore = editor.handle( key( input_editor::key::newline ) );
 	std::ignore = editor.handle( character( "cd" ) );
 
-	REQUIRE( editor.lines( ).size( ) == 2 );
-	CHECK( editor.lines( )[ 0 ].text == "ab" );
-	CHECK( editor.lines( )[ 1 ].text == "cd" );
+	CHECK( editor.text( ) == "ab cd" );
 
 	const auto submission = editor.handle( key( input_editor::key::enter ) );
 
@@ -63,13 +57,12 @@ TEST_CASE( "backspace joins lines at the start of a row", "[tui][editor]" ) {
 	auto editor = input_editor{ };
 
 	std::ignore = editor.handle( character( "ab" ) );
-	std::ignore = editor.handle( key( input_editor::key::shift_enter ) );
+	std::ignore = editor.handle( key( input_editor::key::newline ) );
 	std::ignore = editor.handle( character( "cd" ) );
 	std::ignore = editor.handle( key( input_editor::key::home ) );
 	std::ignore = editor.handle( key( input_editor::key::backspace ) );
 
-	REQUIRE( editor.lines( ).size( ) == 1 );
-	CHECK( editor.lines( ).front( ).text == "abcd" );
+	CHECK( editor.text( ) == "abcd" );
 }
 
 TEST_CASE( "history navigation walks up and returns to the draft", "[tui][editor]" ) {
@@ -83,70 +76,32 @@ TEST_CASE( "history navigation walks up and returns to the draft", "[tui][editor
 	std::ignore = editor.handle( character( "draft" ) );
 	std::ignore = editor.handle( key( input_editor::key::up ) );
 
-	CHECK( editor.lines( ).front( ).text == "second" );
+	CHECK( editor.text( ) == "second" );
 
 	std::ignore = editor.handle( key( input_editor::key::up ) );
 
-	CHECK( editor.lines( ).front( ).text == "first" );
+	CHECK( editor.text( ) == "first" );
 
 	std::ignore = editor.handle( key( input_editor::key::down ) );
 
-	CHECK( editor.lines( ).front( ).text == "second" );
+	CHECK( editor.text( ) == "second" );
 
 	std::ignore = editor.handle( key( input_editor::key::down ) );
 
-	CHECK( editor.lines( ).front( ).text == "draft" );
+	CHECK( editor.text( ) == "draft" );
 }
 
-TEST_CASE( "a repeated history entry is not stored twice", "[tui][editor]" ) {
-	auto editor = input_editor{ };
-
-	std::ignore = editor.handle( character( "same" ) );
-	std::ignore = editor.handle( key( input_editor::key::enter ) );
-	std::ignore = editor.handle( character( "same" ) );
-	std::ignore = editor.handle( key( input_editor::key::enter ) );
-
-	CHECK( editor.history( ).size( ) == 1 );
-}
-
-TEST_CASE( "the ghost suggestion completes from history", "[tui][editor]" ) {
-	auto editor = input_editor{ };
-
-	std::ignore = editor.handle( character( "cmake --build build/Release" ) );
-	std::ignore = editor.handle( key( input_editor::key::enter ) );
-
-	std::ignore = editor.handle( character( "cmake" ) );
-
-	CHECK( editor.suggestion( ) == " --build build/Release" );
-}
-
-TEST_CASE( "no suggestion when nothing matches or the line is empty",
-	"[tui][editor]" ) {
-	auto editor = input_editor{ };
-
-	std::ignore = editor.handle( character( "zzz" ) );
-	CHECK( editor.suggestion( ).empty( ) );
-
-	std::ignore = editor.handle( key( input_editor::key::backspace ) );
-	std::ignore = editor.handle( key( input_editor::key::backspace ) );
-	std::ignore = editor.handle( key( input_editor::key::backspace ) );
-
-	CHECK( editor.suggestion( ).empty( ) );
-}
-
-TEST_CASE( "interrupt clears the pending input and the session continues",
-	"[tui][editor]" ) {
+TEST_CASE( "interrupt clears the pending input", "[tui][editor]" ) {
 	auto editor = input_editor{ };
 
 	std::ignore = editor.handle( character( "ab" ) );
-	std::ignore = editor.handle( key( input_editor::key::shift_enter ) );
+	std::ignore = editor.handle( key( input_editor::key::newline ) );
 	std::ignore = editor.handle( character( "cd" ) );
 
 	std::ignore = editor.handle( key( input_editor::key::interrupt ) );
 
-	REQUIRE( editor.lines( ).size( ) == 1 );
-	CHECK( editor.lines( ).front( ).text.empty( ) );
-	CHECK_FALSE( editor.exit_requested( ) );
+	CHECK( editor.text( ).empty( ) );
+	CHECK( editor.flattened_cursor( ) == 0 );
 }
 
 TEST_CASE( "cursor movement stays within the buffer", "[tui][editor]" ) {
@@ -156,20 +111,20 @@ TEST_CASE( "cursor movement stays within the buffer", "[tui][editor]" ) {
 	std::ignore = editor.handle( key( input_editor::key::left ) );
 	std::ignore = editor.handle( key( input_editor::key::left ) );
 
-	CHECK( editor.cursor_offset( ) == 1 );
+	CHECK( editor.flattened_cursor( ) == 1 );
 
 	std::ignore = editor.handle( character( "X" ) );
 
-	CHECK( editor.lines( ).front( ).text == "aXbc" );
+	CHECK( editor.text( ) == "aXbc" );
 
 	std::ignore = editor.handle( key( input_editor::key::home ) );
 	std::ignore = editor.handle( key( input_editor::key::left ) );
 
-	CHECK( editor.cursor_offset( ) == 0 );
+	CHECK( editor.flattened_cursor( ) == 0 );
 
 	std::ignore = editor.handle( key( input_editor::key::end ) );
 
-	CHECK( editor.cursor_offset( ) == 4 );
+	CHECK( editor.flattened_cursor( ) == 4 );
 }
 
 TEST_CASE( "delete removes forward and joins at the end of a row", "[tui][editor]" ) {
@@ -179,59 +134,37 @@ TEST_CASE( "delete removes forward and joins at the end of a row", "[tui][editor
 	std::ignore = editor.handle( key( input_editor::key::home ) );
 	std::ignore = editor.handle( key( input_editor::key::delete_key ) );
 
-	CHECK( editor.lines( ).front( ).text == "bc" );
+	CHECK( editor.text( ) == "bc" );
 
-	// Delete at the end of a row joins the next one into it.
 	std::ignore = editor.handle( key( input_editor::key::end ) );
-	std::ignore = editor.handle( key( input_editor::key::shift_enter ) );
+	std::ignore = editor.handle( key( input_editor::key::newline ) );
 	std::ignore = editor.handle( character( "def" ) );
 	std::ignore = editor.handle( key( input_editor::key::up ) );
 	std::ignore = editor.handle( key( input_editor::key::end ) );
 	std::ignore = editor.handle( key( input_editor::key::delete_key ) );
 
-	REQUIRE( editor.lines( ).size( ) == 1 );
-	CHECK( editor.lines( ).front( ).text == "bcdef" );
+	CHECK( editor.text( ) == "bcdef" );
 }
 
-TEST_CASE( "escape abandons the pending input without ending the session",
-	"[tui][editor]" ) {
-	// Escape used to map to the session-exit key, so one stray press lost the
-	// whole conversation.
+TEST_CASE( "escape abandons the pending input", "[tui][editor]" ) {
 	auto editor = input_editor{ };
 
-	auto typed = input_editor::key_event{ };
-	typed.type = input_editor::key::character;
-	typed.text = "half a thought";
-	std::ignore = editor.handle( typed );
+	std::ignore = editor.handle( character( "half a thought" ) );
 
 	CHECK( editor.text( ) == "half a thought" );
 
-	auto escape = input_editor::key_event{ };
-	escape.type = input_editor::key::escape;
-	const auto submitted = editor.handle( escape );
+	const auto submitted = editor.handle( key( input_editor::key::escape ) );
 
 	CHECK_FALSE( submitted.has_value( ) );
 	CHECK( editor.text( ).empty( ) );
 }
 
 TEST_CASE( "the flattened caret counts across rows", "[tui][editor]" ) {
-	// The one-line prompt echo needs a single offset, and it must match the
-	// space `text()` joins rows with, or the caret drifts by one per row.
 	auto editor = input_editor{ };
 
-	auto first = input_editor::key_event{ };
-	first.type = input_editor::key::character;
-	first.text = "abc";
-	std::ignore = editor.handle( first );
-
-	auto newline = input_editor::key_event{ };
-	newline.type = input_editor::key::shift_enter;
-	std::ignore = editor.handle( newline );
-
-	auto second = input_editor::key_event{ };
-	second.type = input_editor::key::character;
-	second.text = "de";
-	std::ignore = editor.handle( second );
+	std::ignore = editor.handle( character( "abc" ) );
+	std::ignore = editor.handle( key( input_editor::key::newline ) );
+	std::ignore = editor.handle( character( "de" ) );
 
 	CHECK( editor.text( ) == "abc de" );
 	CHECK( editor.flattened_cursor( ) == 6 );

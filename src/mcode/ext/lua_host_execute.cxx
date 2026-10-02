@@ -78,8 +78,7 @@ namespace mcode {
 			return out;
 		}
 
-		// lua_tolstring converts only strings and numbers. Booleans and nil --
-		// what most probes return -- must go through the VM's own tostring.
+		// lua_tolstring handles only strings and numbers, so booleans and nil go via tostring.
 		lua_getglobal( thread_, "tostring" );
 		lua_pushvalue( thread_, -2 );
 
@@ -172,7 +171,6 @@ namespace mcode {
 			lua_pop( state, 1 );
 		}
 
-		// A miss. The cache table is on top of the stack and stays there.
 		auto* loader = ext::detail::loader_from( state );
 
 		if ( loader == nullptr || !*loader ) {
@@ -183,8 +181,7 @@ namespace mcode {
 			lua_error( state );
 		}
 
-		// The loader owns path resolution and confinement. A path it refuses is
-		// a load error, never a filesystem fallback.
+		// the loader owns resolution and confinement; a refused path is a load error.
 		auto source = ( *loader )( path );
 
 		if ( !source ) {
@@ -198,23 +195,18 @@ namespace mcode {
 		auto message = std::string{ };
 
 		if ( !ext::detail::load_chunk( state, *source, path, message ) ) {
-			// The error is already on the stack, above the cache.
 			lua_remove( state, -2 );
 
 			lua_error( state );
 		}
 
-		// Stack is [cache, chunk]. The chunk is on top, so this calls the chunk;
-		// the cache stays below as the frame's only other slot.
 		if ( lua_pcall( state, 0, 1, 0 ) != 0 ) {
 			lua_remove( state, -2 );
 
 			lua_error( state );
 		}
 
-		// Stack is [cache, result]. Cache the module's return value and leave it
-		// as the result, so a module body runs once per VM however many times it
-		// is required.
+		// caches the module's return value so its body runs once per VM.
 		const auto cache_index = lua_absindex( state, -2 );
 
 		lua_pushvalue( state, -1 );

@@ -13,8 +13,6 @@ namespace mcode::tools {
 
 	namespace {
 
-		// Validates the subset of JSON-Schema the core tools use: type object,
-		// properties, required naming declared properties.
 		[[nodiscard]] auto validate_schema_object( const json::document& schema,
 			std::string& complaint ) -> bool {
 			const auto type = schema.get_string( "type" );
@@ -42,8 +40,6 @@ namespace mcode::tools {
 			return true;
 		}
 
-		// Wraps a raw handler with the argument-parse step and the error contract,
-		// so no tool hand-rolls its own malformed-argument path.
 		auto wrap_handler( const std::function< result< std::string >( const tool_args&,
 			tool_context& ) >& raw, const tool_context& context )
 			-> std::function< result< std::string >( std::string_view args_json ) > {
@@ -138,8 +134,7 @@ namespace mcode::tools {
 			}
 		}
 
-		// Handlers go through the sink after every schema is registered, so a
-		// schema failure leaves no half-registered set behind.
+		// after every schema, so a schema failure leaves no half-registered set behind
 		sink.add_handler( "read", wrap_handler( handle_read, context ) );
 		sink.add_handler( "write", wrap_handler( handle_write, context ) );
 		sink.add_handler( "edit", wrap_handler( handle_edit, context ) );

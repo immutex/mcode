@@ -17,36 +17,26 @@ namespace mcode::tools {
 
 	namespace {
 
-		// Binary content is refused on bytes before any decoding, so a probe of the
-		// head is what decides -- not the decoded text.
+		// refusal is decided on the raw head bytes, before any decoding
 		inline constexpr std::size_t BINARY_PROBE_BYTES = 8192;
 
-		// A line longer than this is machine-generated output, not something to
-		// edit through a viewport.
+		// machine-generated output, not something to edit through a viewport
 		inline constexpr std::size_t MINIFIED_LINE_BYTES = 5u * 1024u;
 
-		// Files at or above this size get the large-file stub treatment even though
-		// a window is served: the model should navigate deliberately, not page
-		// through blindly. Same threshold the docs give for the >1 MiB row.
+		// even a served window gets the large-file stub: navigate deliberately, not blind paging
 		inline constexpr std::uintmax_t LARGE_FILE_BYTES = 1u * 1024u * 1024u;
 
-		// Window serving reads at most this many bytes per call, which is what
-		// keeps a 9 MiB file readable a window at a time. Well above any 1000-line
-		// window of normal source, far below the write cap.
+		// keeps a file up to the write cap readable a window at a time
 		inline constexpr std::uintmax_t WINDOW_READ_BYTES = 16u * 1024u * 1024u;
 
-		// The closest-existing-path search bounds itself to the parent directory
-		// and this many candidates, so typo recovery never walks the tree.
+		// typo recovery scans the parent directory only, never the tree
 		inline constexpr std::size_t SUGGESTION_LIMIT = 12;
 
-		// The directory scan stops after this multiple of the suggestion limit, so
-		// typo recovery stays bounded even in a crowded directory.
 		inline constexpr std::size_t SUGGESTION_SCAN_MULTIPLIER = 16;
 
 		inline constexpr std::size_t MAX_READ_LINES = 1000;
 
-		// A file with more lines than this gets the large-file note even when the
-		// byte size is under the large-file threshold.
+		// line-count arm of the large-file note
 		inline constexpr std::size_t LARGE_FILE_LINES = 50'000;
 
 		struct binary_extensions {
@@ -79,10 +69,7 @@ namespace mcode::tools {
 			return text;
 		}
 
-		// Reads up to `max_bytes` from an absolute path without the whole-file cap.
-		// The tool layer's window reader: `workspace::read_file` refuses past 8 MiB,
-		// which is correct for whole-file consumers and wrong for a windowed read
-		// of a file the model may legitimately edit (the write cap is 10 MiB).
+		// workspace::read_file caps at 8 MiB; the write cap is 10 MiB, so a window read bypasses it
 		[[nodiscard]] auto read_window_bytes( const std::filesystem::path& absolute,
 			const std::uintmax_t max_bytes ) -> result< std::string > {
 			auto input = std::ifstream{ platform::to_extended_path( absolute ), std::ios::binary };
@@ -105,8 +92,6 @@ namespace mcode::tools {
 			return content;
 		}
 
-		// The closest existing sibling in the same directory, by a bounded
-		// similarity heuristic on the file name. One directory listing, one pass.
 		[[nodiscard]] auto closest_existing( const workspace& space,
 			const std::filesystem::path& missing ) -> std::optional< std::string > {
 			auto error_code = std::error_code{ };
@@ -139,8 +124,6 @@ namespace mcode::tools {
 					continue;
 				}
 
-				// Count matching leading characters and require the name to stay
-				// close in length; no dynamic programming.
 				const auto shared = std::min( name.size( ), wanted.size( ) );
 				auto common = std::size_t{ 0 };
 
@@ -167,7 +150,6 @@ namespace mcode::tools {
 			return best_name;
 		}
 
-		// The read window request, shared by the normal and large-file paths.
 		struct window_request {
 			std::filesystem::path absolute;
 			std::string_view relative;
@@ -179,8 +161,6 @@ namespace mcode::tools {
 			tool_context* context = nullptr;
 		};
 
-		// The read window itself, shared by the normal and large-file paths. Returns
-		// the rendered JSON result.
 		[[nodiscard]] auto render_window( const window_request& request ) -> result< std::string > {
 			const auto safe = text::sanitize_utf8( *request.content );
 
@@ -208,10 +188,7 @@ namespace mcode::tools {
 
 			const auto total_lines = lines.size( );
 
-			// An empty file has zero lines and is a legitimate state, not an offset
-			// past the end. Without this the default offset of 1 was rejected, so
-			// reading a file the agent had just created failed and the read was
-			// never recorded -- which then refused the write that followed.
+			// an empty file is a legitimate state, not an offset past the end
 			if ( total_lines > 0 && request.offset > total_lines ) {
 				return error_result( "offset " + std::to_string( request.offset ) + " is past the end of " +
 						std::string{ request.relative } + " (" + std::to_string( total_lines ) + " lines)",
@@ -235,10 +212,7 @@ namespace mcode::tools {
 			auto notes = std::string{ };
 			auto truncated_window = last < total_lines;
 
-			// An empty file renders as an empty string, which the model cannot tell
-			// apart from a tool that returned nothing -- observed live as "let me
-			// check the file content properly" followed by a redundant re-read. Say
-			// so explicitly.
+			// an empty render is indistinguishable from a tool that returned nothing; say so
 			if ( total_lines == 0 ) {
 				notes += "\"empty\":true,";
 			}
@@ -264,9 +238,7 @@ namespace mcode::tools {
 				rendered += "\n{" + notes + "}";
 			}
 
-			// The recorded hash must match what content_hash computes over the RAW
-			// bytes, or a non-UTF-8 file reads as stale on the first write. The
-			// sanitised text is for display only.
+			// hash the RAW bytes: hashing the sanitized text makes a non-UTF-8 file read stale
 			const auto hash = hash_bytes( *request.content );
 			request.context->reads->record( request.absolute, hash );
 
@@ -317,10 +289,7 @@ namespace mcode::tools {
 		auto resolved = space.resolve( *path );
 
 		if ( !resolved ) {
-			// Outside the workspace is a decision, not a hard refusal: a deny
-			// rule denies it, the default set prompts (or denies headless), and
-			// approval = always prompts even here. The resource is the canonical
-			// spelling of the path, resolved against the root.
+			// not a refusal: deny rules deny, the default set prompts; resource is canonical
 			auto candidate = std::filesystem::path{ space.root( ) } /
 				std::filesystem::path{ *path };
 			auto canonical = platform::canonicalize( candidate );
@@ -353,8 +322,6 @@ namespace mcode::tools {
 		if ( !resolved ||
 			!std::filesystem::exists( platform::to_extended_path( *resolved ), error_code ) ||
 			error_code ) {
-			// Typo recovery: find the closest existing path in the same directory
-			// before reporting the failure.
 			auto probe = std::filesystem::path{ space.root( ) } / std::filesystem::path{ *path };
 			const auto suggestion = closest_existing( space, probe );
 
@@ -383,9 +350,6 @@ namespace mcode::tools {
 			return refuse_binary( *path, size, extension + " file" );
 		}
 
-		// The window is served from a bounded streaming read, never the whole-file
-		// reader, so a file between the read cap and the write cap is still
-		// navigable a window at a time.
 		auto content = read_window_bytes( absolute, WINDOW_READ_BYTES );
 
 		if ( !content ) {

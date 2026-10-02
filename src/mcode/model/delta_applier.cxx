@@ -9,9 +9,6 @@ namespace mcode::model {
 
 	namespace {
 
-		// Extracts a field only if the pointer is mapped and present. A pointer
-		// that is not mapped is not an error -- most providers omit most fields on
-		// most events -- so absence and "not mapped" both yield nothing.
 		auto optional_string( const json::document& doc, const std::string& pointer )
 			-> std::optional< std::string > {
 			if ( pointer.empty( ) ) {
@@ -38,7 +35,6 @@ namespace mcode::model {
 			return std::nullopt;
 		}
 
-		// An empty gate admits every event; otherwise the event name must be listed.
 		auto event_allowed( const std::string_view name, const std::vector< std::string >& gate )
 			-> bool {
 			if ( gate.empty( ) ) {
@@ -79,14 +75,7 @@ namespace mcode::model {
 		-> result< std::vector< chat_event > > {
 		auto produced = std::vector< chat_event >{ };
 
-		// The escape hatch replaces the whole mapping, including terminal detection:
-		// a provider exotic enough to need it is exotic enough that the sentinel and
-		// event-name rules do not apply.
 		if ( descriptor_.escape_hatch ) {
-			// Declared but not installed. Falling through to the declarative mapping
-			// would be the worst option: the descriptor maps nothing, so every event
-			// would be accepted and silently produce an empty turn with no terminal
-			// ever seen.
 			if ( !escape_ ) {
 				return std::unexpected( fail( errc::protocol,
 					"provider '" + descriptor_.name +
@@ -96,14 +85,7 @@ namespace mcode::model {
 			return escape_( event_name, data );
 		}
 
-		// Everything after the terminal event is ignorable.
-		//
-		// A provider may emit a trailing event -- a rate-limit notice, a keepalive
-		// -- after the one that ended the stream, and new event types appear
-		// without warning. Processing one lets a late fallthrough overwrite state
-		// that is already final: a text delta would append to a finished turn, a
-		// usage event would re-add to the totals. The escape hatch above owns its
-		// own terminal detection, so this sits after it.
+		// trailing events after the terminal one would overwrite state that is already final.
 		if ( terminal_seen_ ) {
 			return produced;
 		}
@@ -116,9 +98,7 @@ namespace mcode::model {
 			}
 		}
 
-		// The [DONE] sentinel is a bare payload, not JSON. Every OpenAI-compatible
-		// endpoint sends it, so it is handled structurally rather than by asking
-		// descriptors to declare it.
+		// the [DONE] sentinel is a bare payload, not JSON.
 		if ( data == "[DONE]" ) {
 			terminal_seen_ = true;
 
@@ -136,9 +116,7 @@ namespace mcode::model {
 				"stream event is not JSON: " + parsed.error( ).msg ) );
 		}
 
-		// A mid-stream failure is terminal, and it is reported as an ordinary event
-		// rather than an HTTP status. Surfaced here or the provider's reason is
-		// discarded and the turn looks like an unexplained truncation.
+		// a mid-stream failure is terminal and arrives as an ordinary event, not an HTTP status.
 		if ( !descriptor_.stream.error_message.empty( ) ) {
 			if ( auto message = optional_string( *parsed, descriptor_.stream.error_message ) ) {
 				auto detail = std::string{ };
@@ -154,8 +132,6 @@ namespace mcode::model {
 			}
 		}
 
-		// A pointer may be gated on the SSE event name, for wire formats that put two
-		// different things at the same pointer. An empty gate means "every event".
 		const auto text_applies = event_allowed( event_name, descriptor_.stream.text_events );
 		const auto tool_applies = event_allowed( event_name, descriptor_.stream.tool_call_events );
 
@@ -181,15 +157,10 @@ namespace mcode::model {
 			}
 		}
 
-		// Tool-call fragments. The index defaults to 0 for providers that only
-		// ever send one call and omit the field.
 		const auto raw_index = optional_int( *parsed, descriptor_.stream.tool_call_index )
 			.value_or( 0 );
 
-		// The index comes off the wire, so it is untrusted. It addresses an array
-		// and is stored as an int: a negative or out-of-range value would be a
-		// truncating cast followed by unbounded growth, which is a hostile gateway's
-		// amplification primitive -- ten bytes in, megabytes retained.
+		// the wire-supplied index is untrusted: it addresses an array and is stored as an int.
 		if ( raw_index < 0 || raw_index >= MAX_PARALLEL_CALLS ) {
 			return std::unexpected( fail( errc::protocol,
 				"tool-call index " + std::to_string( raw_index ) + " is outside [0, " +
@@ -209,9 +180,6 @@ namespace mcode::model {
 		if ( id_fragment || name_fragment || args_fragment ) {
 			auto& call = pending_for( static_cast< int >( raw_index ) );
 
-			// Fragments concatenate: a provider splits a call's arguments across
-			// arbitrary events, so the id and name are also treated as fragments
-			// rather than overwritten.
 			if ( id_fragment ) {
 				call.id += *id_fragment;
 			}
@@ -224,11 +192,7 @@ namespace mcode::model {
 				call.args_fragments += *args_fragment;
 			}
 
-			// Emitted on any fragment, not only once a name is known. The index is
-			// what correlates fragments, and some gateways send arguments before the
-			// name -- waiting would drop those fragments from the stream while still
-			// accumulating them. Whether a call is *usable* is decided in finish(),
-			// which is the only point where the fragments are complete.
+			// emitted on any fragment, not only once a name is known.
 			auto event = chat_event{ };
 			event.type = chat_event::kind::tool_call_delta;
 			event.index = call.index;
@@ -243,8 +207,6 @@ namespace mcode::model {
 			stop_reason_ = *reason;
 		}
 
-		// Usage. Reported as deltas by some providers and cumulatively by others;
-		// usage::add takes the max, which is correct for both.
 		auto input = optional_int( *parsed, descriptor_.stream.usage_input );
 		auto output = optional_int( *parsed, descriptor_.stream.usage_output );
 		auto cached = optional_int( *parsed, descriptor_.stream.usage_cached_read );
@@ -271,14 +233,7 @@ namespace mcode::model {
 	auto delta_applier::finish( ) -> std::vector< chat_event > {
 		auto produced = std::vector< chat_event >{ };
 
-		// Completed tool calls, in index order. A call whose arguments never parsed
-		// as JSON is still emitted, with its raw fragments, so the caller sees a
-		// truncated call rather than a silently missing one.
 		for ( auto& call : pending_ ) {
-			// Only a call that carries nothing at all is skipped. Gating on a name
-			// would discard every call from a format that streams arguments without
-			// ever naming the function -- [OI] Responses does exactly that, and the
-			// caller would see a turn with no tool calls and no explanation.
 			if ( call.name.empty( ) && call.id.empty( ) && call.args_fragments.empty( ) ) {
 				continue;
 			}

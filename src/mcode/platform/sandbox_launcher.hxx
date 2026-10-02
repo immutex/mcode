@@ -1,11 +1,5 @@
 #pragma once
 
-// The POSIX launcher initializer shared by run_process and session::spawn.
-// The restriction applies between fork and exec, so the child never runs a
-// single instruction unsandboxed. Landlock hard-fails on an unknown ABI and
-// Seatbelt hard-fails when the profile is refused; a sandbox that silently
-// did not apply is the failure this seam exists to prevent.
-
 #include <cstdio>
 #include <filesystem>
 #include <string_view>
@@ -31,18 +25,12 @@ namespace mcode::platform {
 
 #if defined( __linux__ ) || defined( __APPLE__ )
 
-	// The child runs this between fork and exec, so it must not allocate more
-	// than it has to and must never throw. It reports through fd 2 directly
-	// because the parent's error channel carries only an error_code, and a
-	// blind failure here is indistinguishable from a missing binary -- the
-	// exact ambiguity that made this seam's first POSIX failure unreadable.
+	// runs between fork and exec: must not allocate and must never throw.
 	inline auto report_child_sandbox_failure( const std::string_view what ) -> void {
 		const auto* prefix = "mcode: the OS sandbox could not be applied: ";
 		const auto prefix_length = std::char_traits< char >::length( prefix );
 
-		// Every write is checked: glibc marks `write` warn_unused_result, and
-		// this is a -Werror build. A failure to report is not itself
-		// reportable, so the loop simply stops.
+		// glibc marks `write` warn_unused_result and this is a -Werror build.
 		if ( ::write( STDERR_FILENO, prefix, prefix_length ) < 0 ) {
 			return;
 		}

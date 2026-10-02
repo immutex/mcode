@@ -34,20 +34,14 @@ namespace mcode::net {
 		std::string target;
 	};
 
-	// A non-2xx response that ended the stream before any event arrived.
-	//
-	// `stream_sse` cannot classify its own failure: whether a 429 is a rate limit
-	// to retry or a quota to surface lives in the body, and the retry delay lives
-	// in `Retry-After`. Collapsing that to a string makes the taxonomy
-	// undecidable, so the parts are handed back instead.
+	// The taxonomy lives in the body and headers, so the parts are handed back undecided.
 	struct http_failure {
 		int status = 0;
 		std::string body;
 		std::map< std::string, std::string, std::less<> > headers;
 	};
 
-	// An error body is a diagnostic, not content. Bounded so a gateway that
-	// answers with a stream of HTML cannot exhaust memory on the failure path.
+	// Bounded so a gateway answering with HTML cannot exhaust memory on the failure path.
 	inline constexpr std::uint64_t MAX_ERROR_BODY_BYTES = 64ull * 1024ull;
 
 	[[nodiscard]] auto parse_url( const std::string_view text ) -> result< url >;
@@ -62,12 +56,7 @@ namespace mcode::net {
 
 		[[nodiscard]] auto send( const http_request& request ) -> result< http_response >;
 
-		// Streams SSE.
-		//
-		// `failure`, when given, is filled only for a non-2xx response -- status,
-		// headers and as much of the body as arrived. Other failures (DNS, refused
-		// connection, timeout) leave it untouched, because there is no response to
-		// report. The caller distinguishes the two by the error code.
+		// `failure` is filled only for a non-2xx response; other failures leave it untouched.
 		[[nodiscard]] auto stream_sse( const http_request& request, sse_parser::event_callback on_event,
 			http_failure* failure = nullptr ) -> status;
 

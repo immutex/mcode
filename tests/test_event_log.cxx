@@ -40,10 +40,6 @@ namespace {
 }
 
 TEST_CASE( "every event is flushed as it is appended", "[eventlog]" ) {
-	// E2's acceptance: a crash mid-run replays cleanly. The mechanism is that
-	// nothing is buffered, so the file on disk is always complete up to the last
-	// append. This reads the file WITHOUT closing the log, which is the state a
-	// crash leaves behind.
 	const auto directory = scratch_dir( );
 	const auto path = directory / "session.jsonl";
 
@@ -54,7 +50,6 @@ TEST_CASE( "every event is flushed as it is appended", "[eventlog]" ) {
 	log.append( "tool.call", R"({"name":"read"})" );
 	log.append( "tool.result", R"({"ok":true})" );
 
-	// No close, no flush: read what a crash would leave.
 	const auto on_disk = read_all( path );
 	REQUIRE( line_count( on_disk ) == 3 );
 	REQUIRE( on_disk.find( "session.start" ) != std::string::npos );
@@ -66,18 +61,12 @@ TEST_CASE( "every event is flushed as it is appended", "[eventlog]" ) {
 	REQUIRE_FALSE( replayed->truncated_tail );
 	REQUIRE( replayed->malformed_lines == 0 );
 
-	// The log is deliberately still open here -- that is the crash state being
-	// asserted -- so it must be closed before the directory can be removed on
-	// Windows.
 	log.close( );
 
 	std::filesystem::remove_all( directory );
 }
 
 TEST_CASE( "a torn final line is reported, not fatal", "[eventlog]" ) {
-	// The realistic crash: the process dies mid-write. Discarding the whole
-	// session because of one truncated line would lose exactly the evidence a
-	// post-mortem wants.
 	const auto directory = scratch_dir( );
 	const auto path = directory / "torn.jsonl";
 
@@ -88,7 +77,6 @@ TEST_CASE( "a torn final line is reported, not fatal", "[eventlog]" ) {
 	log.append( "tool.call" );
 	log.close( );
 
-	// Simulate the torn write.
 	{
 		auto out = std::ofstream{ path, std::ios::binary | std::ios::app };
 		out << R"({"v":1,"seq":2,"kind":"tool.resul)";
@@ -97,7 +85,6 @@ TEST_CASE( "a torn final line is reported, not fatal", "[eventlog]" ) {
 	auto replayed = replay_event_log( path );
 	REQUIRE( static_cast< bool >( replayed ) );
 
-	// The two complete events survive.
 	REQUIRE( replayed->events_read == 2 );
 	REQUIRE( replayed->truncated_tail );
 	REQUIRE( replayed->malformed_lines == 0 );
@@ -125,8 +112,7 @@ TEST_CASE( "replay restores event payloads", "[eventlog]" ) {
 }
 
 TEST_CASE( "a corrupt line is counted separately from a torn tail", "[eventlog]" ) {
-	// These are different problems: a torn tail is an interrupted write, a
-	// malformed interior line means the file is not what it claims to be.
+	// a torn tail is an interrupted write; an interior malformed line means the file is corrupt
 	const auto directory = scratch_dir( );
 	const auto path = directory / "corrupt.jsonl";
 
@@ -147,8 +133,7 @@ TEST_CASE( "a corrupt line is counted separately from a torn tail", "[eventlog]"
 }
 
 TEST_CASE( "reopening a log continues its sequence numbering", "[eventlog]" ) {
-	// A resumed session must not restart at zero and collide with what is already
-	// on disk, or the log stops being a total order.
+	// a resumed session must adopt the existing numbering or the log stops being a total order
 	const auto directory = scratch_dir( );
 	const auto path = directory / "resumed.jsonl";
 
@@ -160,7 +145,6 @@ TEST_CASE( "reopening a log continues its sequence numbering", "[eventlog]" ) {
 		REQUIRE( first.next_sequence( ) == 2 );
 	}
 
-	// A second log over the same file adopts the existing numbering.
 	auto second = event_log{ };
 	REQUIRE( static_cast< bool >( second.open( path ) ) );
 	REQUIRE( second.next_sequence( ) == 2 );
@@ -169,7 +153,6 @@ TEST_CASE( "reopening a log continues its sequence numbering", "[eventlog]" ) {
 	REQUIRE( appended.sequence == 2 );
 	second.close( );
 
-	// Three lines, sequences 0, 1, 2 with no duplicates.
 	const auto text = read_all( path );
 	REQUIRE( line_count( text ) == 3 );
 	REQUIRE( text.find( "\"seq\":2" ) != std::string::npos );
@@ -178,8 +161,7 @@ TEST_CASE( "reopening a log continues its sequence numbering", "[eventlog]" ) {
 }
 
 TEST_CASE( "an unopened log still works in memory", "[eventlog]" ) {
-	// The log must be usable without a file -- the smoke test and unit tests rely
-	// on it, and a session that cannot write should degrade rather than fail.
+	// the log is usable without a file so a session that cannot write degrades
 	auto log = event_log{ };
 
 	REQUIRE_FALSE( log.is_open( ) );
@@ -197,7 +179,6 @@ TEST_CASE( "an unopened log still works in memory", "[eventlog]" ) {
 TEST_CASE( "an unwritable path fails at open, not at append", "[eventlog]" ) {
 	auto log = event_log{ };
 
-	// A path whose parent is an existing FILE cannot be created.
 	const auto directory = scratch_dir( );
 	const auto blocker = directory / "not-a-directory";
 	{

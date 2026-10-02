@@ -9,21 +9,13 @@
 
 namespace mcode::mcp {
 
-	// One parsed line delivered to the client. `skipped` marks a line that was
-	// not a JSON-RPC frame -- a banner, a blank line, a stray log line -- and is
-	// reported rather than silently dropped, so the log shows what the server
-	// actually printed.
+	// skipped marks a line that was not a JSON-RPC frame; reported, never silently dropped
 	struct inbound {
 		bool skipped = false;
 		std::string line_json;
 	};
 
-	// The transport seam between the client and the wire.
-	//
-	// The client drives: it hands frames to `send` and receives lines through
-	// `on_message`. `on_eof` is the event that marks the server gone -- the
-	// supervisor's restart policy and the client's pending-call rejection both
-	// hang off it, and it is an event, not an error return.
+	// on_eof is an event, not an error return: restart policy and call rejection hang off it
 	class transport {
 	public:
 		using message_callback = std::function< void( inbound&& ) >;
@@ -34,35 +26,26 @@ namespace mcode::mcp {
 		transport( const transport& ) = delete;
 		auto operator=( const transport& ) -> transport& = delete;
 
-		// One JSON-RPC frame, newline-terminated by the implementation.
 		virtual auto send( std::string_view frame_json ) -> status = 0;
 
-		// Runs until the server's stdout ends. Returns when the transport is
-		// dead; the callbacks have seen every line and the EOF by then.
+		// returns when the transport is dead; the callbacks have seen every line and the EOF
 		virtual auto run( ) -> status = 0;
 
-		// Drives the transport for up to `window`, delivering whatever arrives
-		// through the callbacks, then returns. Never blocks past the window by
-		// more than a poll step. The client's call path uses this to wait on a
-		// specific response while keeping the timeout at the call site.
+		// delivers what arrives within `window`, then returns; never blocks past it by a poll step
 		virtual auto pump( std::chrono::milliseconds window ) -> void = 0;
 
-		// Ends the child's input without tearing the session down. A graceful
-		// shutdown asks the server to finish; `stop` is the harder cut.
+		// ends the child's input without tearing the session down
 		virtual auto close_input( ) -> status = 0;
 
-		// Unconditional termination. The last step of the shutdown sequence.
 		virtual auto stop( ) -> void = 0;
 
-		// True while the child is alive. A transport that has seen EOF reports
-		// false even if the OS process object lingers.
+		// false after EOF even if the OS process object lingers
 		virtual auto alive( ) -> bool = 0;
 
-		// The bounded stderr ring: the most recent output, oldest dropped.
+		// bounded ring: oldest dropped
 		[[nodiscard]] virtual auto stderr_text( ) const -> std::string = 0;
 
-		// Joins any background work the transport started, so the stderr ring's
-		// final content is deterministic for whoever reads it next.
+		// joins background work, so the stderr ring's final content is deterministic
 		virtual auto finalize( ) -> void = 0;
 
 	protected:

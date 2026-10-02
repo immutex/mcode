@@ -41,9 +41,6 @@ using smoke::section;
 
 namespace {
 
-	// Handlers collected by the registration call, installed on the loop once it
-	// exists. Registration and dispatch are separate steps because the loop needs
-	// the registry and log built first.
 	std::vector< std::pair< std::string,
 		std::function< mcode::result< std::string >( std::string_view ) > > > pending_handlers;
 
@@ -64,16 +61,6 @@ namespace {
 
 }
 
-// Defined in cli_commands.cxx: the CLI surface is real functionality, not a
-// smoke check, and keeping it out of this file keeps the smoke test readable.
-// At file scope, not in an anonymous namespace -- internal linkage would make the
-// definition in the other translation unit a different function.
-
-// Defined in cli_commands.cxx: the interactive session, wired the same way
-// exec is, with the loop kept alive across turns.
-
-// The startup smoke test, reachable through --smoke now that the bare
-// invocation starts the interactive session.
 auto run_smoke( ) -> int;
 
 auto main( int argument_count, char** arguments ) -> int {
@@ -87,15 +74,10 @@ auto main( int argument_count, char** arguments ) -> int {
 		return run_exec( { argv.begin( ) + 1, argv.end( ) } );
 	}
 
-	// `mcode skill list|validate` -- inspects the skill roots without starting
-	// a session, so a user can see what will be indexed and why one was skipped.
 	if ( !argv.empty( ) && argv.front( ) == "skill" ) {
 		return mcode::cli::run_skill( { argv.begin( ) + 1, argv.end( ) } );
 	}
 
-	// `mcode eval [--json] [fixture-root]` -- the deterministic suite.
-	// No model involved: every task asserts a harness behaviour, so a failure is
-	// always a real regression rather than sampling noise.
 	if ( !argv.empty( ) && argv.front( ) == "eval" ) {
 		auto json = false;
 		auto fixture = std::filesystem::path{ "tests/fixtures/fixture-repo" };
@@ -150,10 +132,7 @@ auto main( int argument_count, char** arguments ) -> int {
 		return run_smoke( );
 	}
 
-	// A leading flag belongs to the interactive session, which parses the same
-	// options `exec` does; only a bare word is an unknown subcommand. Rejecting
-	// every argument here made `mcode --yolo` -- and every other session option
-	// -- unreachable.
+	// A leading flag belongs to the interactive session; only a bare word is unknown.
 	if ( !argv.empty( ) && !argv.front( ).empty( ) && argv.front( ).front( ) != '-' ) {
 		std::fprintf( stderr, "mcode: unknown command '%s'\n\n", argv.front( ).c_str( ) );
 		std::fputs( mcode::cli::usage_text( "mcode" ).c_str( ), stderr );
@@ -161,13 +140,9 @@ auto main( int argument_count, char** arguments ) -> int {
 		return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
 	}
 
-	// No subcommand: the interactive session. Without a terminal run_repl
-	// falls back to the plain line reader itself.
 	return run_repl( argv );
 }
 
-// The smoke test body, reached only through the `--smoke` flag so the binary
-// keeps its self-check without making the bare invocation ambiguous.
 auto run_smoke( ) -> int {
 	std::printf( "mcode %.*s -- startup smoke test\n", static_cast< int >( mcode::VERSION.size( ) ),
 		mcode::VERSION.data( ) );
@@ -177,8 +152,7 @@ auto run_smoke( ) -> int {
 		static_cast< int >( mcode::BUILD_TYPE.size( ) ), mcode::BUILD_TYPE.data( ) );
 
 	section( "spdlog (logging)" );
-	// No directory is requested, so this cannot fail here; the return exists for a
-	// caller that DOES request one and needs to learn the sink was dropped.
+	// No directory is requested, so this cannot fail here.
 	check( static_cast< bool >( mcode::init_logging( mcode::log_level::info ) ),
 		"async logger initialised" );
 	check( mcode::logging_initialized( ), "async logger initialised" );
@@ -370,8 +344,6 @@ auto run_smoke( ) -> int {
 		const auto environment = mcode::minimal_environment( );
 		auto leaked = false;
 
-		// Only the names matter here: the check is that no secret-bearing variable
-		// survived the allowlist, not what any of them holds.
 		for ( const auto& entry : environment ) {
 			const auto& key = entry.first;
 
@@ -424,7 +396,6 @@ auto run_smoke( ) -> int {
 
 		auto reads = mcode::tools::session_reads{ };
 
-		// The smoke test is headless: the fail-closed source never prompts.
 		auto store = mcode::perm::remember_store{
 			std::filesystem::temp_directory_path( ) / "mcode-smoke-permissions.json" };
 		auto engine = mcode::perm::permission_engine{ *space, &store };

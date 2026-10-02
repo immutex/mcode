@@ -1,7 +1,3 @@
-// The remember store: persistence, canonical keys, scope narrowing, crash
-// recovery, and the MCP tool section. Split out of test_permissions.cxx when
-// it passed the 600-line limit.
-
 #include <catch2/catch_test_macros.hpp>
 
 #include <string>
@@ -20,18 +16,14 @@ namespace permission_test {
 		setup.approval.queue( perm::approval_outcome::allow_once );
 		CHECK( setup.exec( "git status" ) == perm::permission_decision::allow );
 
-		// Same argv again in the same session prompts again: allow_once is not
-		// remembered.
+		// allow_once is not remembered, so the same argv prompts again.
 		setup.approval.queue( perm::approval_outcome::allow_once );
 		CHECK( setup.exec( "git status" ) == perm::permission_decision::allow );
 		CHECK( setup.approval.asks( ) == 2 );
 
-		// `always` persists. The second identical command does not prompt.
 		setup.approval.queue( perm::approval_outcome::allow_remember );
 		CHECK( setup.exec( "npm install" ) == perm::permission_decision::allow );
 
-		// A fresh engine over the SAME store file: the persisted answer is
-		// re-read, not re-asked.
 		auto second_store = perm::remember_store{ setup.store.file( ) };
 		auto second_engine = perm::permission_engine{ setup.space, &second_store };
 		auto second_approval = scripted_source{ };
@@ -57,8 +49,6 @@ namespace permission_test {
 		setup.approval.queue( perm::approval_outcome::allow_remember );
 		CHECK( setup.exec( "git status" ) == perm::permission_decision::allow );
 
-		// `git status` remembered does not authorize `git push`, or any other
-		// argv. This is the bypass class the security doc names.
 		setup.approval.queue( perm::approval_outcome::deny_once );
 		CHECK( setup.exec( "git push" ) == perm::permission_decision::deny );
 
@@ -73,7 +63,6 @@ namespace permission_test {
 		REQUIRE( first.exec( "cmake --build build" ) == perm::permission_decision::allow );
 		REQUIRE( first.store.file( ).string( ).find( "permissions.json" ) != std::string::npos );
 
-		// A second engine over the same store file, fresh process semantics.
 		auto second = rig{ };
 		auto second_store = perm::remember_store{ first.store.file( ) };
 		auto second_engine = perm::permission_engine{ second.space, &second_store };
@@ -92,8 +81,7 @@ namespace permission_test {
 
 	TEST_CASE( "a project store cannot widen: allows are dropped with a warning",
 		"[perm][store]" ) {
-		// The store must sit under the workspace root for the engine to classify
-		// it as project-scope.
+		// the store must sit under the workspace root to classify as project scope.
 		auto setup = rig{ };
 		auto file = setup.path / ".mcode" / "permissions.json";
 		write_store_file( file,
@@ -106,8 +94,7 @@ namespace permission_test {
 		const auto loaded = project_engine.load_store( );
 		REQUIRE( loaded.has_value( ) );
 
-		// The allow is dropped -- a cloned repo must not be able to widen its own
-		// permissions. The deny survives. The drop is warned, not silent.
+		// a project-scope allow is dropped (warned) while the deny survives.
 		REQUIRE( project_engine.warnings( ).size( ) == 1 );
 		CHECK( project_engine.warnings( ).front( ).find( "cannot widen" ) != std::string::npos );
 
@@ -136,13 +123,9 @@ namespace permission_test {
 				== perm::permission_decision::allow );
 		}
 
-		// The crash: a temp file is written beside the store and the process dies
-		// before the rename. The previous contents must be intact. Simulate the
-		// crash by writing a temp file manually and NOT renaming it.
 		write_store_file( file.parent_path( ) / "permissions.json.mcode-tmp-crash",
 			R"({"version":1,"exec":{"garbage":"allow"}})" );
 
-		// The real store still parses and still holds the remembered answer.
 		auto reloaded = perm::remember_store{ file };
 		const auto layer = reloaded.load( );
 		REQUIRE( layer.has_value( ) );
@@ -159,8 +142,6 @@ namespace permission_test {
 
 		auto setup = rig{ };
 
-		// The tool layer parses and canonicalizes before the engine sees the
-		// resource; the same round trip here.
 		const auto tokens = perm::parse_command_line( "git   status" );
 		REQUIRE( tokens.has_value( ) );
 
@@ -168,7 +149,6 @@ namespace permission_test {
 		CHECK( setup.exec( perm::canonical_argv( *tokens ) )
 			== perm::permission_decision::allow );
 
-		// The store now holds the canonical single-space form.
 		const auto layer = setup.store.load( );
 		REQUIRE( layer.has_value( ) );
 		REQUIRE( layer->has_value( ) );
@@ -189,7 +169,6 @@ namespace permission_test {
 
 		REQUIRE( store.save( additions ).has_value( ) );
 
-		// A second save must not erase the first's entries.
 		auto more = perm::store_layer{ };
 		more.exec.insert_or_assign( "cargo test", perm::store_decision::allow );
 		REQUIRE( store.save( more ).has_value( ) );
@@ -227,11 +206,7 @@ namespace permission_test {
 	}
 
 	TEST_CASE( "an mcp call remembers per tool, not per arguments blob", "[perm][store][mcp]" ) {
-		// The store's `tools` section is keyed by tool name. The resource for an
-		// MCP call is its arguments JSON, so a lookup keyed on the resource could
-		// never match an entry keyed by name -- and `allow_remember` did not write
-		// one at all, so "always" persisted nothing and the next identical call
-		// prompted again.
+		// the `tools` section is keyed by tool name, never by an MCP call's arguments resource.
 		auto setup = rig{ };
 
 		setup.approval.queue( perm::approval_outcome::allow_remember );
@@ -239,13 +214,10 @@ namespace permission_test {
 			== perm::permission_decision::allow );
 		CHECK( setup.approval.asks( ) == 1 );
 
-		// Same tool, different arguments: still no prompt, because the key is the
-		// tool name and not the arguments.
 		CHECK( setup.mcp( "mcp__echo__read", R"({"path":"b.txt"})" )
 			== perm::permission_decision::allow );
 		CHECK( setup.approval.asks( ) == 1 );
 
-		// A different tool is a different question.
 		CHECK( setup.mcp( "mcp__echo__write", R"({"path":"a.txt"})" )
 			== perm::permission_decision::deny );
 		CHECK( setup.approval.asks( ) == 2 );
@@ -257,9 +229,6 @@ namespace permission_test {
 		setup.approval.queue( perm::approval_outcome::allow_remember );
 		CHECK( setup.mcp( "mcp__echo__read", "{}" ) == perm::permission_decision::allow );
 
-		// A second engine over the same store file: the answer was written, so the
-		// question is not asked again. This is the "zero prompts on a repeat run"
-		// half of the acceptance criterion.
 		auto second = perm::permission_engine{ setup.space, &setup.store };
 		second.set_approval_source( &setup.approval );
 		CHECK( second.load_store( ).has_value( ) );
@@ -275,22 +244,17 @@ namespace permission_test {
 
 	TEST_CASE( "the exec and tools sections never borrow each other's key",
 		"[perm][store][near-miss]" ) {
-		// If the two ever collapse into one key space, a remembered command would
-		// authorize a tool call with the same name, or the reverse. Both halves.
 		auto setup = rig{ };
 
 		setup.approval.queue( perm::approval_outcome::allow_remember );
 		CHECK( setup.exec( "mcp__echo__read" ) == perm::permission_decision::allow );
 		CHECK( setup.approval.asks( ) == 1 );
 
-		// The same string as a tool name is a different subject and must prompt.
 		CHECK( setup.mcp( "mcp__echo__read", "{}" ) == perm::permission_decision::deny );
 		CHECK( setup.approval.asks( ) == 2 );
 	}
 
 	TEST_CASE( "a hand-written tools entry is honoured", "[perm][store][mcp]" ) {
-		// The section is readable and hand-editable, which is the point of a
-		// separate JSON file rather than a TOML table.
 		auto setup = rig{ };
 
 		write_store_file( setup.store.file( ),

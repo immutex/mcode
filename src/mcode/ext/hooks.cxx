@@ -16,16 +16,10 @@ namespace mcode::ext {
 
 	namespace {
 
-		// Five consecutive failures detach every handler an extension owns. A
-		// cumulative count would quarantine an extension that fails rarely but
-		// forever, which is why the streak is cleared by any clean call.
+		// consecutive, not cumulative: one clean call clears the streak.
 		inline constexpr auto QUARANTINE_THRESHOLD = std::uint32_t{ 5 };
 
 
-		// The documented session event names. Anything not in this table is
-		// treated as a custom event, so a typo like `tool.precal` registers a hook
-		// that silently never fires -- which is why `session_event_kind` exists and
-		// the table is the single source of both answers.
 		const struct {
 			const char* name;
 			events::kind kind;
@@ -49,10 +43,7 @@ namespace mcode::ext {
 		};
 
 
-		// The handler shape: one plain-data table with the event name, the
-		// sequence, and the payload. `payload` is the bus's payload_json embedded
-		// verbatim -- parsing and re-serializing it would be a second chance to
-		// corrupt the event the handler sees.
+		// the payload is the bus's payload_json spliced in verbatim, not re-serialized.
 		auto event_table( const std::string_view name, const std::uint64_t sequence,
 			const std::int64_t timestamp_ms, const std::string_view payload_json )
 			-> std::string {
@@ -68,9 +59,6 @@ namespace mcode::ext {
 
 			const auto payload = payload_json.empty( ) ? std::string_view{ "{}" } : payload_json;
 
-			// Only an object can be spliced in as `payload`. A payload that is not
-			// an object -- a bare string or an array -- would produce invalid JSON
-			// here, so it is wrapped rather than trusted.
 			if ( payload.front( ) == '{' ) {
 				out += ",\"payload\":";
 				out += payload;
@@ -140,11 +128,7 @@ namespace mcode::ext {
 			bus_.unsubscribe( entry->bus_id );
 		}
 
-		// The closure reference is owned by the subscription, so dropping the
-		// subscription must drop it. Leaking it would keep the extension's function
-		// alive in a VM that is about to be destroyed, and a VM already destroyed
-		// cannot be unrefed at all -- so this only runs while the host is alive,
-		// which is why the caller passes it.
+		// must unref while the VM is alive; a destroyed VM cannot be unrefed at all.
 		if ( host.raw( ) != nullptr && entry->function_reference != 0 ) {
 			lua_unref( host.raw( ), entry->function_reference );
 		}
@@ -175,9 +159,7 @@ namespace mcode::ext {
 	}
 
 	auto hook_registry::failures( const std::string_view owner ) const -> std::uint32_t {
-		// The worst of the extension's handlers, not the sum and not the last.
-		// Counting per extension would let one healthy handler clear a flapping
-		// sibling's streak forever, which defeats the quarantine threshold.
+		// worst, not sum: a healthy sibling must not clear a flapping one's streak.
 		auto worst = std::uint32_t{ 0 };
 
 		for ( const auto& subscription : subscriptions_ ) {
@@ -204,10 +186,6 @@ namespace mcode::ext {
 			return;
 		}
 
-		// The threshold is not advisory: counting without enforcing is a counter,
-		// not a quarantine. Every handler for the extension goes, so a flapping
-		// sibling cannot keep it alive, and the extension is recorded so a later
-		// subscribe is refused rather than silently detached again.
 		const auto* subscription = find( identifier );
 
 		if ( subscription == nullptr ) {
@@ -223,8 +201,6 @@ namespace mcode::ext {
 
 		quarantined_.insert( owner );
 
-		// Reported, because an extension that quietly stopped working is the
-		// failure this threshold exists to surface.
 		std::fprintf( stderr, "[%s] quarantined after %u consecutive handler failures\n",
 			owner.c_str( ), QUARANTINE_THRESHOLD );
 
@@ -232,16 +208,11 @@ namespace mcode::ext {
 	}
 
 	auto hook_registry::record_success( const std::uint64_t identifier ) -> void {
-		// CONSECUTIVE failures are counted: one clean call clears the counter, so
-		// an extension that fails once every hundred events is never quarantined.
 		consecutive_failures_[ identifier ] = 0;
 	}
 
 	auto hook_registry::subscribe( lua_host& host, const std::string_view name,
 		const int function_reference, std::string owner ) -> result< std::uint64_t > {
-		// A quarantined extension stays quarantined: re-registering would restore
-		// the handlers the threshold just removed, which is the whole thing the
-		// quarantine is for.
 		if ( quarantined_.contains( owner ) ) {
 			return std::unexpected( fail( errc::config,
 				"extension '" + owner + "' is quarantined after repeated handler failures" ) );
@@ -258,9 +229,6 @@ namespace mcode::ext {
 		subscription.owner = std::move( owner );
 		subscription.host = &host;
 
-		// The bus owns session kinds; a custom name never reaches it, because
-		// the closed union is the log's schema and an extension-invented name
-		// must not become a kind.
 		if ( const auto kind = session_event_kind( name ) ) {
 			subscription.vetoable = events::is_vetoable( *kind );
 
@@ -316,9 +284,6 @@ namespace mcode::ext {
 				continue;
 			}
 
-			// The bus closure looks the subscription up by id and finds nothing, so
-			// removing it here is enough -- but the bus still holds a dead entry and
-			// the VM still holds the closure, so both are released.
 			auto* host = iterator->host;
 
 			if ( host != nullptr ) {
@@ -355,9 +320,6 @@ namespace mcode::ext {
 
 	auto hook_registry::call_handler( const hook_subscription& subscription,
 		const delivered_event& delivered ) -> std::optional< events::veto > {
-		// A quarantined extension does not run. Its handlers are already detached,
-		// so this is the path a custom-event dispatch takes for one, and it must
-		// not resurrect the VM call.
 		if ( quarantined_.contains( subscription.owner ) ) {
 			return std::nullopt;
 		}
@@ -370,9 +332,7 @@ namespace mcode::ext {
 			return std::nullopt;
 		}
 
-		// The 50 ms budget is a property of the DISPATCH, not of the entry point.
-		// Without this an extension could spin forever inside a hook or a tool call,
-		// because those paths never went through run/eval/call_global.
+		// budgets the dispatch: hooks and tool calls never go through run/eval.
 		auto budget = lua_host::budget_scope{ subscription.host };
 
 		const auto depth = lua_gettop( state );
@@ -389,9 +349,6 @@ namespace mcode::ext {
 		const auto table = event_table( delivered.name, delivered.sequence,
 			delivered.timestamp_ms, delivered.payload_json );
 
-		// The handler receives a decoded table, not a JSON string: the API promises
-		// `ev.args.cmd`, and handing the extension text to parse would make every
-		// author write the same decoder.
 		if ( auto pushed = push_json( state, table ); !pushed ) {
 			lua_settop( state, depth );
 			record_failure( subscription.id );
@@ -399,8 +356,6 @@ namespace mcode::ext {
 			return std::nullopt;
 		}
 
-		// A handler that throws is contained and counted, never allowed to abort
-		// dispatch (dispatch is noexcept at the boundary).
 		if ( lua_pcall( state, 1, 1, 0 ) != 0 ) {
 			lua_settop( state, depth );
 			record_failure( subscription.id );
@@ -410,9 +365,6 @@ namespace mcode::ext {
 
 		auto outcome = std::optional< events::veto >{ };
 
-		// Bare `false` is sugar for a veto. It has to be handled here rather than
-		// left to the table check below, because a handler that returns false and is
-		// silently ignored leaves the author believing a guard is active.
 		if ( subscription.vetoable && lua_type( state, -1 ) == LUA_TBOOLEAN &&
 			lua_toboolean( state, -1 ) == 0 ) {
 			auto reason = events::veto{ };
@@ -459,8 +411,7 @@ namespace mcode::ext {
 				"observe it, and emit only custom events" ) );
 		}
 
-		// A snapshot: a handler may subscribe or unsubscribe, and dispatching over a
-		// mutating list is the reentrancy bug the bus guards against.
+		// a snapshot: a handler may subscribe or unsubscribe during dispatch.
 		auto targets = std::vector< hook_subscription >{ };
 
 		for ( const auto& subscription : subscriptions_ ) {
@@ -472,14 +423,6 @@ namespace mcode::ext {
 		const auto timestamp = support::epoch_milliseconds( );
 
 		for ( const auto& subscription : targets ) {
-			// The identity comes from the subscription. A custom event is not a
-			// session event, so there is no `events::kind` to name it -- stamping it
-			// with a made-up one would make `ev.event` read "session.start" inside
-			// every custom handler.
-			// Custom events are not vetoable: a veto is a gate on a host action, and
-			// this is one extension talking to another, so a refusal is the sender's
-			// business rather than the harness's. The result is therefore discarded
-			// rather than propagated.
 			call_handler( subscription,
 				delivered_event{ .name = subscription.name, .sequence = ++custom_sequence_,
 					.timestamp_ms = timestamp, .payload_json = payload_json } );

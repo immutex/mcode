@@ -1,9 +1,6 @@
 #pragma once
 
-// Shared by the permission test files. Extracted when test_permissions.cxx
-// passed the 600-line limit. The scripted source is deliberately separate
-// from tools_test_helpers' scripted_approval_source: this header must not
-// pull in the tool layer.
+// separate from tools_test_helpers' scripted source: this header must not pull in the tool layer.
 
 #include <deque>
 #include <filesystem>
@@ -22,9 +19,6 @@ using namespace mcode;
 
 namespace permission_test {
 
-	// A scripted approval source: answers come from a queue, never from a
-	// terminal. Records what it was asked and the detail text it was shown,
-	// so tests can assert prompt counts and the detail view.
 	class scripted_source final : public perm::approval_source {
 	public:
 		auto queue( const perm::approval_outcome answer ) -> void {
@@ -119,8 +113,7 @@ namespace permission_test {
 			return engine.decide( request );
 		}
 
-		// An MCP tool: its resource is an opaque arguments blob, so the store
-		// must key it by name rather than by what it was called with.
+		// the resource is an opaque arguments blob, so the store must key an MCP tool by name.
 		auto mcp( const std::string& tool, const std::string& arguments ) {
 			auto request = perm::permission_request{ };
 			request.tool_name = tool;
@@ -132,7 +125,6 @@ namespace permission_test {
 		}
 	};
 
-	// Builds a store file with the given JSON body, for the project-store tests.
 	inline auto write_store_file( const std::filesystem::path& file, const std::string& body ) -> void {
 		std::filesystem::create_directories( file.parent_path( ) );
 

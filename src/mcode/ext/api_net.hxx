@@ -1,12 +1,6 @@
 #pragma once
 
-// `mcode.net.get` and `mcode.net.search`.
-//
-// An API-level host allowlist, NOT the M6 egress proxy: the process-level
-// egress control is a different mechanism and this is a policy on what
-// extension code may ASK for. An extension may reach only the hosts its
-// manifest declares. Requires the `net` permission, checked against the
-// calling extension's own manifest.
+// an API-level allowlist, not the process-level egress proxy; only manifest-declared hosts.
 
 #include <string>
 

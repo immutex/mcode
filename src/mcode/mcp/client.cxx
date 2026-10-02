@@ -44,7 +44,6 @@ namespace mcode::mcp {
 			return R"({"reason":"timeout","requestId":)" + std::to_string( id ) + "}";
 		}
 
-		// A tools/list page. `next_cursor` is present when the server has more.
 		struct list_page {
 			std::vector< server_tool > tools;
 			std::string next_cursor;
@@ -72,9 +71,7 @@ namespace mcode::mcp {
 					return std::unexpected( written.error( ) );
 				}
 
-				// The wrapper document is mutable, so the schema is read back
-				// through `dump` and unwrapped; `pointer_raw` only works on a
-				// document that came from `parse`.
+				// pointer_raw only reads a parsed document, so the wrapper round-trips through dump
 				auto dumped = schema_doc.dump( false );
 
 				if ( !dumped ) {
@@ -135,8 +132,6 @@ namespace mcode::mcp {
 			return page;
 		}
 
-		// The content blocks of a `tools/call` result, flattened to text. A
-		// server may return several blocks; each is appended in order.
 		auto flatten_content( const std::string_view result_json ) -> result< std::string > {
 			auto parsed = json::document::parse( result_json );
 
@@ -190,7 +185,6 @@ namespace mcode::mcp {
 		};
 
 		if ( item.skipped ) {
-			// A banner or a stray log line. Logged, never fatal.
 			log_line( "skipping non-JSON-RPC stdout: " + item.line_json );
 
 			return;
@@ -214,8 +208,7 @@ namespace mcode::mcp {
 			const auto found = pending_.find( frame.id );
 
 			if ( found == pending_.end( ) ) {
-				// A late response after a timeout or EOF. Observed, counted,
-				// ignored -- never delivered as a second result.
+				// counted, never delivered as a second result
 				++ignored_responses_;
 
 				return;
@@ -246,10 +239,7 @@ namespace mcode::mcp {
 			return;
 		}
 
-		// A server-initiated request. This slice advertises no client
-		// capabilities that would make a server send one, so the only honest
-		// answer is the method-not-found error -- a silent drop would leave the
-		// server waiting.
+		// no client caps are advertised, so method-not-found is the honest reply
 		auto response = jsonrpc::render_response( frame.id,
 			R"({"code":-32601,"message":"method not found","data":null})" );
 
@@ -302,8 +292,7 @@ namespace mcode::mcp {
 			return std::unexpected( fail( errc::io, "the server's stdout has ended" ) );
 		}
 
-		// The absolute maximum is enforced here, on every request, so no caller
-		// can exceed it. A caller-supplied shorter timeout still wins.
+		// enforced on every request, so no caller can exceed it; a shorter caller timeout wins
 		const auto effective = timeout < ABSOLUTE_MAX_TIMEOUT ? timeout : ABSOLUTE_MAX_TIMEOUT;
 
 		auto stamped = jsonrpc::stamp_meta( params_json );
@@ -330,10 +319,7 @@ namespace mcode::mcp {
 			return std::unexpected( std::move( sent ).error( ) );
 		}
 
-		// A bounded wait: poll the pending entry while the read loop runs. The
-		// loop is driven by whoever owns the transport -- `pump` below -- so the
-		// timeout is enforced here, at the call site, where the deadline is
-		// known.
+		// the deadline is enforced at the call site; the read loop is driven by pump
 		const auto deadline = std::chrono::steady_clock::now( ) + effective;
 		auto outcome = result< std::string >{ };
 

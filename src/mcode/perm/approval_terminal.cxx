@@ -8,8 +8,6 @@ namespace mcode::perm {
 
 	namespace {
 
-		// The banner and options, printed once per prompt. The subject is
-		// indented so it reads as the thing being asked about.
 		auto print_prompt( const approval_request& request ) -> void {
 			std::fputs( "\n[mcode asks] ", stdout );
 			std::fputs( request.action.c_str( ), stdout );
@@ -33,8 +31,7 @@ namespace mcode::perm {
 
 			auto line = std::string{ };
 
-			// EOF or a closed stdin is a deny, never an allow: a prompt that
-			// guesses when nobody is there grants by accident.
+			// EOF or a closed stdin is a deny, never an allow.
 			if ( !std::getline( std::cin, line ) ) {
 				return approval_outcome::refused;
 			}
@@ -64,8 +61,6 @@ namespace mcode::perm {
 				continue;
 			}
 
-			// Anything unrecognised re-prompts. A prompt that guesses is a
-			// prompt that grants by accident.
 			std::fputs( "  unrecognised answer; y, a, n, d or ?\n", stdout );
 			std::fflush( stdout );
 		}

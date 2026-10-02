@@ -19,9 +19,6 @@ namespace mcode::ext {
 			lua_error( state );
 		}
 
-		// The `mcp` permission gates the call. A denied call is environmental
-		// failure, not a contract violation, so it returns `nil, err` -- the same
-		// channel as `fs.read` on a missing file.
 		if ( !self->manifest_.has_permission( "mcp" ) ) {
 			lua_pushnil( state );
 			lua_pushliteral( state, "permission denied: 'mcp' is required to declare a "
@@ -38,10 +35,7 @@ namespace mcode::ext {
 		server.command = read_field_string_array( state, definition, "command" );
 		server.tools = read_field_string_array( state, definition, "tools" );
 
-		// The declaration route and the config route produce the same struct:
-		// one validation, one consumer. An extension-declared server is not
-		// already approved -- `enabled` stays false and the launch command still
-		// requires explicit consent the first time it runs.
+		// an extension-declared server is not auto-approved: enabled stays false.
 		server.source = mcode::mcp::server_source::extension;
 		server.enabled = false;
 
