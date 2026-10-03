@@ -16,7 +16,7 @@ namespace mcode::instruct {
 		bool truncated = false;
 	};
 
-	// A token-fat chain is a warning, never a truncation.
+	// The chain is joined broadest first; a token-fat chain is cut at the broadest entries.
 	struct instruction_chain {
 		std::string text;
 		std::vector< chain_entry > entries;

@@ -99,7 +99,8 @@ namespace mcode {
 				.model_name = model_name_,
 				.mode = caps_.caching,
 				.near_budget = near_budget,
-				.recitation = { } } );
+				.recitation = { },
+				.fields = provider_.request } );
 
 		auto stream_request = model::stream_request{ };
 		stream_request.request = assembled.request;
@@ -179,6 +180,12 @@ namespace mcode {
 		return !calls.empty( );
 	}
 
+	auto agent_loop::dispatch_pending( ) -> void {
+		const auto pending = pending_calls_;
+		pending_calls_.clear( );
+		hard_error_ = dispatch_calls( pending );
+	}
+
 	auto agent_loop::dispatch_calls( const std::vector< tool_call >& calls ) -> bool {
 		auto hard_error = false;
 
@@ -195,58 +202,6 @@ namespace mcode {
 		}
 
 		return hard_error;
-	}
-
-	auto agent_loop::maybe_compact( ) -> status {
-		const auto usable = static_cast< double >( caps_.context_window - RESERVED_OUTPUT_TOKENS );
-		const auto window = usable * ( 1.0 - SAFETY_MARGIN_FRACTION );
-		const auto fill = static_cast< double >( loop_internal::history_tokens( history_ ) );
-
-		if ( caps_.context_window == 0 || fill < window * COMPACTION_TRIGGER_FRACTION ) {
-			return status{ };
-		}
-
-		auto result = compaction_result{ };
-
-		const auto pinned = std::min( COMPACTION_KEEP_FIRST_EVENTS, history_.size( ) );
-
-		for ( auto index = std::size_t{ 0 }; index < pinned; ++index ) {
-			result.kept.push_back( history_[ index ] );
-		}
-
-		result.pinned_facts.push_back( user_task_ );
-
-		auto kept_tokens = std::int64_t{ 0 };
-		auto keep_from = history_.size( );
-
-		for ( auto index = history_.size( ); index > pinned; --index ) {
-			const auto cost = loop_internal::message_tokens( history_[ index - 1 ] );
-
-			if ( kept_tokens + cost > COMPACTION_KEEP_LAST_TOKENS ||
-				history_.size( ) - index >= COMPACTION_KEEP_LAST_TURNS ) {
-				break;
-			}
-
-			kept_tokens += cost;
-			keep_from = index - 1;
-		}
-
-		const auto tail_start = std::max( keep_from, pinned );
-
-		for ( auto index = tail_start; index < history_.size( ); ++index ) {
-			result.kept.push_back( history_[ index ] );
-		}
-
-		history_ = std::move( result.kept );
-
-		auto payload = std::string{ "{\"reason\":\"80pct\",\"kept_tokens\":" };
-		payload += std::to_string( kept_tokens );
-		payload += "}";
-
-		log_->append( "context.compaction", payload );
-		publish( events::kind::compaction, std::move( payload ) );
-
-		return status{ };
 	}
 
 	auto agent_loop::finish_run( const loop_state terminal, const std::string_view reason )
@@ -285,6 +240,7 @@ namespace mcode {
 		user_task_ = std::string{ user_task };
 		visited_.clear( );
 		pending_calls_.clear( );
+		plan_answered_ = false;
 		hard_error_ = false;
 		permission_denied_ = false;
 		thrash_ = thrash_detector{ };
@@ -346,15 +302,35 @@ namespace mcode {
 						return outcome;
 					}
 
+					// A plan response with no tool call IS the turn's answer, so Act reuses it
+					// instead of paying for a second full-prefix request that would restate it.
+					// A plan that does carry calls leaves them pending for Act to dispatch.
+					plan_answered_ = !*planned;
 					state_ = loop_state::act;
 
 					break;
 				}
 
 				case loop_state::act: {
+					// The plan's calls run before the budget check: a request that spends the
+					// last step must still execute what the model asked for.
+					if ( !pending_calls_.empty( ) ) {
+						dispatch_pending( );
+						state_ = loop_state::observe;
+
+						break;
+					}
+
 					if ( budget_.exhausted( ) ) {
 						finish_run( loop_state::handoff, "budget exhausted" );
 						state_ = loop_state::handoff;
+
+						break;
+					}
+
+					if ( plan_answered_ ) {
+						plan_answered_ = false;
+						state_ = loop_state::verify;
 
 						break;
 					}
@@ -369,10 +345,7 @@ namespace mcode {
 					}
 
 					if ( *acted ) {
-						const auto pending = pending_calls_;
-						pending_calls_.clear( );
-						hard_error_ = dispatch_calls( pending );
-
+						dispatch_pending( );
 						state_ = loop_state::observe;
 
 						break;

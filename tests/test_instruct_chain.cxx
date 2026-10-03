@@ -131,7 +131,47 @@ TEST_CASE( "a chain over the cap truncates the broadest file, not the closest",
 	CHECK( chain.text.size( ) <= 64u * 1024u + chain.entries.size( ) );
 }
 
-TEST_CASE( "a fat chain is a warning, never a truncation", "[instruct]" ) {
+TEST_CASE( "an over-budget chain is cut at the broadest entry, keeping the closest whole",
+	"[instruct]" ) {
+	const auto root = test::scratch_directory( "chain-tokenbudget" );
+
+	// 6 KiB each: under the file cap and the 64 KiB byte cap, but 18 KiB is ~4.6K tokens,
+	// well over the 2K-token (8 KiB) chain budget.
+	write_file( root / "AGENTS.md", std::string( 6u * 1024u, 'w' ) );
+	write_file( root / "sub" / "AGENTS.md", std::string( 6u * 1024u, 'v' ) );
+	write_file( root / "sub" / "deep" / "AGENTS.md", std::string( 6u * 1024u, 'n' ) );
+
+	const auto chain = instruct::assemble_chain( options_with( root / "sub" / "deep" ) );
+
+	REQUIRE( chain.entries.size( ) == 3 );
+
+	const auto& broadest = chain.entries.front( );
+	const auto& middle = chain.entries[ 1 ];
+	const auto& closest = chain.entries.back( );
+
+	CHECK( broadest.truncated );
+	CHECK( middle.truncated );
+	CHECK( broadest.text.size( ) < 6u * 1024u );
+	CHECK( middle.text.size( ) < 6u * 1024u );
+
+	// the closest entry is never cut: it holds the rules for the work at hand
+	CHECK( !closest.truncated );
+	CHECK( closest.text.size( ) == 6u * 1024u );
+	CHECK( chain.text.find( "nnn" ) != std::string::npos );
+
+	// the cut is visible, so the model knows the chain was elided and can read the rest
+	CHECK( chain.text.find( "[truncated: over the instruction-chain budget; read " )
+		!= std::string::npos );
+	CHECK( chain.text.find( "AGENTS.md" ) != std::string::npos );
+
+	// the budget, not the 64 KiB byte cap, decided the size: 18 KiB in, about 8 KiB out
+	CHECK( chain.text.size( ) < 10u * 1024u );
+
+	// the lint warning survives the cut
+	CHECK( chain.warnings.size( ) == 1 );
+}
+
+TEST_CASE( "a lone over-budget file is warned about, never truncated", "[instruct]" ) {
 	const auto root = test::scratch_directory( "chain-tokenfat" );
 
 	write_file( root / "AGENTS.md", std::string( 12u * 1024u, 'w' ) );

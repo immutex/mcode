@@ -67,7 +67,7 @@
 | Subagent return budget | **≤2K tokens**, must cite file:line refs; large artifacts written to files, path passed back | Anthropic numbers; "game of telephone" avoidance — artifacts to filesystem |
 | Recitation interval | rewrite goal/todo into context every **10 turns** or after each completed phase | Manus recitation |
 | Error retention | failed tool calls kept until task phase completes; only then clearable | Manus "keep the wrong stuff in" |
-| Context budget warning | 50% (soft warn in status line), 70% (recommend /compact), 80% (auto-compact) | Progressive user signal |
+| Context budget warning | status meter: normal below 80%, `warn` from 80%, `error` from 95%; the loop **auto-compacts at 80%** (`COMPACTION_TRIGGER_FRACTION`). The percentage is omitted entirely when the model's window is unknown | The 50%/70% advisory stages in the original design are **not implemented**: the meter carries one warn threshold and one error threshold, and `/compact` is available on demand rather than prompted. Auto-compaction is the loop's, not the command's |
 | Session start budget | **system prompt ≤1.5K + tools ≤3.5K + instruction chain ≤2K + skill index ≤1.5K = ≤8.5K tokens** | [CC] representative: system ~4.2K, project CLAUDE.md ~1.8K. This row is the authority. The tool figure covers the **default effective set** (core ≈2–2.5K + tier-1 bundled extensions ≈1–1.5K — `06`, `23`), not core alone; `08`'s byte caps are overflow safety limits, not targets |
 
 ### What breaks at which fill level

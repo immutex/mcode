@@ -142,7 +142,16 @@ Consolidated. `mcode <command> [flags]`, and running with a bare prompt implies 
 
 Global flags: `--model`, `--max-budget-usd`, `--max-steps`, `--sandbox`, `--approval`, `--yolo`, `--no-sandbox`, `--no-extensions`, `--config key=value`, `--cwd`, `-v/--verbose`, `--version`.
 
-Slash commands in-session: `/help`, `/cost`, `/model`, `/tools`, `/exit`. Commands are registered in one registry, so Lua extensions add to the same surface (`18`) rather than a parallel one. `/clear` is deliberately absent: the transcript lives in the terminal's own scrollback, so an inline erase cannot work. `/compact`, `/context`, `/skill`, `/mcp`, `/session` and `/reload` are not implemented yet.
+Slash commands in-session: `/help`, `/cost`, `/model`, `/tools`, `/exit`, plus `/context`, `/compact`, `/export` and `/mention`. Commands are registered in one registry, so Lua extensions add to the same surface (`18`) rather than a parallel one. `/clear` is deliberately absent: the transcript lives in the terminal's own scrollback, so an inline erase cannot work.
+
+- `/context` reports tokens used, the capacity and the percentage; the percentage is omitted when the capacity is unknown (`context_capacity()` returns 0), never guessed.
+- `/compact` is **honest rather than decorative**: compaction is not a command. It reports the loop's real behaviour — the loop compacts the history itself once the context window reaches 80% (`05`) — instead of silently doing nothing.
+- `/export` writes the transcript as markdown to `./mcode-session-<epoch>.md` and reports the path and message count.
+- `/mention` seeds the editor with `@` and opens the file picker.
+
+`/skill`, `/mcp`, `/session` and `/reload` are not implemented yet.
+
+The palette's Enter key runs the highlighted command; Tab inserts the completed name with a trailing space so arguments can still be typed. Ghost text completes the highlighted row's remaining suffix at the caret. `@` opens a fuzzy file picker and inserts the **path**, never the file's contents — the transcript stays small enough to fit the context budget (`13`).
 
 ### Exit codes
 

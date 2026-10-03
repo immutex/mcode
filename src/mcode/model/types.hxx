@@ -92,6 +92,9 @@ namespace mcode::model {
 
 	struct cache_plan {
 		cache_mode mode = cache_mode::none;
+
+		// Byte offsets into the rendered body; the renderer applies them right to left. The
+		// assembler fills them, because only the rendered bytes know where the prefix ends.
 		std::vector< std::size_t > breakpoints;
 	};
 
@@ -156,6 +159,9 @@ namespace mcode::model {
 		[[nodiscard]] auto total_tokens( ) const noexcept -> std::int64_t;
 	};
 
+	// The window assumed for a model the table does not know; without one it never compacts.
+	inline constexpr std::int64_t DEFAULT_CONTEXT_WINDOW = 200'000;
+
 	struct capabilities {
 		std::string model;
 
@@ -174,6 +180,11 @@ namespace mcode::model {
 		double price_cached_read = 0.0;
 		double price_cache_write = 0.0;
 		double price_output = 0.0;
+
+		// A model with no declared window still gets one, so the loop can budget against it.
+		[[nodiscard]] constexpr auto effective_context_window( ) const noexcept -> std::int64_t {
+			return context_window > 0 ? context_window : DEFAULT_CONTEXT_WINDOW;
+		}
 	};
 
 	// computed from provider-reported usage only; an unknown model prices at zero.

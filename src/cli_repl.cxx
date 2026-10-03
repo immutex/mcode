@@ -2,6 +2,9 @@
 #include "mcode/cli/exec.hxx"
 #include "cli_approval.hxx"
 #include "mcode/cli/slash.hxx"
+#include "cli_repl_events.hxx"
+#include "cli_repl_plain.hxx"
+#include "cli_repl_view.hxx"
 #include "cli_session.hxx"
 #include "mcode/cli/repl.hxx"
 #include "mcode/core/registry.hxx"
@@ -21,32 +24,36 @@
 #include "mcode/platform/seams.hxx"
 #include "mcode/skills/session_context.hxx"
 #include "mcode/support/config.hxx"
-#include "mcode/support/json.hxx"
 #include "mcode/support/time.hxx"
 #include "mcode/tools/context.hxx"
 #include "mcode/tools/register.hxx"
 #include "mcode/tui/approval_tui.hxx"
 #include "mcode/tui/editor.hxx"
 #include "mcode/tui/frame.hxx"
+#include "mcode/tui/mention.hxx"
 #include "mcode/tui/render.hxx"
 #include "mcode/tui/tty.hxx"
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
-#include <iostream>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
 #include <vector>
 
-
-
 namespace {
 
 	inline constexpr auto PUMP_TICK_MS = 50;
+
+	// Short, not a long block: typing echoes between keys, and the resize
+	// check rides the timeout.
+	inline constexpr std::uint32_t KEY_WAIT_MS = 250;
+
+	inline constexpr std::string_view INTERRUPTED_NOTICE = "interrupted";
 
 }
 
@@ -55,28 +62,14 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 	const auto plain_requested = requested != nullptr &&
 		std::string_view{ requested } == "plain";
 
-	const auto plain_reader = []( ) -> std::optional< std::string > {
-		auto line = std::string{ };
-
-		if ( !std::getline( std::cin, line ) ) {
-			return std::nullopt;
-		}
-
-		while ( !line.empty( ) && line.back( ) == '\r' ) {
-			line.pop_back( );
-		}
-
-		return line;
-	};
-
 	if ( plain_requested || !mcode::platform::terminal_size( ).has_value( ) ) {
-		return mcode::cli::run_session( arguments, plain_reader, build_interactive_loop );
+		return run_plain_repl( arguments );
 	}
 
 	auto session_tty = mcode::tui::tty_session::create( );
 
 	if ( !session_tty ) {
-		return mcode::cli::run_session( arguments, plain_reader, build_interactive_loop );
+		return run_plain_repl( arguments );
 	}
 
 	auto parsed = mcode::cli::parse_exec_options( arguments );
@@ -123,85 +116,12 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 	auto& loop = *built;
 	auto turn = mcode::cli::session{ loop };
 
-	const auto display_text = []( const mcode::events::kind type,
-		const std::string& payload_json ) -> std::string {
-		auto payload = mcode::json::document::parse( payload_json );
+	// Set by Esc while a turn runs and read by the delta subscriber on the
+	// loop thread: after it is set, the rest of the response is dropped rather
+	// than appended to the answer the user chose to keep.
+	auto interrupted = std::atomic< bool >{ false };
 
-		if ( !payload ) {
-			return { };
-		}
-
-		const auto field = [ & ]( const std::string_view pointer ) -> std::string {
-			const auto found = payload->pointer_string( pointer );
-
-			return found ? *found : std::string{ };
-		};
-
-		switch ( type ) {
-			case mcode::events::kind::assistant_delta:
-			case mcode::events::kind::assistant_thinking:
-				return field( "/text" );
-			case mcode::events::kind::tool_call:
-			case mcode::events::kind::tool_result:
-				return field( "/tool" );
-			default:
-				return { };
-		}
-	};
-
-	const auto tool_target = []( const std::string& payload_json ) -> std::string {
-		auto payload = mcode::json::document::parse( payload_json );
-
-		if ( !payload ) {
-			return { };
-		}
-
-		for ( const auto* pointer : { "/args/path", "/args/command" } ) {
-			if ( const auto found = payload->pointer_string( pointer ) ) {
-				return *found;
-			}
-		}
-
-		return { };
-	};
-
-	const auto feed = [ &queue, &display_text, &tool_target ](
-		mcode::tui::event_queue::kind target, const mcode::events::kind source ) {
-		return [ &queue, &display_text, &tool_target, target, source ](
-			const mcode::events::event& value ) {
-			auto item = mcode::tui::event_queue::item{ };
-			item.type = target;
-			item.text = display_text( source, value.payload_json );
-			item.stamp_ms = mcode::tui::monotonic_ms( );
-
-			if ( source == mcode::events::kind::tool_call ) {
-				item.target = tool_target( value.payload_json );
-			}
-
-			queue.push( std::move( item ) );
-		};
-	};
-
-	auto subscriptions = std::vector< mcode::events::bus::subscription_id >{ };
-	subscriptions.push_back( loop.bus( ).subscribe(
-		mcode::events::kind::assistant_delta, feed( mcode::tui::event_queue::kind::assistant_delta,
-			mcode::events::kind::assistant_delta ) ) );
-	subscriptions.push_back( loop.bus( ).subscribe(
-		mcode::events::kind::assistant_thinking,
-		feed( mcode::tui::event_queue::kind::thinking_delta,
-			mcode::events::kind::assistant_thinking ) ) );
-	subscriptions.push_back( loop.bus( ).subscribe(
-		mcode::events::kind::tool_call, feed( mcode::tui::event_queue::kind::tool_start,
-			mcode::events::kind::tool_call ) ) );
-	subscriptions.push_back( loop.bus( ).subscribe(
-		mcode::events::kind::tool_result, feed( mcode::tui::event_queue::kind::tool_end,
-			mcode::events::kind::tool_result ) ) );
-	subscriptions.push_back( loop.bus( ).subscribe(
-		mcode::events::kind::turn_start, feed( mcode::tui::event_queue::kind::turn_start,
-			mcode::events::kind::turn_start ) ) );
-	subscriptions.push_back( loop.bus( ).subscribe(
-		mcode::events::kind::turn_end, feed( mcode::tui::event_queue::kind::turn_end,
-			mcode::events::kind::turn_end ) ) );
+	auto subscriptions = subscribe_event_feed( loop.bus( ), queue, interrupted );
 
 	auto last_code = mcode::cli::exit_code::success;
 	auto turn_done = std::atomic< bool >{ false };
@@ -221,13 +141,32 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 	};
 
 	auto editor = mcode::tui::input_editor{ };
+
+	// The picker walks the workspace once and reuses the list for every
+	// keystroke. A root that will not open degrades to an empty picker rather
+	// than failing the session.
+	const auto mention_root = parsed->working_directory.empty( )
+		? std::filesystem::current_path( )
+		: std::filesystem::path{ parsed->working_directory };
+	auto mention_space = mcode::workspace::open( mention_root );
+	auto files = mcode::tui::mention_index{ mention_space ? &*mention_space : nullptr };
+
 	auto exiting = false;
 
 	const auto& commands = mcode::cli::builtin_commands( );
 	auto palette = mcode::tui::slash_palette{ };
 
-	const auto refresh_palette = [ & ]( ) {
-		mcode::cli::refresh_palette( palette, commands, editor.text( ) );
+	// One palette, three sources: slash commands, the file picker, and the
+	// Ctrl+R history search. The rows, the filter and the renderer are shared.
+	auto palette_controller = mcode::cli::palette_controller{ { &commands, &files,
+		&editor.history( ) } };
+
+	// The input as it was before Ctrl+R took over the prompt, so Esc restores
+	// it rather than losing what the user had half-typed.
+	auto history_draft = std::string{ };
+
+	const auto sync_palette = [ & ]( ) {
+		palette_controller.refresh( palette, editor.text( ) );
 
 		const auto held = std::lock_guard< std::mutex >{ render_gate };
 
@@ -238,23 +177,10 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 	auto turn_started = std::chrono::steady_clock::time_point{ };
 	auto last_turn_elapsed_ms = std::uint64_t{ 0 };
 
-	// Caller holds `render_gate`.
-	const auto refresh = [ & ]( ) {
-		const auto& budget = loop.budget( );
-		const auto elapsed = turn_started == std::chrono::steady_clock::time_point{ }
-			? last_turn_elapsed_ms
-			: static_cast< std::uint64_t >( std::chrono::duration_cast<
-				std::chrono::milliseconds >( std::chrono::steady_clock::now( )
-					- turn_started ).count( ) );
-
-		coordinator.set_meter( std::string{ loop.model_name( ) }, budget.tokens_used,
-			budget.usd_used, elapsed );
-	};
-
 	const auto show_prompt = [ & ]( ) {
 		const auto held = std::lock_guard< std::mutex >{ render_gate };
 
-		refresh( );
+		refresh( coordinator, loop, turn_started, last_turn_elapsed_ms );
 		coordinator.set_prompt( editor.text( ), editor.flattened_cursor( ) );
 		repaint( );
 	};
@@ -263,12 +189,30 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 		auto was_running = false;
 
 		while ( !turn_done.load( ) ) {
+			// The approval prompt reads the same console on the worker thread,
+			// so the key read stands down while it owns the screen. The check
+			// and the read are not atomic with respect to each other; the
+			// window is microseconds wide and the prompt has not been shown to
+			// the user yet, so no answer can be lost in it.
+			auto pressed = mcode::tui::key_event{ };
+
+			if ( !approval_active.load( ) ) {
+				pressed = session_tty->read_key( PUMP_TICK_MS );
+			} else {
+				std::this_thread::sleep_for( std::chrono::milliseconds( PUMP_TICK_MS ) );
+			}
+
 			const auto drained = queue.drain( );
 			auto applied = false;
 			auto running = false;
+			auto keyed = false;
 
 			{
 				const auto held = std::lock_guard< std::mutex >{ render_gate };
+
+				if ( pressed.type != mcode::tui::key_event::kind::timeout ) {
+					keyed = handle_turn_key( coordinator, interrupted, *session_tty, pressed );
+				}
 
 				for ( const auto& item : drained ) {
 					coordinator.apply( item );
@@ -277,22 +221,20 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 
 				running = !coordinator.state( ).tools.empty( );
 
-				if ( applied || running || was_running ) {
+				if ( applied || running || was_running || keyed ) {
 					// The approval prompt owns the console while it is up. The
 					// flag is read under the same lock the presenter sets it
 					// under, so a repaint cannot pass this check and then race
 					// the presenter's draw.
 					if ( !approval_active.load( ) ) {
 						coordinator.advance_tools( mcode::tui::monotonic_ms( ) );
-						refresh( );
+						refresh( coordinator, loop, turn_started, last_turn_elapsed_ms );
 						repaint( );
 					}
 				}
 			}
 
 			was_running = running;
-
-			std::this_thread::sleep_for( std::chrono::milliseconds( PUMP_TICK_MS ) );
 		}
 
 		const auto held = std::lock_guard< std::mutex >{ render_gate };
@@ -302,7 +244,7 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 		}
 
 		approval_active.store( false );
-		refresh( );
+		refresh( coordinator, loop, turn_started, last_turn_elapsed_ms );
 		repaint( );
 	};
 
@@ -319,10 +261,10 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 
 		while ( !submitted ) {
 			// A short poll, not a long block, so typing echoes between keys.
-			const auto key = session_tty->read_key( 250 );
+			const auto key = session_tty->read_key( KEY_WAIT_MS );
 
 			if ( key.type == mcode::tui::key_event::kind::timeout ) {
-				if ( session_tty->resized( ) ) {
+				if ( session_tty->poll_resize( 0 ) ) {
 					const auto measured_now = session_tty->size( );
 
 					{
@@ -350,27 +292,127 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 				break;
 			}
 
+			// A scroll key moves the viewport; any other key first returns to
+			// the live view, so the prompt is never unreachable.
+			if ( view_scrolled( coordinator, render_gate ) ) {
+				const auto rows = key_scroll_rows( *session_tty, key.type );
+
+				if ( rows.has_value( ) ) {
+					scroll_view( coordinator, render_gate, *rows );
+					show_prompt( );
+
+					continue;
+				}
+
+				return_to_live( coordinator, render_gate );
+				show_prompt( );
+			} else if ( const auto rows = key_scroll_rows( *session_tty, key.type );
+				rows.has_value( ) ) {
+				scroll_view( coordinator, render_gate, *rows );
+				show_prompt( );
+
+				continue;
+			}
+
+			if ( key.type == mcode::tui::key_event::kind::ctrl_r ) {
+				// The reverse search takes over the prompt: what is already
+				// typed becomes its filter, and the pre-search input is kept
+				// so Esc restores it.
+				if ( palette_controller.source( ) != mcode::cli::palette_source::history ) {
+					history_draft = editor.text( );
+					palette_controller.open_history( palette, history_draft );
+				} else {
+					palette_controller.refresh( palette, editor.text( ) );
+				}
+
+				{
+					const auto held = std::lock_guard< std::mutex >{ render_gate };
+
+					coordinator.set_palette( palette );
+				}
+
+				show_prompt( );
+
+				continue;
+			}
+
 			if ( key.type == mcode::tui::key_event::kind::interrupt ) {
 				auto clear = mcode::tui::input_editor::key_event{ };
 				clear.type = mcode::tui::input_editor::key::interrupt;
 				std::ignore = editor.handle( clear );
 
+				palette_controller.reset( );
+				history_draft.clear( );
+				sync_palette( );
 				show_prompt( );
 
 				continue;
 			}
 
 			if ( key.type == mcode::tui::key_event::kind::escape ) {
+				// Esc dismisses the picker without submitting; the typed text
+				// stays so the user can keep editing it. Leaving the history
+				// search also restores what was typed before Ctrl+R.
+				if ( palette.open ) {
+					const auto was_history =
+						palette_controller.source( ) == mcode::cli::palette_source::history;
+
+					palette.open = false;
+					palette.matches.clear( );
+					palette.selected = 0;
+					palette_controller.reset( );
+
+					if ( was_history && !history_draft.empty( ) ) {
+						editor.set_text( history_draft );
+					}
+
+					history_draft.clear( );
+
+					{
+						const auto held = std::lock_guard< std::mutex >{ render_gate };
+
+						coordinator.set_palette( palette );
+					}
+
+					show_prompt( );
+
+					continue;
+				}
+
 				auto abandon = mcode::tui::input_editor::key_event{ };
 				abandon.type = mcode::tui::input_editor::key::escape;
 				std::ignore = editor.handle( abandon );
 
+				sync_palette( );
 				show_prompt( );
 
 				continue;
 			}
 
 			if ( key.type == mcode::tui::key_event::kind::enter ) {
+				const auto* row = palette.highlighted( );
+
+				// Only a slash command runs. A mention and a history entry are
+				// inserted into the prompt: the model reads the file itself,
+				// and a recalled command is usually edited before it is sent.
+				if ( row != nullptr && !mcode::cli::submits( palette_controller.source( ) ) ) {
+					editor.set_text( mcode::cli::inserted_line( palette_controller.source( ),
+						editor.text( ), *row ) );
+					palette_controller.reset( );
+					history_draft.clear( );
+					sync_palette( );
+					show_prompt( );
+
+					continue;
+				}
+
+				if ( row != nullptr ) {
+					submitted = mcode::tui::submitted_line( palette, editor.text( ) );
+					editor.push_history( *submitted );
+
+					continue;
+				}
+
 				auto enter = mcode::tui::input_editor::key_event{ };
 				enter.type = mcode::tui::input_editor::key::enter;
 				submitted = editor.handle( enter );
@@ -383,7 +425,7 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 				if ( key.type == mcode::tui::key_event::kind::up ) {
 					palette.selected = palette.selected == 0
 						? palette.matches.size( ) - 1 : palette.selected - 1;
-					refresh_palette( );
+					sync_palette( );
 					show_prompt( );
 
 					continue;
@@ -391,68 +433,36 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 
 				if ( key.type == mcode::tui::key_event::kind::down ) {
 					palette.selected = ( palette.selected + 1 ) % palette.matches.size( );
-					refresh_palette( );
+					sync_palette( );
 					show_prompt( );
 
 					continue;
 				}
 
 				if ( key.type == mcode::tui::key_event::kind::tab ) {
-					const auto& chosen = palette.matches[ palette.selected ];
-					editor.set_text( mcode::tui::completed_command( chosen.name ) );
-					refresh_palette( );
-					show_prompt( );
+					const auto* row = palette.highlighted( );
 
-					continue;
+					if ( row != nullptr ) {
+						editor.set_text( mcode::cli::inserted_line(
+							palette_controller.source( ), editor.text( ), *row ) );
+						palette_controller.reset( );
+						history_draft.clear( );
+						sync_palette( );
+						show_prompt( );
+
+						continue;
+					}
 				}
 			}
 
-			auto forwarded = mcode::tui::input_editor::key_event{ };
+			const auto forwarded = translate_key( key );
 
-			switch ( key.type ) {
-				case mcode::tui::key_event::kind::character:
-					forwarded.type = mcode::tui::input_editor::key::character;
-					forwarded.text = key.text;
-
-					break;
-				case mcode::tui::key_event::kind::backspace:
-					forwarded.type = mcode::tui::input_editor::key::backspace;
-
-					break;
-				case mcode::tui::key_event::kind::delete_key:
-					forwarded.type = mcode::tui::input_editor::key::delete_key;
-
-					break;
-				case mcode::tui::key_event::kind::left:
-					forwarded.type = mcode::tui::input_editor::key::left;
-
-					break;
-				case mcode::tui::key_event::kind::right:
-					forwarded.type = mcode::tui::input_editor::key::right;
-
-					break;
-				case mcode::tui::key_event::kind::up:
-					forwarded.type = mcode::tui::input_editor::key::up;
-
-					break;
-				case mcode::tui::key_event::kind::down:
-					forwarded.type = mcode::tui::input_editor::key::down;
-
-					break;
-				case mcode::tui::key_event::kind::home:
-					forwarded.type = mcode::tui::input_editor::key::home;
-
-					break;
-				case mcode::tui::key_event::kind::end:
-					forwarded.type = mcode::tui::input_editor::key::end;
-
-					break;
-				default:
-					continue;
+			if ( !forwarded.has_value( ) ) {
+				continue;
 			}
 
-			std::ignore = editor.handle( forwarded );
-			refresh_palette( );
+			std::ignore = editor.handle( *forwarded );
+			sync_palette( );
 			show_prompt( );
 		}
 
@@ -466,8 +476,14 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 			continue;
 		}
 
+		// A palette submission never passed through the editor, so the buffer
+		// is cleared here; the editor's own Enter already did it.
+		editor.reset( );
+
 		palette.open = false;
 		palette.matches.clear( );
+		palette_controller.reset( );
+		history_draft.clear( );
 
 		{
 			const auto held = std::lock_guard< std::mutex >{ render_gate };
@@ -484,6 +500,15 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 				exiting = true;
 
 				break;
+			}
+
+			if ( result.open_mention ) {
+				editor.set_text( "@" );
+				palette_controller.reset( );
+				sync_palette( );
+				show_prompt( );
+
+				continue;
 			}
 
 			{
@@ -508,7 +533,13 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 		show_prompt( );
 
 		turn_done.store( false );
+		interrupted.store( false );
 		turn_started = std::chrono::steady_clock::now( );
+
+		// The wheel is reported only while a turn runs: at the prompt the
+		// terminal's own scrollback is the better target, and taking the wheel
+		// there would freeze it.
+		session_tty->set_mouse_reporting( true );
 
 		worker = std::thread{ [ & ]( ) {
 			last_code = turn.run_turn( *submitted );
@@ -518,10 +549,21 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 		pump_until_done( );
 		worker.join( );
 
+		session_tty->set_mouse_reporting( false );
+
 		last_turn_elapsed_ms = static_cast< std::uint64_t >( std::chrono::duration_cast<
 			std::chrono::milliseconds >( std::chrono::steady_clock::now( )
 				- turn_started ).count( ) );
 		turn_started = std::chrono::steady_clock::time_point{ };
+
+		if ( interrupted.exchange( false ) ) {
+			last_code = mcode::cli::exit_code::interrupted;
+
+			const auto held = std::lock_guard< std::mutex >{ render_gate };
+
+			coordinator.queue_text( std::string{ INTERRUPTED_NOTICE },
+				mcode::tui::token::warn );
+		}
 
 		// Draining during the turn would race the approval prompt reading the same console.
 		while ( true ) {
@@ -532,10 +574,16 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 			}
 		}
 
+		show_prompt( );
+
 		if ( last_code == mcode::cli::exit_code::interrupted ) {
 			continue;
 		}
 	}
+
+	// The destructor restores the console, but the wheel must be handed back
+	// before anything else writes, or the terminal keeps eating it.
+	session_tty->set_mouse_reporting( false );
 
 	if ( exiting ) {
 		// Clear before the destructor restores the console, or the shell's prompt lands on it.

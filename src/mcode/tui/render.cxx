@@ -4,8 +4,10 @@
 #include <array>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "mcode/tui/frame.hxx"
+#include "mcode/tui/render_internal.hxx"
 #include "mcode/tui/theme.hxx"
 #include "mcode/tui/transcript.hxx"
 
@@ -17,25 +19,48 @@ namespace mcode::tui {
 			"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
 		};
 
+		// The byte offset whose display width reaches `column`. The caret is
+		// tracked as a display column, so a split taken at the raw column
+		// would cut a wide cluster in half and mangle the row.
+		[[nodiscard]] auto byte_offset_at_column( const std::string_view text,
+			const std::size_t column, const std::size_t ambiguous_width ) -> std::size_t {
+			auto width = std::size_t{ 0 };
+			auto offset = std::size_t{ 0 };
+
+			while ( offset < text.size( ) && width < column ) {
+				const auto [ cluster, cluster_width ] = next_cluster( text.substr( offset ),
+					ambiguous_width );
+
+				if ( cluster.empty( ) ) {
+					break;
+				}
+
+				width += cluster_width;
+				offset += cluster.size( );
+			}
+
+			return offset;
+		}
+
 		// Measured over every tool, not the visible ones, so the target column
 		// does not shift as calls come and go.
-		[[nodiscard]] auto widest_verb( const std::vector< render_state::active_tool >& tools )
-			-> std::size_t {
+		[[nodiscard]] auto widest_verb( const std::vector< render_state::active_tool >& tools,
+			const std::size_t ambiguous_width ) -> std::size_t {
 			auto widest = std::size_t{ 0 };
 
 			for ( const auto& tool : tools ) {
-				widest = std::max( widest, string_width( tool.verb, AMBIGUOUS_WIDTH ) );
+				widest = std::max( widest, string_width( tool.verb, ambiguous_width ) );
 			}
 
 			return widest;
 		}
 
-		[[nodiscard]] auto widest_command_name( const std::vector< slash_command >& matches )
-			-> std::size_t {
+		[[nodiscard]] auto widest_command_name( const std::vector< slash_command >& matches,
+			const std::size_t ambiguous_width ) -> std::size_t {
 			auto widest = std::size_t{ 0 };
 
 			for ( const auto& entry : matches ) {
-				widest = std::max( widest, string_width( entry.name, AMBIGUOUS_WIDTH ) );
+				widest = std::max( widest, string_width( entry.name, ambiguous_width ) );
 			}
 
 			return widest;
@@ -76,47 +101,6 @@ namespace mcode::tui {
 				token::text, state.stream_render_count );
 		}
 
-		[[nodiscard]] auto format_elapsed( const std::uint64_t ms ) -> std::string {
-			return std::to_string( ms / 1000 ) + "." + std::to_string( ( ms % 1000 ) / 100 ) + "s";
-		}
-
-		[[nodiscard]] auto format_tokens( const std::uint64_t tokens ) -> std::string {
-			if ( tokens < 1000 ) {
-				return std::to_string( tokens ) + " tok";
-			}
-
-			return std::to_string( tokens / 1000 ) + "." +
-				std::to_string( ( tokens % 1000 ) / 100 ) + "k tok";
-		}
-
-		[[nodiscard]] auto format_cost( const double cost ) -> std::string {
-			// A sub-millicent spend rounded to "$0.000" reads as free.
-			if ( cost > 0.0 && cost < 0.001 ) {
-				auto scaled = static_cast< long long >( cost * 100'000.0 );
-				auto out = std::string{ "$0." };
-				const auto digits = scaled < 10 ? 4 : scaled < 100 ? 3 : scaled < 1000 ? 2
-					: scaled < 10'000 ? 1 : 0;
-				out.append( static_cast< std::size_t >( digits ), '0' );
-				out += std::to_string( scaled );
-
-				return out;
-			}
-
-			auto whole = static_cast< long long >( cost * 1000.0 );
-			auto fraction = whole % 1000;
-			auto out = std::string{ "$" } + std::to_string( whole / 1000 ) + ".";
-
-			if ( fraction < 100 ) {
-				out += '0';
-			}
-
-			if ( fraction < 10 ) {
-				out += '0';
-			}
-
-			return out + std::to_string( fraction );
-		}
-
 	}
 
 	auto spinner_glyph( const std::size_t frame ) -> std::string_view {
@@ -155,14 +139,28 @@ namespace mcode::tui {
 
 	auto render_coordinator::resize( const std::size_t screen_rows,
 		const std::size_t screen_columns ) -> void {
+		const auto reserved = screen_columns > 1 ? screen_columns - 1 : screen_columns;
+		const auto changed = screen_rows != screen_rows_ || reserved != screen_columns_;
+
 		screen_rows_ = screen_rows;
 
 		// One column is reserved: a row filled to the last column wraps the
 		// cursor, which desyncs every relative move that follows.
-		screen_columns_ = screen_columns > 1 ? screen_columns - 1 : screen_columns;
+		screen_columns_ = reserved;
 
 		previous_.resize( painted_rows_, screen_columns_ );
 		current_.resize( painted_rows_, screen_columns_ );
+
+		// The history viewport's height is the screen's, so a resize changes
+		// how far it reaches: re-clamped, or its old depth would leave blanks.
+		clamp_scroll( );
+
+		// A size change invalidates the tracked frame: the first flush after
+		// it erases the region at its old height and repaints every row, so a
+		// SHRINK cannot leave a row the region no longer covers on screen.
+		if ( changed ) {
+			resize_pending_ = true;
+		}
 	}
 
 	auto render_coordinator::park( ) const -> std::string {
@@ -192,7 +190,7 @@ namespace mcode::tui {
 	auto render_coordinator::set_prompt( std::string text, const std::size_t cursor_byte ) -> void {
 		const auto clamped = std::min( cursor_byte, text.size( ) );
 		state_.input_cursor = string_width( std::string_view{ text }.substr( 0, clamped ),
-			AMBIGUOUS_WIDTH );
+			caps_.ambiguous_width );
 		state_.input_line = std::move( text );
 	}
 
@@ -206,6 +204,16 @@ namespace mcode::tui {
 		state_.total_tokens = tokens;
 		state_.total_cost = cost;
 		state_.turn_elapsed_ms = elapsed_ms;
+	}
+
+	auto render_coordinator::set_context( const std::uint64_t used,
+		const std::uint64_t capacity ) -> void {
+		state_.context_used = used;
+		state_.context_capacity = capacity;
+	}
+
+	auto render_coordinator::set_activity( const std::string_view verb ) -> void {
+		state_.activity = std::string{ verb };
 	}
 
 	auto render_coordinator::apply( const event_queue::item& value ) -> void {
@@ -263,8 +271,8 @@ namespace mcode::tui {
 
 					if ( !tool.target.empty( ) ) {
 						// The live row's target column, so targets line up.
-						const auto verb_width = string_width( value.text, AMBIGUOUS_WIDTH );
-						const auto widest = widest_verb( state_.tools );
+						const auto verb_width = string_width( value.text, caps_.ambiguous_width );
+						const auto widest = widest_verb( state_.tools, caps_.ambiguous_width );
 						const auto gap = widest + 2 > verb_width ? widest + 2 - verb_width
 							: std::size_t{ 0 };
 
@@ -370,10 +378,11 @@ namespace mcode::tui {
 		// region, so it is erased first: clearing the tracked buffer alone
 		// would diff the new frame against a blank model of a screen that is
 		// not blank. Growth then scrolls, or the new rows paint over the
-		// transcript above the region.
+		// transcript above the region. A resize takes the same path, so a
+		// SHRINK erases at the old height before repainting.
 		auto scroll = std::string{ };
 
-		if ( rows != painted_rows_ ) {
+		if ( rows != painted_rows_ || resize_pending_ ) {
 			const auto emitter = ansi_emitter{ caps_ };
 
 			scroll = park( );
@@ -391,19 +400,23 @@ namespace mcode::tui {
 			previous_.resize( rows, screen_columns_ );
 			current_.resize( rows, screen_columns_ );
 			previous_.clear( );
+			resize_pending_ = false;
 		}
 
-		current_ = build_frame( state_, painted_rows_, screen_columns_, AMBIGUOUS_WIDTH );
+		current_ = build_frame( state_, painted_rows_, screen_columns_, caps_.ambiguous_width );
 
 		auto emitter = ansi_emitter{ caps_ };
 		out += scroll;
 		out += emitter.emit( previous_, current_ );
 
 		// The caret belongs under the typed text, not where the last run ended.
+		// While scrolled the bottom row is the history indicator rather than
+		// the prompt, so the caret parks at its left edge instead of on a
+		// prompt column the viewport is not showing.
 		const auto prompt_row = painted_rows_ - 1;
 		const auto widest = screen_columns_ == 0 ? std::size_t{ 0 } : screen_columns_ - 1;
-		const auto column = std::min(
-			std::size_t{ PROMPT_PREFIX_WIDTH } + state_.input_cursor, widest );
+		const auto column = state_.scroll_offset > 0 ? std::size_t{ 0 }
+			: std::min( std::size_t{ PROMPT_PREFIX_WIDTH } + state_.input_cursor, widest );
 
 		out += emitter.caret( prompt_row, prompt_row, column );
 
@@ -420,6 +433,17 @@ namespace mcode::tui {
 		// `flush` sizes the region before it builds the frame.
 		refresh_streamed_rows( state );
 
+		// Bounded by the terminal and by the spec's budget.
+		const auto ceiling = std::max( std::min( LIVE_REGION_MAX_ROWS,
+			screen_rows > 1 ? screen_rows - 1 : std::size_t{ 1 } ), std::size_t{ 2 } );
+
+		// The history viewport is a pager rather than the live region: it is
+		// grown to the whole available height, so a screenful of history is
+		// visible instead of the live region's bounded few rows.
+		if ( state.scroll_offset > 0 ) {
+			return history_region_rows( screen_rows );
+		}
+
 		// prompt + status
 		auto rows = std::size_t{ 2 };
 
@@ -432,11 +456,7 @@ namespace mcode::tui {
 
 		rows += state.tools.size( );
 
-		// Bounded by the terminal and by the spec's budget.
-		const auto ceiling = std::min( LIVE_REGION_MAX_ROWS,
-			screen_rows > 1 ? screen_rows - 1 : std::size_t{ 1 } );
-
-		return std::clamp( rows, std::size_t{ 2 }, std::max( ceiling, std::size_t{ 2 } ) );
+		return std::clamp( rows, std::size_t{ 2 }, ceiling );
 	}
 
 	auto build_frame( const render_state& state, const std::size_t row_count,
@@ -463,17 +483,51 @@ namespace mcode::tui {
 			buffer.write_line( row, line );
 		};
 
+		// While scrolled, the region shows retained history instead of the
+		// live content, grown to the available height. The prompt is not
+		// reachable while scrolled, so the history view owns the whole region.
+		if ( state.scroll_offset > 0 ) {
+			write_history_frame( buffer, state );
+
+			return buffer;
+		}
+
 		// Bottom-up: prompt, palette, status line, then live content.
 		{
+			// The completion's remainder is spliced in at the caret as dim
+			// ghost text: no second row, no caret move. It tracks the
+			// highlighted row, and only when that row's name extends the query
+			// the user has typed.
+			auto ghost = std::string{ };
+
+			if ( state.palette.open && !state.palette.query.empty( ) &&
+				state.palette.selected < state.palette.matches.size( ) ) {
+				const auto& match = state.palette.matches[ state.palette.selected ];
+
+				if ( match.name.size( ) > state.palette.query.size( ) &&
+					std::string_view{ match.name }.starts_with( state.palette.query ) ) {
+					ghost = match.name.substr( state.palette.query.size( ) );
+				}
+			}
+
+			const auto split = byte_offset_at_column( state.input_line, state.input_cursor,
+				ambiguous_width );
+
 			auto line = styled_line{ };
 			line.push_back( { std::string{ PROMPT_PREFIX }, token::accent } );
-			line.push_back( { state.input_line, token::text } );
+			line.push_back( { state.input_line.substr( 0, split ), token::text } );
+
+			if ( !ghost.empty( ) ) {
+				line.push_back( { ghost, token::muted, token::none, false, false, true } );
+			}
+
+			line.push_back( { state.input_line.substr( split ), token::text } );
 
 			write_up( line );
 		}
 
 		if ( state.palette.open && !state.palette.matches.empty( ) ) {
-			const auto widest = widest_command_name( state.palette.matches );
+			const auto widest = widest_command_name( state.palette.matches, ambiguous_width );
 
 			// Reversed, because the buffer is filled from the bottom up.
 			for ( auto index = state.palette.matches.size( ); index > 0; --index ) {
@@ -483,34 +537,28 @@ namespace mcode::tui {
 				auto line = styled_line{ };
 				line.push_back( { selected ? "▸ " : "  ",
 					selected ? token::accent : token::muted } );
-				line.push_back( { "/" + entry.name, selected ? token::accent : token::text,
-					token::none, selected, false, false } );
+				line.push_back( { state.palette.prefix + entry.name, selected ? token::accent
+					: token::text, token::none, selected, false, false } );
 
-				const auto padding = widest -
-					string_width( entry.name, ambiguous_width ) + 2;
-				line.push_back( { std::string( padding, ' ' ), token::none } );
-				line.push_back( { entry.description, token::muted } );
+				// A row without a description, every mention row, has nothing
+				// to align to, so the padding and its empty tail are skipped
+				// rather than trailing dead width.
+				if ( !entry.description.empty( ) ) {
+					const auto padding = widest -
+						string_width( entry.name, ambiguous_width ) + 2;
+					line.push_back( { std::string( padding, ' ' ), token::none } );
+					line.push_back( { entry.description, token::muted } );
+				}
 
 				write_up( line );
 			}
 		}
 
-		{
-			auto line = styled_line{ };
-			line.push_back( { state.model_name, token::accent } );
-			line.push_back( { " ▸ ", token::muted } );
-			line.push_back( { format_tokens( state.total_tokens ), token::warn } );
-			line.push_back( { " ▸ ", token::muted } );
-			line.push_back( { format_cost( state.total_cost ), token::warn } );
-			line.push_back( { " ▸ ", token::muted } );
-			line.push_back( { format_elapsed( state.turn_elapsed_ms ), token::muted } );
-
-			write_up( line );
-		}
+		write_status_line( buffer, row, state );
 
 		// Oldest first, so the newest call sits nearest the status line.
 		{
-			const auto widest = widest_verb( state.tools );
+			const auto widest = widest_verb( state.tools, ambiguous_width );
 
 			for ( auto index = state.tools.size( ); index > 0; --index ) {
 				const auto& tool = state.tools[ index - 1 ];

@@ -6,6 +6,7 @@
 #include <map>
 #include <utility>
 
+#include "mcode/model/render.hxx"
 #include "mcode/support/json.hxx"
 
 namespace mcode {
@@ -98,7 +99,70 @@ namespace mcode {
 			out.request.messages.push_back( std::move( note ) );
 		}
 
+		// Only a provider with explicit markers needs them; the layout rule still applies for
+		// the others, it just costs full price. The prefix (tools, then the system message) is
+		// identical on every request, so one breakpoint there caches everything before it.
+		if ( out.request.cache.mode == model::cache_mode::explicit_markers ) {
+			out.request.cache.breakpoints = model::cache_breakpoints( out.request, options.fields );
+		}
+
 		return out;
+	}
+
+	// Compaction lives here with the rest of the context budget: it keeps the first events and
+	// the most recent tail, and drops the middle. It triggers on estimated history size, so a
+	// model with no declared window still compacts against the default one.
+	auto agent_loop::maybe_compact( ) -> status {
+		const auto window_tokens = caps_.effective_context_window( );
+		const auto usable = static_cast< double >( window_tokens - RESERVED_OUTPUT_TOKENS );
+		const auto window = usable * ( 1.0 - SAFETY_MARGIN_FRACTION );
+		const auto fill = static_cast< double >( loop_internal::history_tokens( history_ ) );
+
+		if ( fill < window * COMPACTION_TRIGGER_FRACTION ) {
+			return status{ };
+		}
+
+		auto result = compaction_result{ };
+
+		const auto pinned = std::min( COMPACTION_KEEP_FIRST_EVENTS, history_.size( ) );
+
+		for ( auto index = std::size_t{ 0 }; index < pinned; ++index ) {
+			result.kept.push_back( history_[ index ] );
+		}
+
+		result.pinned_facts.push_back( user_task_ );
+
+		auto kept_tokens = std::int64_t{ 0 };
+		auto keep_from = history_.size( );
+
+		for ( auto index = history_.size( ); index > pinned; --index ) {
+			const auto cost = loop_internal::message_tokens( history_[ index - 1 ] );
+
+			if ( kept_tokens + cost > COMPACTION_KEEP_LAST_TOKENS ||
+				history_.size( ) - index >= COMPACTION_KEEP_LAST_TURNS ) {
+				break;
+			}
+
+			kept_tokens += cost;
+			keep_from = index - 1;
+		}
+
+		const auto tail_start = std::max( keep_from, pinned );
+
+		for ( auto index = tail_start; index < history_.size( ); ++index ) {
+			result.kept.push_back( history_[ index ] );
+		}
+
+		history_ = std::move( result.kept );
+
+		auto payload = std::string{ "{\"reason\":\"80pct\",\"kept_tokens\":" };
+		payload += std::to_string( kept_tokens );
+		payload += "}";
+
+		log_->append( "context.compaction", payload );
+		publish( events::kind::compaction, std::move( payload ) );
+
+		return status{ };
 	}
 
 	auto build_system_prompt( const tool_registry& registry,

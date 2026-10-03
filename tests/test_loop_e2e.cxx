@@ -146,12 +146,8 @@ TEST_CASE( "exec drives a real read tool call over a loopback provider", "[loop]
 	auto space = workspace::open( fixture_root );
 	REQUIRE( space.has_value( ) );
 
-	const auto plan_turn = std::string{ "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\","
-		"\"content\":\"Planning the read.\"}}]}\n\n"
-		"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
-		"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":50,\"completion_tokens\":5}}\n\n"
-		"data: [DONE]\n\n" };
-
+	// The first request is the plan, and its response carries the tool call: a plan with no
+	// tool call would end the turn, so the call has to come from the first request.
 	const auto turn_one = std::string{ "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\","
 		"\"content\":\"\"}}]}\n\n"
 		"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\","
@@ -168,7 +164,7 @@ TEST_CASE( "exec drives a real read tool call over a loopback provider", "[loop]
 		"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":200,\"completion_tokens\":5}}\n\n"
 		"data: [DONE]\n\n" };
 
-	auto server = e2e_server{ { plan_turn, turn_one, turn_two } };
+	auto server = e2e_server{ { turn_one, turn_two } };
 
 	auto descriptor = model::provider_descriptor{ };
 	descriptor.name = "openai-chat-completions";

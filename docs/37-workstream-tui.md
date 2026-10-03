@@ -132,7 +132,10 @@ The only part that cannot be faked, so it is built first and kept small.
 
 - **Every string goes through one width function**: grapheme-segment → cluster
   width → truncate on cluster boundaries. Never mid-cluster, never a `strlen`.
-  East-Asian width is ambiguous and configurable (`MCODE_AMBIGUOUS_WIDTH`).
+  East-Asian width is ambiguous and configurable: `MCODE_AMBIGUOUS_WIDTH=2`
+  declares a terminal that paints `│`, `─`, `•` and `…` two columns wide, and
+  the probed value reaches the frame builder, the commit wrap and the caret so
+  all three measure alike. Unset means one, which is today's rendering.
 - **No emoji in chrome.** Status glyphs are restricted to single-width
   characters (`✓ ✗ ⠿ ▸ ⋯ │`) with no variation-selector dependency — the
   emoji-width trap is exactly the kind of thing that renders perfectly on the
@@ -257,12 +260,116 @@ Two rules follow from the surveyed tools, and both were bugs here first:
 - The width function truncates on cluster boundaries: a test with a CJK string,
   a combining mark, and a ZWJ emoji sequence.
 - Raw mode is restored on normal exit **and** on an exception path.
-- `NO_COLOR` produces attributes-only output; `MCODE_TUI=inline` and
-  `full` are both honoured.
+- `NO_COLOR` produces attributes-only output; `MCODE_TUI=plain` forces the
+  non-TUI line reader. There is no `full` mode — the renderer is inline-only,
+  so this line previously promised a mode that was never built.
 - Rendering a fixed state to a buffer twice produces identical bytes —
   the renderer is deterministic, which is what makes the CI check possible.
 
 Live evidence: the batch acceptance run in `36`.
+
+## Polish batch — what the surface gained after the slice landed
+
+The slice above built the interactive surface; a follow-up pass closed the gap
+between it and the harnesses it was measured against. Everything here is
+additive and the commit protocol is unchanged.
+
+### Input
+
+Five key kinds joined the set on **both** platforms: `page_up`, `page_down`,
+`ctrl_r`, `mouse_scroll_up`, `mouse_scroll_down`. Windows decodes them from the
+same `ReadConsoleInputA` batch the reader already drains (`VK_PRIOR`, `VK_NEXT`,
+`0x12`, and `MOUSE_WHEELED` with the delta in the high word of `dwButtonState`);
+POSIX decodes `CSI 5~` / `CSI 6~` / `0x12` and the SGR wheel report
+`CSI < 64|65 ; x ; y M`. The batching discipline is preserved: a partial escape
+sequence still reports zero bytes consumed rather than being read as control
+characters, and a lone `ESC` is held as a prefix and flushed as `escape` when
+the wait expires.
+
+`poll_resize( wait_ms )` replaced the size-diff probe as the primary signal. On
+POSIX the `SIGWINCH` handler is a single store to a `volatile sig_atomic_t` —
+no allocation, no locks, no `printf`, async-signal-safe — and `read_key` drains
+the flag on `EINTR` so a resize can never end a session. On Windows a
+`WINDOW_BUFFER_SIZE_EVENT` is consumed from the same record stream. The
+size-diff fallback is still checked first, so a missed event is still noticed.
+
+`set_mouse_reporting( bool )` exists because **a terminal reporting the wheel
+stops scrolling its own scrollback**, which is how history is read today. It is
+off by default and enabled only while a turn runs, then restored.
+
+### Scrolling
+
+`scroll_by`, `scroll_to_bottom` and `scrolled` move a `scroll_offset` over a
+retained ring (`SCROLLBACK_MAX_ROWS`) filled by `retain()` at the end of
+`commit()`, **after** the wrap, so the retained rows are byte-identical to what
+the terminal shows. While scrolled the region grows to the full available
+height and shows the retained rows with a dim
+`── history (End to return) ──` header; the prompt is not reachable until the
+view returns to live. Scrolling never writes to the terminal — it changes the
+offset and lets the cell diff repaint — and no destructive clear is emitted, so
+the terminal's own scrollback is never touched.
+
+The offset is clamped to the deepest one that still fills the viewport's body:
+`retained - (region rows - 1)`, floored at `1` while more than one row is
+retained. Deeper, the window would carry blank rows above the oldest retained
+row instead of more history. A resize re-clamps, because the viewport's height
+is the screen's; a commit does not, because `retain()` advances the offset by
+the count it appends, which leaves the visible rows unchanged. The body is
+`region rows - 1` (`HISTORY_HEADER_ROWS`), and the frame fills it from the
+oldest retained row up, so a buffer shorter than the body shows its rows
+against the indicator rather than leaving the viewport empty.
+
+### Status line
+
+`set_context( used, capacity )` renders the token count with a percentage;
+capacity `0` means unknown and omits the percentage entirely rather than
+printing a guess. The colour is read off the same integer that is displayed:
+`token::warn` from 80%, `token::error` from 95%. `set_activity( verb )` renders
+`verb...` in the accent colour plus a dim `esc to interrupt` hint, so appearing
+and clearing move only the status row. The REPL drives both from
+`agent_loop::context_used()` / `context_capacity()` and the current phase.
+
+### Palette, mention and commands
+
+Enter now runs the highlighted command — previously only Tab copied it, and
+Enter submitted the raw `/`, which is the reported bug. Tab inserts the
+completed name with a trailing space so the palette stays usable for arguments.
+Ghost text completes the highlighted row's remaining suffix at the caret, on a
+grapheme-cluster boundary.
+
+`@` opens a file picker over the workspace with a three-tier fuzzy ranking
+(path prefix, basename prefix, subsequence; case-insensitive). It inserts the
+**path**, never the file's contents — matching Codex and Droid, and keeping the
+transcript small enough to stay inside the context budget. `list_workspace_files`
+walks once through the existing `workspace::glob` and drops the glob tool's
+always-skipped directory names; there is no second walker.
+
+Four commands joined the palette: `/context` (used / capacity / percent, the
+percent omitted when capacity is unknown), `/compact` (honest — it states that
+the loop compacts history itself at 80% rather than pretending to act),
+`/export` (writes the transcript as markdown), and `/mention` (seeds the editor
+with `@` and opens the picker).
+
+### Interrupt
+
+`ESC` sets an atomic flag; the event-bus subscriber stops consuming further
+deltas, the turn finishes cleanly on what arrived, partial text stays in the
+transcript, `interrupted` is committed as a warning and the process exits 130.
+This is **cooperative only** — see `README.md` §Non-obvious constraints 98 for
+why a cancellation seam was not built and why the two obvious alternatives were
+rejected.
+
+### Token budget
+
+A tool-free turn used to issue two full stateless requests, Plan and Act, so a
+greeting paid the entire prefix twice. Plan now owns the turn's first request
+and Act reuses it when it carries no tool call. See `README.md` 95 for the
+rule and the budget edge. Separately, `cache_plan::breakpoints` was dead code —
+nothing populated it — so explicit-marker providers paid full input price every
+turn; `assemble_request` now populates it from the rendered body's stable-prefix
+anchor. And the instruction-chain budget now **truncates** broadest-first
+instead of only warning, leaving the closest entry intact and emitting a
+visible pointer row.
 
 ## Traps
 
@@ -270,8 +377,9 @@ Live evidence: the batch acceptance run in `36`.
   restore. This is the failure that makes a user reboot.
 - **Blocking the render thread on the loop.** If a slow tool freezes the
   spinner, the threading model is wrong.
-- **Emoji and ambiguous-width glyphs in chrome.** Single-width only; one width
-  function everywhere.
+- **Emoji and ambiguous-width glyphs in chrome.** Emoji are out; the chrome's
+  ambiguous glyphs (`│`, `─`, `•`, `…`) take the probed policy
+  (`MCODE_AMBIGUOUS_WIDTH`), and one width function serves every measurement.
 - **Assuming a colour depth.** Probe, then pick once. Never per-cell.
 - **Parsing markdown synchronously per token.** Only the last open block
   re-renders.

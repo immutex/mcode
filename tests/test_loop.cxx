@@ -16,6 +16,7 @@
 #include "mcode/model/capabilities.hxx"
 #include "mcode/model/http_client.hxx"
 #include "mcode/model/provider.hxx"
+#include "mcode/model/render.hxx"
 #include "mcode/net/http_client.hxx"
 #include "mcode/support/json.hxx"
 #include "mcode/tools/context.hxx"
@@ -40,26 +41,29 @@ using namespace mcode;
 using namespace loop_test;
 
 
-TEST_CASE( "a plain turn reaches handoff through verify", "[loop]" ) {
+TEST_CASE( "a tool-free turn is one request: plan, act, verify, handoff", "[loop]" ) {
 	auto fx = fixture{ };
 	fx.connect( );
 
-	fx.client.queue( text_response( "planning" ) );
-	fx.client.queue( text_response( "all done" ) );
+	fx.client.queue( text_response( "hello there" ) );
 
-	const auto outcome = fx.loop->run( "write a hello world" );
+	const auto outcome = fx.loop->run( "say hello" );
 
 	REQUIRE( outcome.has_value( ) );
 	CHECK( state_names( outcome->visited ) == "plan,act,verify,handoff" );
 	CHECK( outcome->final_state == loop_state::handoff );
-	CHECK( fx.client.call_count( ) == 2 );
+
+	// the greeting must not pay for a second full-prefix request
+	CHECK( fx.client.call_count( ) == 1 );
+
+	REQUIRE_FALSE( fx.loop->history( ).empty( ) );
+	CHECK( fx.loop->history( ).back( ).text( ) == "hello there" );
 }
 
 TEST_CASE( "a tool call is dispatched and observed", "[loop]" ) {
 	auto fx = fixture{ };
 	fx.connect( );
 
-	fx.client.queue( text_response( "planning" ) );
 	fx.client.queue( call_response( "echo", R"({"text":"hi"})" ) );
 	fx.client.queue( text_response( "done now" ) );
 
@@ -67,13 +71,116 @@ TEST_CASE( "a tool call is dispatched and observed", "[loop]" ) {
 
 	REQUIRE( outcome.has_value( ) );
 	CHECK( state_names( outcome->visited ) == "plan,act,observe,act,verify,handoff" );
+	CHECK( fx.client.call_count( ) == 2 );
+
+	// the call reached the handler and its result is in the history the model sees
+	auto saw_result = false;
+
+	for ( const auto& message : fx.loop->history( ) ) {
+		for ( const auto& block : message.blocks ) {
+			if ( block.kind == model::block_kind::tool_result
+				&& block.result_json.find( "hi" ) != std::string::npos ) {
+				saw_result = true;
+			}
+		}
+	}
+
+	CHECK( saw_result );
+}
+
+TEST_CASE( "explicit-marker providers get a populated cache breakpoint", "[loop][cache]" ) {
+	auto fx = fixture{ };
+
+	const auto no_history = std::vector< model::message >{ };
+
+	auto assembled = assemble_request( fx.registry,
+		{ .system_prompt = "sys",
+			.history = no_history,
+			.model_name = "test-model",
+			.mode = model::cache_mode::explicit_markers,
+			.near_budget = false,
+			.recitation = { } } );
+
+	REQUIRE( assembled.request.cache.breakpoints.size( ) == 1 );
+
+	auto descriptor = model::provider_descriptor{ };
+	descriptor.name = "openai-chat-completions";
+	descriptor.endpoint = "https://api.example.com/v1/chat/completions";
+
+	auto stream_request = model::stream_request{ };
+	stream_request.request = assembled.request;
+	stream_request.provider = descriptor;
+
+	const auto body = model::render_request( stream_request );
+
+	REQUIRE( static_cast< bool >( body ) );
+	REQUIRE( static_cast< bool >( json::document::parse( *body ) ) );
+
+	// the marker covers the stable prefix, so it lands on the system message itself
+	CHECK( body->find( R"({"cache_control":{"type":"ephemeral"},"content":"sys","role":"system"})" )
+		!= std::string::npos );
+
+	// a provider that caches on its own, or not at all, gets no markers and no plan
+	auto implicit = assembled.request;
+	implicit.cache.mode = model::cache_mode::implicit;
+
+	auto implicit_stream = stream_request;
+	implicit_stream.request = implicit;
+
+	const auto implicit_body = model::render_request( implicit_stream );
+	REQUIRE( static_cast< bool >( implicit_body ) );
+	CHECK( implicit_body->find( "cache_control" ) == std::string::npos );
+
+	auto unmarked = assemble_request( fx.registry,
+		{ .system_prompt = "sys",
+			.history = no_history,
+			.model_name = "test-model",
+			.mode = model::cache_mode::implicit,
+			.near_budget = false,
+			.recitation = { } } );
+
+	CHECK( unmarked.request.cache.breakpoints.empty( ) );
+
+	auto none = unmarked.request;
+	none.cache.mode = model::cache_mode::none;
+
+	auto none_stream = stream_request;
+	none_stream.request = none;
+
+	const auto none_body = model::render_request( none_stream );
+	REQUIRE( static_cast< bool >( none_body ) );
+	CHECK( none_body->find( "cache_control" ) == std::string::npos );
+}
+
+TEST_CASE( "the loop reports context usage against the model's window", "[loop]" ) {
+	auto fx = fixture{ };
+	fx.connect( );
+
+	CHECK( fx.loop->context_capacity( ) == 200'000 );
+	CHECK( fx.loop->context_used( ) == 0 );
+
+	fx.client.queue( text_response( "hello" ) );
+
+	std::ignore = fx.loop->run( "say hi" );
+
+	// the same counter the budget charges, not a second tally
+	CHECK( fx.loop->context_used( ) == fx.loop->budget( ).tokens_used );
+	CHECK( fx.loop->context_used( ) == 150 );
+
+	// an unknown model reads 0, so a renderer omits the percentage
+	auto unknown_deps = agent_loop::dependencies{ };
+	unknown_deps.model_name = "no-such-model";
+
+	const auto unknown = agent_loop{ unknown_deps };
+
+	CHECK( unknown.context_capacity( ) == 0 );
+	CHECK( unknown.context_used( ) == 0 );
 }
 
 TEST_CASE( "thrash triggers reflect", "[loop]" ) {
 	auto fx = fixture{ };
 	fx.connect( );
 
-	fx.client.queue( text_response( "planning" ) );
 	fx.client.queue( call_response( "echo", R"({"a":1})" ) );
 	fx.client.queue( call_response( "echo", R"({"a":1})" ) );
 	fx.client.queue( call_response( "echo", R"({"a":1})" ) );
@@ -92,7 +199,6 @@ TEST_CASE( "key-order-only differences still thrash", "[loop]" ) {
 	auto fx = fixture{ };
 	fx.connect( );
 
-	fx.client.queue( text_response( "planning" ) );
 	fx.client.queue( call_response( "echo", R"({"a":1,"b":2})" ) );
 	fx.client.queue( call_response( "echo", R"({"b":2,"a":1})" ) );
 	fx.client.queue( call_response( "echo", R"({"a":1,"b":2})" ) );
@@ -110,8 +216,6 @@ TEST_CASE( "key-order-only differences still thrash", "[loop]" ) {
 TEST_CASE( "thrash escalates to replan and then handoff", "[loop]" ) {
 	auto fx = fixture{ };
 	fx.connect( );
-
-	fx.client.queue( text_response( "planning" ) );
 
 	for ( auto round = 0; round < 3; ++round ) {
 		fx.client.queue( call_response( "echo", R"({"a":1})" ) );
@@ -142,9 +246,10 @@ TEST_CASE( "thrash escalates to replan and then handoff", "[loop]" ) {
 TEST_CASE( "budget exhaustion lands in handoff, not failed", "[loop]" ) {
 	auto fx = fixture{ };
 	fx.connect( );
-	fx.loop->budget( ).max_steps = 3;
+	fx.loop->budget( ).max_steps = 1;
 
-	fx.client.queue( text_response( "planning" ) );
+	// the call is dispatched even though its request spent the last step: the tool result
+	// lands, then Observe finds the budget gone and hands off.
 	fx.client.queue( call_response( "echo", R"({})" ) );
 
 	const auto outcome = fx.loop->run( "one call only" );
@@ -152,6 +257,7 @@ TEST_CASE( "budget exhaustion lands in handoff, not failed", "[loop]" ) {
 	REQUIRE( outcome.has_value( ) );
 	CHECK( outcome->final_state == loop_state::handoff );
 	CHECK( state_names( outcome->visited ) == "plan,act,observe,handoff" );
+	CHECK( fx.client.call_count( ) == 1 );
 }
 
 TEST_CASE( "failed is reachable only from plan", "[loop]" ) {
@@ -208,16 +314,15 @@ TEST_CASE( "the prefix is byte-stable across turns", "[loop]" ) {
 	auto fx = fixture{ };
 	fx.connect( );
 
-	fx.client.queue( text_response( "planning" ) );
 	fx.client.queue( call_response( "echo", R"({"n":1})" ) );
 	fx.client.queue( text_response( "finished" ) );
 
 	std::ignore = fx.loop->run( "stable prefix" );
 
-	REQUIRE( fx.client.call_count( ) == 3 );
+	REQUIRE( fx.client.call_count( ) == 2 );
 
-	const auto& first = fx.client.request( 1 );
-	const auto& second = fx.client.request( 2 );
+	const auto& first = fx.client.request( 0 );
+	const auto& second = fx.client.request( 1 );
 
 	REQUIRE( first.messages.size( ) >= 1 );
 	REQUIRE( second.messages.size( ) >= 1 );
@@ -242,8 +347,6 @@ TEST_CASE( "the near-budget note is in the tail, not the prefix", "[loop]" ) {
 	auto fx = fixture{ };
 	fx.connect( );
 	fx.loop->budget( ).max_usd = 1.0;
-
-	fx.client.queue( text_response( "planning" ) );
 
 	auto expensive_call = call_response( "echo", R"({})" );
 	expensive_call.input_tokens = 900'000;
@@ -344,7 +447,6 @@ TEST_CASE( "compaction triggers at 80 percent of the usable window", "[loop]" ) 
 		return std::string{ args };
 	} );
 
-	fx.client.queue( text_response( "planning" ) );
 	fx.client.queue( call_response( "echo", std::string( 6'000, 'x' ) ) );
 	fx.client.queue( text_response( "done" ) );
 
@@ -374,7 +476,6 @@ TEST_CASE( "verify with a passing command reaches done", "[loop]" ) {
 	fx.connect( );
 	fx.loop->set_verification_command( "pass" );
 
-	fx.client.queue( text_response( "planning" ) );
 	fx.client.queue( text_response( "work complete" ) );
 
 	const auto outcome = fx.loop->run( "finish with a check" );
@@ -389,7 +490,6 @@ TEST_CASE( "verify with a failing command reflects then hands off", "[loop]" ) {
 	fx.connect( );
 	fx.loop->set_verification_command( "fail" );
 
-	fx.client.queue( text_response( "planning" ) );
 	fx.client.queue( text_response( "work complete" ) );
 	fx.client.queue( text_response( "diagnosis: the test is right, the code is wrong" ) );
 	fx.client.queue( text_response( "another attempt" ) );
@@ -408,7 +508,6 @@ TEST_CASE( "a failing exit code with a successful tool call does not reach done"
 	fx.connect( );
 	fx.loop->set_verification_command( "fail" );
 
-	fx.client.queue( text_response( "planning" ) );
 	fx.client.queue( text_response( "work complete" ) );
 	fx.client.queue( text_response( "diagnosis: the command failed" ) );
 	fx.client.queue( text_response( "final answer" ) );
@@ -424,7 +523,6 @@ TEST_CASE( "a hard tool error routes to reflect", "[loop]" ) {
 	auto fx = fixture{ };
 	fx.connect( );
 
-	fx.client.queue( text_response( "planning" ) );
 	fx.client.queue( call_response( "missing_tool", R"({})" ) );
 	fx.client.queue( text_response( "diagnosis: the tool name was wrong" ) );
 	fx.client.queue( text_response( "final answer" ) );

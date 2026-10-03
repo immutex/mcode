@@ -38,8 +38,9 @@ generic, and it is the cheapest large win available.
   (`AGENTS.md`, else `CLAUDE.md`, else `GEMINI.md`), plus user-global and
   bundled-org locations
 - Chain assembly with **closest-wins**, stated in the system prompt
-- Overflow limits (32 KiB/file, 64 KiB/chain) with the 2K-token chain budget as
-  a *lint warning*, not a truncation
+- Overflow limits (32 KiB/file, 64 KiB/chain) with the 2K-token chain budget
+  enforced by a **visible** truncation (broadest-first, closest entry kept,
+  pointer left in place)
 - Skill discovery across four roots, including extension directories
 - YAML-frontmatter parsing and spec validation (`name`, `description`)
 - The **skill index** in the system prompt: `name — description`, budgeted
@@ -92,15 +93,20 @@ Two caps, and the difference matters:
   so a pathological file cannot hang startup. On breach, the *broadest* file is
   truncated first (the org file, not the closest one) with a one-line pointer so
   the model can `read` the rest.
-- **The 2K-token chain budget is a lint warning**, not a truncation. `08` and
-  `21` both cite the finding (arXiv 2602.11988) that a bloated chain buys no
-  success rate and costs >20% more inference; `05` owns the 2K number itself.
-  But silently dropping a user's instructions to hit a token figure is worse
-  than telling them the chain is fat. `mcode skill validate`
-  and `mcode skill validate` report it. **`config check` was named here and was
-  never built**; the chain warning surfaces through `mcode skill validate` and
-  through `--verbose` on a run. Either build the command or drop the name — this
-  doc no longer claims it exists.
+- **The 2K-token chain budget is enforced by truncation, and the truncation is
+  visible.** `08` and `21` both cite the finding (arXiv 2602.11988) that a
+  bloated chain buys no success rate and costs >20% more inference; `05` owns
+  the 2K number itself. The original design made this a lint warning on the
+  argument that *silently* dropping a user's instructions is worse than telling
+  them the chain is fat — the implementation keeps that objection intact by
+  never dropping silently. The cap cuts from the broadest end, stops before the
+  closest entry, and leaves a
+  `[truncated: over the instruction-chain budget; read <path> for the rest]`
+  pointer in place of what it removed, so the model can `read` the rest on
+  demand and the user sees exactly what was cut. `mcode skill validate` reports
+  it as well. **`config check` was named here and was never built** — the chain
+  warning surfaces through `mcode skill validate` and through `--verbose` on a
+  run; this doc no longer claims the command exists.
 
 ### Skill discovery
 

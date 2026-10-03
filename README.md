@@ -785,6 +785,61 @@ code comments.
     Fenced-code rows are passed through verbatim: their `token::code_bg`
     background is the only surviving signal that they came from a fence.
 
+95. **Plan and Act were two full stateless requests, so a greeting paid the
+    whole prefix twice.** Every request carries the system prompt, the
+    instruction chain and the tool schemas; the loop issued one for Plan and
+    another for Act, and a turn that needed no tool produced the same answer
+    from both. Plan now owns the turn's first request, and when its response
+    carries no tool call that response *is* the answer: Act reuses it and the
+    run goes straight to Verify. When the response does carry tool calls they
+    are dispatched by Act as before, so no tool call is ever skipped. Act
+    dispatches its pending calls *before* the step-budget check, so a request
+    that spends the last step still executes what the model asked for.
+
+96. **East-Asian *ambiguous* width is a real terminal hazard, and it is now
+    resolved by a probe.** The chrome glyphs `│` U+2502, `─` U+2500, `•` U+2022
+    and `…` U+2026 render as one column or two depending on the terminal's East
+    Asian Width setting. `probe_capabilities` reads `MCODE_AMBIGUOUS_WIDTH` once
+    at startup into `capabilities::ambiguous_width`, clamped to exactly {1, 2}:
+    `2` means the terminal paints those glyphs two columns wide, and unset, `1`
+    or any other value means one (an unknown value is not an error and is not
+    logged). Every measurement — the frame builder, the commit wrap and the
+    caret column — reads that one probed value, so a terminal that disagrees
+    with the default can no longer desynchronise the cursor from the grid and
+    splice a phantom space into neighbouring text. The variable is the whole
+    interface; there is no config-file key.
+
+97. **The retained scrollback is not the terminal's scrollback.** Committed rows
+    still print through the normal commit path and remain in the terminal's own
+    scrollback, which is the durable transcript. The coordinator additionally
+    keeps a bounded copy (`SCROLLBACK_MAX_ROWS`) so PageUp/PageDown and the
+    wheel can repaint history inside the live region without moving the
+    terminal's viewport. Scrolling never writes to the terminal at all: it
+    changes an offset and lets the cell diff repaint, and no destructive clear
+    is ever emitted (`clear_region` uses `CSI 2K` per row; there is no `CSI 2J`,
+    `3J`, `S` or `T` anywhere), so a scroll can never destroy the real
+    transcript. Mouse reporting is off by default for the same reason: a
+    terminal reporting the wheel stops scrolling its own scrollback, which is
+    how history is read, so reporting is enabled only while a turn runs. The
+    offset is clamped to the deepest one that still fills the viewport's body
+    (`retained - (region rows - 1)`, floored at `1` while more than one row is
+    retained): a deeper offset would paint blank rows above the oldest retained
+    row instead of history, which is what made a PageUp look empty. The clamp
+    is re-applied on resize, because the viewport's height is the screen's, but
+    not on commit, where `retain()` instead advances the offset by the count it
+    appends so the visible rows stay put.
+
+98. **Esc is a cooperative interrupt, because there is no cancellation seam.**
+    `model_client::stream` takes no cancel token, `http_client::stream_sse` has
+    no cancel path and the loop has no `request_cancel`, so Esc cannot abort a
+    request in flight. It sets a flag that the event-bus subscriber reads to
+    stop consuming further deltas; the turn then finishes cleanly on what
+    arrived, partial text stays in the transcript, `interrupted` is committed as
+    a warning line and the process exits 130. A `tool_pre_call` veto and a
+    step-budget clamp were both rejected: the first would log a denial as a
+    permission decision, the second would make an interrupt indistinguishable
+    from budget exhaustion.
+
 ## Building
 
 ```bash

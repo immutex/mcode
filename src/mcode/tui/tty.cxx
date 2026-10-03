@@ -15,9 +15,14 @@ namespace mcode::tui {
 	}
 
 	auto probe_capabilities( const std::string_view colorterm, const std::string_view term,
-		const bool no_color, const bool has_tty ) -> capabilities {
+		const bool no_color, const bool has_tty,
+		const std::string_view ambiguous_width_env ) -> capabilities {
 		auto out = capabilities{ };
 		out.is_tty = has_tty;
+
+		// Clamped to exactly {1, 2}: an unknown value is not an error, it is
+		// the one-column default, and nothing is logged.
+		out.ambiguous_width = ambiguous_width_env == "2" ? 2 : 1;
 
 		// NO_COLOR wins: attributes only, no foreground or background changes.
 		if ( no_color ) {

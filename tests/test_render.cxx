@@ -228,6 +228,53 @@ TEST_CASE( "breakpoints apply right-to-left", "[render]" ) {
 	REQUIRE( recovered == *plain );
 }
 
+TEST_CASE( "explicit markers get one breakpoint on the stable prefix when none are given",
+	"[render]" ) {
+	auto request = make_request( );
+	request.cache.mode = model::cache_mode::explicit_markers;
+
+	const auto descriptor = chat_completions_descriptor( );
+
+	REQUIRE( request.cache.breakpoints.empty( ) );
+
+	const auto offsets = model::cache_breakpoints( request, descriptor.request );
+
+	REQUIRE( offsets.size( ) == 1 );
+
+	// the marker lands on the system message, so the tools block before it is cached too
+	auto located = request;
+	located.cache.breakpoints = offsets;
+
+	auto marked = model::render_chat_completions( located, descriptor.request );
+
+	REQUIRE( static_cast< bool >( marked ) );
+	REQUIRE( static_cast< bool >( json::document::parse( *marked ) ) );
+
+	CHECK( marked->find( R"({"cache_control":{"type":"ephemeral"},"content":"be terse","role":"system"})" )
+		!= std::string::npos );
+
+	// and a breakpoint the caller supplies is applied verbatim
+	auto manual = request;
+	manual.cache.breakpoints = { offsets.front( ) };
+
+	const auto with_offsets = model::render_chat_completions( manual, descriptor.request );
+	REQUIRE( static_cast< bool >( with_offsets ) );
+	CHECK( *with_offsets == *marked );
+
+	// an empty plan renders no marker: the assembler, not the renderer, decides
+	const auto unmarked = model::render_chat_completions( request, descriptor.request );
+	REQUIRE( static_cast< bool >( unmarked ) );
+	CHECK( unmarked->find( "cache_control" ) == std::string::npos );
+
+	// a request that already carries offsets keeps them: a marker would shift the located one
+	auto preset = request;
+	preset.cache.breakpoints = { 4 };
+
+	const auto kept = model::cache_breakpoints( preset, descriptor.request );
+	REQUIRE( kept.size( ) == 1 );
+	CHECK( kept.front( ) == 4 );
+}
+
 TEST_CASE( "implicit cache mode renders no markers", "[render]" ) {
 	auto request = make_request( );
 	request.cache.mode = model::cache_mode::implicit;

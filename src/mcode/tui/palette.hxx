@@ -8,7 +8,9 @@
 
 namespace mcode::tui {
 
-	// One command the palette can offer.
+	// One row the palette can offer. Slash commands and the mention picker
+	// share it: a mention row's `name` is a workspace-relative path and its
+	// `description` is empty.
 	struct slash_command {
 		std::string name;
 		std::string description;
@@ -22,7 +24,19 @@ namespace mcode::tui {
 		std::vector< slash_command > matches;
 		std::size_t selected = 0;
 
+		// Painted before every row's name. Slash commands keep the leading
+		// slash; the mention picker clears it, because a row's name is already
+		// a workspace-relative path.
+		std::string prefix = "/";
+
 		[[nodiscard]] auto empty( ) const noexcept -> bool { return matches.empty( ); }
+
+		// The row the selection points at, or nullptr when none is: a closed
+		// palette and a filtered-to-nothing one both have none. Enter and Tab
+		// act on this row rather than on the raw typed text.
+		[[nodiscard]] auto highlighted( ) const noexcept -> const slash_command* {
+			return open && selected < matches.size( ) ? &matches[ selected ] : nullptr;
+		}
 	};
 
 	// Filters `commands` against the text after the leading '/'. An empty
@@ -36,7 +50,14 @@ namespace mcode::tui {
 	[[nodiscard]] auto command_query( std::string_view input ) -> std::optional< std::string_view >;
 
 	// The completed line for `name`, with a trailing space so arguments can
-	// follow.
+	// follow. This is what Tab inserts.
 	[[nodiscard]] auto completed_command( std::string_view name ) -> std::string;
+
+	// The line Enter submits for a command palette: the highlighted row's own
+	// command when one is highlighted, otherwise exactly what was typed. This
+	// is what makes Enter on a `/model` row run `/model` instead of the raw
+	// `/`. The mention picker never submits: it inserts into the editor.
+	[[nodiscard]] auto submitted_line( const slash_palette& palette,
+		std::string_view typed ) -> std::string;
 
 }

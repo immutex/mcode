@@ -22,6 +22,24 @@ namespace mcode::tui {
 	// Ceiling, so a runaway list cannot push the transcript off the screen.
 	inline constexpr std::size_t LIVE_REGION_MAX_ROWS = 16;
 
+	// Committed rows the in-app viewport retains for scrolling. The terminal's
+	// own scrollback keeps the whole session; this is the window the app can
+	// re-lay on demand, bounded so the copy cannot grow without limit.
+	inline constexpr std::size_t SCROLLBACK_MAX_ROWS = 2000;
+
+	// The viewport's header while it shows retained history rather than the
+	// live content.
+	inline constexpr std::string_view HISTORY_INDICATOR = "── history (End to return) ──";
+
+	// The hint beside a running turn's verb on the status line.
+	inline constexpr std::string_view ACTIVITY_HINT = "esc to interrupt";
+
+	// Context-window pressure as whole percents: warn from the first, error
+	// from the second. The colour and the number are read off the same
+	// integer, so they cannot disagree.
+	inline constexpr std::uint64_t CONTEXT_WARN_PERCENT = 80;
+	inline constexpr std::uint64_t CONTEXT_ERROR_PERCENT = 95;
+
 	// What the user's own message is prefixed with once submitted.
 	inline constexpr std::string_view USER_GUTTER = "❯";
 
@@ -75,12 +93,32 @@ namespace mcode::tui {
 		// span several rows; an empty entry is the blank line between groups.
 		std::vector< styled_line > pending_commit;
 
+		// Committed rows retained for the in-app viewport, oldest first,
+		// bounded by SCROLLBACK_MAX_ROWS. The live view ignores them. Stored
+		// as committed, already wrapped to the width that produced them, so
+		// the viewport re-lays exactly the rows the terminal shows.
+		std::deque< styled_line > scrollback;
+
+		// Rows between the newest retained row and the viewport's bottom. Zero
+		// is the live view; a positive value is the viewport scrolled up. A
+		// commit advances this by the count it appends, so the viewport stays
+		// on the same content while new output lands below it.
+		std::size_t scroll_offset = 0;
+
 		slash_palette palette;
 
 		std::string model_name;
 		std::uint64_t total_tokens = 0;
 		double total_cost = 0.0;
 		std::uint64_t turn_elapsed_ms = 0;
+
+		// The context window's fill. A capacity of zero means unknown, and the
+		// percentage is then left out entirely rather than shown as a zero.
+		std::uint64_t context_used = 0;
+		std::uint64_t context_capacity = 0;
+
+		// The running turn's verb, e.g. "Working". Empty when no turn runs.
+		std::string activity;
 
 		std::string input_line;
 		std::size_t input_cursor = 0;
@@ -195,7 +233,34 @@ namespace mcode::tui {
 		auto set_meter( std::string model_name, std::uint64_t tokens, double cost,
 			std::uint64_t elapsed_ms ) -> void;
 
+		// The context window: tokens in use and the model's capacity. Capacity
+		// zero means unknown, and the status line then omits the percentage.
+		auto set_context( std::uint64_t used, std::uint64_t capacity ) -> void;
+
+		// The running turn's verb, e.g. "Working". Empty clears it.
+		auto set_activity( std::string_view verb ) -> void;
+
+		// Scrolls the retained-history viewport. Negative moves into history,
+		// positive toward the live view; clamped to the retained range.
+		auto scroll_by( int rows ) -> void;
+
+		// Returns to the live view.
+		auto scroll_to_bottom( ) -> void;
+
+		// True while the viewport shows retained history rather than the live
+		// content.
+		[[nodiscard]] auto scrolled( ) const noexcept -> bool {
+			return state_.scroll_offset > 0;
+		}
+
 	private:
+		// Appends committed rows to the retained viewport, bounded, and keeps
+		// the viewport where it is while scrolled.
+		auto retain( const std::vector< styled_line >& rows ) -> void;
+
+		// Re-clamps the scroll offset to the retained range.
+		auto clamp_scroll( ) -> void;
+
 		// Commits the reasoning as one bounded block, if any is pending.
 		auto queue_thought( ) -> void;
 
@@ -212,6 +277,11 @@ namespace mcode::tui {
 		// True once any row has been queued, so the first group is not preceded
 		// by a blank line.
 		bool transcript_started_ = false;
+
+		// Set by `resize`, cleared by the flush that repaints: a size change
+		// must erase the region at its old height before the new frame is
+		// diffed, or a row the region no longer covers survives.
+		bool resize_pending_ = false;
 	};
 
 	// Braille, one frame per SPINNER_INTERVAL_MS. Every glyph is single-width.

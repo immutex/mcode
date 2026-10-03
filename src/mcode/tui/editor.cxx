@@ -4,8 +4,35 @@
 
 namespace mcode::tui {
 
+	namespace {
+
+		// The length of the backslash run at the end of `text`.
+		[[nodiscard]] auto trailing_backslashes( const std::string& text ) -> std::size_t {
+			auto count = std::size_t{ 0 };
+
+			while ( count < text.size( ) && text[ text.size( ) - 1 - count ] == '\\' ) {
+				++count;
+			}
+
+			return count;
+		}
+
+	}
+
 	auto input_editor::handle( const key_event& event ) -> std::optional< std::string > {
 		auto& line = lines_[ cursor_row_ ];
+
+		// One implementation of "open a row at the caret": the explicit
+		// `newline` key and the backslash continuation both go through it.
+		const auto open_row = [ & ]( ) {
+			auto split = editor_line{ };
+			split.text = line.text.substr( line.cursor );
+			line.text.resize( line.cursor );
+
+			lines_.insert( lines_.begin( ) +
+				static_cast< std::ptrdiff_t >( cursor_row_ + 1 ), std::move( split ) );
+			++cursor_row_;
+		};
 
 		switch ( event.type ) {
 			case key::character: {
@@ -16,6 +43,27 @@ namespace mcode::tui {
 			}
 
 			case key::enter: {
+				// A trailing backslash run is the multi-line gesture: an odd
+				// count continues the line with one backslash consumed, an
+				// even count submits with one backslash left literal, so
+				// `line\` opens a row and `path\\` submits `path\`. Shift+Enter
+				// cannot be told apart without the Kitty protocol, which
+				// ConPTY does not reliably carry, so this is the gesture.
+				const auto trailing = trailing_backslashes( line.text );
+
+				if ( trailing % 2 == 1 ) {
+					line.text.pop_back( );
+					line.cursor = line.text.size( );
+					open_row( );
+
+					return std::nullopt;
+				}
+
+				if ( trailing > 0 ) {
+					line.text.pop_back( );
+					line.cursor = line.text.size( );
+				}
+
 				auto submission = std::string{ };
 
 				for ( auto index = std::size_t{ 0 }; index < lines_.size( ); ++index ) {
@@ -36,13 +84,7 @@ namespace mcode::tui {
 			}
 
 			case key::newline: {
-				auto split = editor_line{ };
-				split.text = line.text.substr( line.cursor );
-				line.text.resize( line.cursor );
-
-				lines_.insert( lines_.begin( ) +
-					static_cast< std::ptrdiff_t >( cursor_row_ + 1 ), std::move( split ) );
-				++cursor_row_;
+				open_row( );
 
 				return std::nullopt;
 			}

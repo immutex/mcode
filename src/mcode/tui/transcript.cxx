@@ -471,9 +471,16 @@ namespace mcode::tui {
 
 		// The screen's geometry lives here, so the wrap width is supplied
 		// here: `screen_columns_` already leaves the reserved last column
-		// free, so a wrapped row never trips the terminal's own wrap.
+		// free, so a wrapped row never trips the terminal's own wrap. The
+		// ambiguous width is the probed one, or the wrap would disagree with
+		// the frame builder that painted the same text.
 		lines = transcript::wrap_rows( std::move( lines ), screen_columns_,
-			AMBIGUOUS_WIDTH );
+			caps_.ambiguous_width );
+
+		// The viewport keeps a bounded copy of what lands in scrollback. It is
+		// appended here, after the wrap, so the retained rows are the rows the
+		// terminal shows -- not the pre-wrap blocks.
+		retain( lines );
 
 		auto emitter = ansi_emitter{ caps_ };
 

@@ -29,7 +29,6 @@ TEST_CASE( "turn_end is published on every terminal path", "[loop][events]" ) {
 		const auto id = fx.loop->bus( ).subscribe( events::kind::turn_end,
 			[ &turn_end_count ]( const events::event& ) { ++turn_end_count; } );
 
-		fx.client.queue( text_response( "planning" ) );
 		fx.client.queue( text_response( "all done" ) );
 
 		const auto outcome = fx.loop->run( "reach " + label );
@@ -63,7 +62,6 @@ TEST_CASE( "the tool_call event carries the tool name", "[loop][events]" ) {
 	std::ignore = fx.loop->bus( ).subscribe( events::kind::tool_call,
 		[ &payloads ]( const events::event& value ) { payloads.push_back( value.payload_json ); } );
 
-	fx.client.queue( text_response( "planning" ) );
 	fx.client.queue( call_response( "echo", R"({"text":"hi"})" ) );
 	fx.client.queue( text_response( "done now" ) );
 

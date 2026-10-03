@@ -211,6 +211,10 @@ namespace mcode {
 		model::cache_mode mode = model::cache_mode::none;
 		bool near_budget = false;
 		std::string_view recitation;
+
+		// The provider's field names: a cache breakpoint is a byte offset into the rendered
+		// body, so the anchor must be located with the names the renderer will use.
+		model::request_spec fields = { };
 	};
 
 	// The prefix order (tools, system, messages) is byte-stable; mutable state lives in the tail.
@@ -287,6 +291,10 @@ namespace mcode {
 			return found != handlers_.end( ) ? &found->second : nullptr;
 		}
 
+		// A turn that needs no tool costs ONE model request: when the plan response carries no
+		// tool call it is the turn's answer, so Act reuses it and the run goes straight to
+		// Verify. A plan that does carry calls has them dispatched by Act at once, so the tool
+		// path stays plan -> act -> observe -> act -> verify and no call is skipped.
 		[[nodiscard]] auto run( const std::string_view user_task ) -> result< turn_outcome >;
 
 		[[nodiscard]] auto budget( ) const noexcept -> const session_budget& { return budget_; }
@@ -310,6 +318,21 @@ namespace mcode {
 		[[nodiscard]] auto model_name( ) const noexcept -> std::string_view {
 			return model_name_;
 		}
+
+		// Session tokens consumed so far: the counter the budget charges and the status meter
+		// shows, never a second tally. Both reads are for the render thread, so neither locks
+		// nor allocates, and the REPL may call them while the loop runs.
+		[[nodiscard]] auto context_used( ) const noexcept -> std::uint64_t {
+			return budget_.tokens_used;
+		}
+
+		// The model's context window in tokens; 0 means unknown, so a caller omits the ratio.
+		[[nodiscard]] auto context_capacity( ) const noexcept -> std::uint64_t {
+			return caps_.context_window > 0
+				? static_cast< std::uint64_t >( caps_.context_window )
+				: 0;
+		}
+
 		[[nodiscard]] auto history( ) const noexcept -> const std::vector< model::message >& {
 			return history_;
 		}
@@ -324,9 +347,19 @@ namespace mcode {
 		auto finish_run( const loop_state terminal, const std::string_view reason ) -> void;
 
 	private:
+		// Plan is the turn's only request when the model needs no tool: a plan response with
+		// no tool call IS the turn's answer, so Act reuses it and the run goes straight to
+		// Verify (which hands off when no verification command is set). A plan response that
+		// does carry a tool call leaves it pending, and Act dispatches it exactly as before.
 		auto run_state_machine( ) -> turn_outcome;
+
 		auto request_and_fold( model::effort effort ) -> result< bool >;
+
+		// Clears pending_calls_ and dispatches them, recording a hard error for observe.
+		auto dispatch_pending( ) -> void;
+
 		auto dispatch_calls( const std::vector< tool_call >& calls ) -> bool;
+
 		auto maybe_compact( ) -> status;
 		auto publish( const events::kind type, std::string payload_json ) -> void;
 
@@ -361,6 +394,10 @@ namespace mcode {
 		std::string instruction_chain_;
 		std::string skill_index_;
 		std::vector< tool_call > pending_calls_;
+
+		// Set when the plan response carried no tool call, so Act reuses it as the turn's
+		// answer rather than issuing a second request for the same bytes.
+		bool plan_answered_ = false;
 		std::map< std::string, std::size_t, std::less<> > reflection_counts_;
 		std::size_t total_reflections_ = 0;
 		std::size_t replan_count_ = 0;

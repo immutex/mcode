@@ -36,9 +36,15 @@ add_executable(mcode_tests
     test_instruct_chain.cxx
     test_mcp.cxx
     test_tui_frame.cxx
+    test_tui_cell.cxx
     test_tui_markdown.cxx
     test_tui_editor.cxx
     test_tui_repl.cxx
+    test_tui_render.cxx
+    test_tui_commit.cxx
+    test_tui_scroll.cxx
+    test_tui_status.cxx
+    test_tui_transcript.cxx
     test_cli_slash.cxx
     test_sandbox.cxx
     test_sandbox_egress.cxx

@@ -118,7 +118,6 @@ TEST_CASE( "two turns in one process keep the history and a follow-up sees the "
 
 	auto turn = cli::session{ loop };
 
-	client.queue( text_response( "planning" ) );
 	client.queue( call_response( "echo", R"({"note":"turn-one-result"})" ) );
 	client.queue( text_response( "first turn done" ) );
 
@@ -128,15 +127,14 @@ TEST_CASE( "two turns in one process keep the history and a follow-up sees the "
 	const auto history_after_first = turn.history( ).size( );
 	REQUIRE( history_after_first > 0 );
 
-	client.queue( text_response( "planning again" ) );
 	client.queue( text_response( "follow-up done" ) );
 
 	const auto second = turn.run_turn( "what did the first turn find" );
 	REQUIRE( second == cli::exit_code::success );
 
-	REQUIRE( client.call_count( ) == 5 );
+	REQUIRE( client.call_count( ) == 3 );
 
-	const auto& follow_up = client.request( 3 );
+	const auto& follow_up = client.request( 2 );
 
 	auto saw_result = false;
 

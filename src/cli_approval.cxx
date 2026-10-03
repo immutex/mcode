@@ -158,10 +158,15 @@ namespace mcode::cli {
 
 			const auto wanted = block_rows( lines.size( ) );
 
+			// The block is drawn through the same width policy as the live
+			// region: a row measured with one ambiguous width and painted
+			// with another is exactly what desynchronises the cursor.
+			const auto ambiguous = session.caps( ).ambiguous_width;
+
 			// The block is bottom-anchored, so the emitter's own geometry
 			// applies: it writes from the parked row upwards.
-			auto blank = mcode::tui::cell_buffer{ wanted, block_columns( session ) };
-			auto block = mcode::tui::cell_buffer{ wanted, blank.columns( ) };
+			auto blank = mcode::tui::cell_buffer{ wanted, block_columns( session ), ambiguous };
+			auto block = mcode::tui::cell_buffer{ wanted, blank.columns( ), ambiguous };
 
 			for ( auto index = std::size_t{ 0 }; index < lines.size( ); ++index ) {
 				block.write_line( index, lines[ index ] );

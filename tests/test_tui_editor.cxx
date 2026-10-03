@@ -159,13 +159,66 @@ TEST_CASE( "escape abandons the pending input", "[tui][editor]" ) {
 	CHECK( editor.text( ).empty( ) );
 }
 
-TEST_CASE( "the flattened caret counts across rows", "[tui][editor]" ) {
+TEST_CASE( "a trailing backslash continues the line instead of submitting",
+	"[tui][editor]" ) {
 	auto editor = input_editor{ };
 
-	std::ignore = editor.handle( character( "abc" ) );
-	std::ignore = editor.handle( key( input_editor::key::newline ) );
-	std::ignore = editor.handle( character( "de" ) );
+	std::ignore = editor.handle( character( "line one\\" ) );
 
-	CHECK( editor.text( ) == "abc de" );
-	CHECK( editor.flattened_cursor( ) == 6 );
+	const auto submitted = editor.handle( key( input_editor::key::enter ) );
+
+	CHECK_FALSE( submitted.has_value( ) );
+	CHECK( editor.row_count( ) == 2 );
+	CHECK( editor.text( ) == "line one " );
+
+	std::ignore = editor.handle( character( "line two" ) );
+
+	CHECK( editor.row_count( ) == 2 );
+
+	const auto completed = editor.handle( key( input_editor::key::enter ) );
+
+	REQUIRE( completed.has_value( ) );
+	CHECK( *completed == "line one\nline two" );
 }
+
+TEST_CASE( "an escaped backslash submits with one literal backslash",
+	"[tui][editor]" ) {
+	auto editor = input_editor{ };
+
+	std::ignore = editor.handle( character( "path\\\\" ) );
+
+	const auto submitted = editor.handle( key( input_editor::key::enter ) );
+
+	REQUIRE( submitted.has_value( ) );
+	CHECK( *submitted == "path\\" );
+	CHECK( editor.row_count( ) == 1 );
+}
+
+TEST_CASE( "enter with no backslash still submits", "[tui][editor]" ) {
+	auto editor = input_editor{ };
+
+	std::ignore = editor.handle( character( "plain" ) );
+
+	const auto submitted = editor.handle( key( input_editor::key::enter ) );
+
+	REQUIRE( submitted.has_value( ) );
+	CHECK( *submitted == "plain" );
+}
+
+TEST_CASE( "the history accessor exposes what was submitted, oldest first",
+	"[tui][editor]" ) {
+	auto editor = input_editor{ };
+
+	CHECK( editor.history( ).empty( ) );
+
+	std::ignore = editor.handle( character( "first" ) );
+	std::ignore = editor.handle( key( input_editor::key::enter ) );
+	std::ignore = editor.handle( character( "second" ) );
+	std::ignore = editor.handle( key( input_editor::key::enter ) );
+
+	REQUIRE( editor.history( ).size( ) == 2 );
+	CHECK( editor.history( )[ 0 ] == "first" );
+	CHECK( editor.history( )[ 1 ] == "second" );
+}
+
+

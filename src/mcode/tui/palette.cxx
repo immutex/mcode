@@ -57,4 +57,18 @@ namespace mcode::tui {
 		return std::string{ "/" } + std::string{ name } + " ";
 	}
 
+	auto submitted_line( const slash_palette& palette, const std::string_view typed )
+		-> std::string {
+		const auto* row = palette.highlighted( );
+
+		if ( row == nullptr ) {
+			return std::string{ typed };
+		}
+
+		// The row's own name, not the typed prefix: Enter runs the command the
+		// user selected. No trailing space, because this line is submitted
+		// rather than edited further.
+		return std::string{ "/" } + row->name;
+	}
+
 }

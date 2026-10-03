@@ -42,6 +42,11 @@ namespace mcode::tui {
 
 		// Applies one key. Returns the completed submission when Enter closed
 		// a non-empty buffer.
+		//
+		// Enter is also the multi-line gesture: a line ending in an odd run of
+		// backslashes continues onto a new row with one backslash consumed, so
+		// `line\` + Enter opens a second row. An even run is literal, so
+		// `path\\` + Enter submits `path\`.
 		auto handle( const key_event& event ) -> std::optional< std::string >;
 
 		// Clears the buffer for the next submission.
@@ -57,6 +62,19 @@ namespace mcode::tui {
 		// The caret's byte offset across every row, which is what the one-line
 		// prompt echo needs.
 		[[nodiscard]] auto flattened_cursor( ) const noexcept -> std::size_t;
+
+		// How many rows the buffer holds. One is the ordinary single-line
+		// prompt; more means Enter continued the line.
+		[[nodiscard]] auto row_count( ) const noexcept -> std::size_t {
+			return lines_.size( );
+		}
+
+		// The submitted entries, oldest first. A read accessor only: the editor
+		// ranks nothing, so a caller that wants a filtered view does the
+		// ranking itself.
+		[[nodiscard]] auto history( ) const noexcept -> const std::vector< std::string >& {
+			return history_;
+		}
 
 		auto push_history( std::string entry ) -> void;
 

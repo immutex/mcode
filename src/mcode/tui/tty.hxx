@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -26,13 +27,23 @@ namespace mcode::tui {
 		bool kitty_keyboard = false;
 		bool bracketed_paste = false;
 		bool is_tty = false;
+
+		// Display columns an East Asian *ambiguous* glyph occupies here. A
+		// terminal in an East Asian width mode renders `│`, `─`, `•` and `…`
+		// two columns wide; a mismatch with the frame builder desynchronises
+		// the grid. Exactly 1 or 2.
+		std::size_t ambiguous_width = 1;
 	};
 
 	// The protocol flags are assumed for a real tty, not probed: a DECRQM
 	// round-trip is out of scope, and a terminal that does not know a sequence
-	// ignores it.
+	// ignores it. `ambiguous_width_env` is the raw `MCODE_AMBIGUOUS_WIDTH`
+	// value: only "2" selects two columns, and anything else, including unset,
+	// is the one-column default. It is a parameter, not a `std::getenv` call,
+	// so the probe stays pure and testable.
 	[[nodiscard]] auto probe_capabilities( std::string_view colorterm,
-		std::string_view term, bool no_color, bool has_tty ) -> capabilities;
+		std::string_view term, bool no_color, bool has_tty,
+		std::string_view ambiguous_width_env = { } ) -> capabilities;
 
 	// One decoded key from the raw input stream.
 	struct key_event {
@@ -56,6 +67,18 @@ namespace mcode::tui {
 
 			// A bare Escape: abandons the input. Ctrl+D is `exit`.
 			escape,
+
+			// The view moved a screenful. The live region scrolls itself;
+			// these never reach the terminal's own scrollback.
+			page_up,
+			page_down,
+
+			// Ctrl+R: reverse search over the session history.
+			ctrl_r,
+
+			// Wheel notches, reported only while mouse reporting is on.
+			mouse_scroll_up,
+			mouse_scroll_down,
 		};
 
 		kind type = kind::character;
@@ -101,6 +124,19 @@ namespace mcode::tui {
 		// True once since the last call when the terminal was resized.
 		[[nodiscard]] auto resized( ) const -> bool;
 
+		// Blocks briefly; true when the terminal size changed since the last
+		// call. Event-driven where the platform reports it, with the
+		// size-diff check as a fallback.
+		[[nodiscard]] auto poll_resize( std::uint32_t wait_ms ) -> bool;
+
+		// SGR mouse reporting, wheel only. Off by default: a terminal that
+		// reports the wheel stops scrolling its own scrollback.
+		auto set_mouse_reporting( bool enabled ) -> void;
+
+		[[nodiscard]] auto mouse_reporting( ) const noexcept -> bool {
+			return mouse_reporting_;
+		}
+
 		// The probed capabilities for this session.
 		[[nodiscard]] auto caps( ) const noexcept -> const capabilities& { return caps_; }
 
@@ -115,6 +151,10 @@ namespace mcode::tui {
 		capabilities caps_;
 		bool raw_active_ = false;
 		bool attached_ = false;
+		bool mouse_reporting_ = false;
+
+		// Set by a platform resize event and consumed by `poll_resize`.
+		bool resize_pending_ = false;
 
 		// One console read yields several records and the caller asks for one
 		// key, so the surplus waits here rather than being dropped.
