@@ -36,6 +36,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
@@ -88,15 +89,28 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 
 	auto queue = mcode::tui::event_queue{ };
 	auto coordinator = mcode::tui::render_coordinator{ };
-	coordinator.set_capabilities( session_tty->caps( ) );
 
-	const auto measured = session_tty->size( );
-	coordinator.resize( static_cast< std::size_t >( measured.second ),
-		static_cast< std::size_t >( measured.first ) );
+	// Serializes every `render_coordinator` access. The pump repaints on the
+	// main thread while the approval presenter draws on the worker thread, and
+	// both mutate the same live region; two interleaved flushes diffed against
+	// a buffer that no longer modelled the screen. Never held recursively:
+	// `refresh` and `repaint` below assume their caller holds it.
+	auto render_gate = std::mutex{ };
+
+	{
+		const auto held = std::lock_guard< std::mutex >{ render_gate };
+
+		coordinator.set_capabilities( session_tty->caps( ) );
+
+		const auto measured = session_tty->size( );
+
+		coordinator.resize( static_cast< std::size_t >( measured.second ),
+			static_cast< std::size_t >( measured.first ) );
+	}
 
 	auto approval_active = std::atomic< bool >{ false };
 	auto approval = mcode::cli::make_approval_source( *session_tty, approval_active,
-		coordinator );
+		render_gate, coordinator );
 
 	auto built = build_interactive_loop( *parsed, &approval );
 
@@ -194,6 +208,8 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 	// libc++ lacks `stop_token` at every macOS deployment target, so `std::jthread` is unusable.
 	auto worker = std::thread{ };
 
+	// Caller holds `render_gate`: the flush and the write that consumes its
+	// bytes must not be split, or the two writers interleave on the console.
 	auto repaint = [&coordinator, &session_tty]( ) {
 		const auto bytes = coordinator.flush( );
 
@@ -212,6 +228,9 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 
 	const auto refresh_palette = [ & ]( ) {
 		mcode::cli::refresh_palette( palette, commands, editor.text( ) );
+
+		const auto held = std::lock_guard< std::mutex >{ render_gate };
+
 		coordinator.set_palette( palette );
 	};
 
@@ -219,6 +238,7 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 	auto turn_started = std::chrono::steady_clock::time_point{ };
 	auto last_turn_elapsed_ms = std::uint64_t{ 0 };
 
+	// Caller holds `render_gate`.
 	const auto refresh = [ & ]( ) {
 		const auto& budget = loop.budget( );
 		const auto elapsed = turn_started == std::chrono::steady_clock::time_point{ }
@@ -232,6 +252,8 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 	};
 
 	const auto show_prompt = [ & ]( ) {
+		const auto held = std::lock_guard< std::mutex >{ render_gate };
+
 		refresh( );
 		coordinator.set_prompt( editor.text( ), editor.flattened_cursor( ) );
 		repaint( );
@@ -241,21 +263,30 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 		auto was_running = false;
 
 		while ( !turn_done.load( ) ) {
+			const auto drained = queue.drain( );
 			auto applied = false;
+			auto running = false;
 
-			for ( const auto& item : queue.drain( ) ) {
-				coordinator.apply( item );
-				applied = true;
-			}
+			{
+				const auto held = std::lock_guard< std::mutex >{ render_gate };
 
-			const auto running = !coordinator.state( ).tools.empty( );
+				for ( const auto& item : drained ) {
+					coordinator.apply( item );
+					applied = true;
+				}
 
-			if ( applied || running || was_running ) {
-				// The approval prompt owns the console while it is up.
-				if ( !approval_active.load( ) ) {
-					coordinator.advance_tools( mcode::tui::monotonic_ms( ) );
-					refresh( );
-					repaint( );
+				running = !coordinator.state( ).tools.empty( );
+
+				if ( applied || running || was_running ) {
+					// The approval prompt owns the console while it is up. The
+					// flag is read under the same lock the presenter sets it
+					// under, so a repaint cannot pass this check and then race
+					// the presenter's draw.
+					if ( !approval_active.load( ) ) {
+						coordinator.advance_tools( mcode::tui::monotonic_ms( ) );
+						refresh( );
+						repaint( );
+					}
 				}
 			}
 
@@ -263,6 +294,8 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 
 			std::this_thread::sleep_for( std::chrono::milliseconds( PUMP_TICK_MS ) );
 		}
+
+		const auto held = std::lock_guard< std::mutex >{ render_gate };
 
 		for ( const auto& item : queue.drain( ) ) {
 			coordinator.apply( item );
@@ -273,7 +306,11 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 		repaint( );
 	};
 
-	session_tty->write( coordinator.reserve( ) );
+	{
+		const auto held = std::lock_guard< std::mutex >{ render_gate };
+
+		session_tty->write( coordinator.reserve( ) );
+	}
 
 	show_prompt( );
 
@@ -288,12 +325,17 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 				if ( session_tty->resized( ) ) {
 					const auto measured_now = session_tty->size( );
 
-					coordinator.resize( static_cast< std::size_t >( measured_now.second ),
-						static_cast< std::size_t >( measured_now.first ) );
-					coordinator.invalidate( );
+					{
+						const auto held = std::lock_guard< std::mutex >{ render_gate };
 
-					// The region moved with the screen, so the cursor is re-parked first.
-					session_tty->write( coordinator.park( ) );
+						coordinator.resize( static_cast< std::size_t >( measured_now.second ),
+							static_cast< std::size_t >( measured_now.first ) );
+						coordinator.invalidate( );
+
+						// The region moved with the screen, so the cursor is re-parked first.
+						session_tty->write( coordinator.park( ) );
+					}
+
 					show_prompt( );
 				}
 
@@ -426,7 +468,12 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 
 		palette.open = false;
 		palette.matches.clear( );
-		coordinator.set_palette( palette );
+
+		{
+			const auto held = std::lock_guard< std::mutex >{ render_gate };
+
+			coordinator.set_palette( palette );
+		}
 
 		const auto match = mcode::cli::match_command( *submitted, commands );
 
@@ -439,14 +486,24 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 				break;
 			}
 
-			coordinator.queue_text( result.output );
+			{
+				const auto held = std::lock_guard< std::mutex >{ render_gate };
+
+				coordinator.queue_text( result.output );
+			}
+
 			show_prompt( );
 
 			continue;
 		}
 
-		coordinator.queue_text( std::string{ mcode::tui::USER_GUTTER } + " " + *submitted,
-			mcode::tui::token::accent );
+		{
+			const auto held = std::lock_guard< std::mutex >{ render_gate };
+
+			coordinator.queue_text(
+				std::string{ mcode::tui::USER_GUTTER } + " " + *submitted,
+				mcode::tui::token::accent );
+		}
 
 		show_prompt( );
 

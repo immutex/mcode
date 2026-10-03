@@ -126,6 +126,7 @@ add_library(mcode_core STATIC
     mcode/tui/approval_tui.cxx
     mcode/tui/palette.cxx
     mcode/tui/render.cxx
+    mcode/tui/transcript.cxx
 
     mcode/cli/repl.cxx
     mcode/cli/slash.cxx

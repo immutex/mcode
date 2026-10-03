@@ -114,8 +114,11 @@ The only part that cannot be faked, so it is built first and kept small.
 - Two cell buffers, swapped after flush. Diff row-granular first, then
   cell-level within changed rows.
 - The live region's height is dynamic: a floor of prompt + status, grown by the
-  palette, the active tool rows and the streaming rows, capped at 16 and at the
-  terminal height minus one. Everything above it is already committed.
+  palette, the active tool rows and the streamed block's rendered rows, capped
+  at 16 and at the terminal height minus one. Everything above it is already
+  committed. The region is filled bottom-up, so a block taller than the cap
+  keeps its newest rows; a committed thought collapses to at most
+  `THOUGHT_COMMIT_MAX_ROWS` rows the same way.
 - Wrap emission in `CSI ? 2026 h … l` when supported, so partial frames never
   tear.
 - **Zero writes when nothing changed** — the render loop is event-driven, and
@@ -142,13 +145,15 @@ The only part that cannot be faked, so it is built first and kept small.
 
 ### Markdown and diffs
 
-- **Shipped**: inline formatting only — bold, italic and inline code, applied
-  per streamed line by `render_inline`. One pass; emphasis does not nest.
-- **Not shipped**: the chunk-oriented block parser (headings, fences, lists,
-  closed-blocks-are-immutable) and diff rendering (line tinting, token LCS,
-  hunk folding). Both were written and never wired to the renderer, so they
-  were deleted rather than carried as dead weight. Tool output is emitted
-  verbatim.
+- **Shipped**: the block pass — `render_markdown` splits on newlines and
+  applies headings, lists, blockquotes and fenced code plus inline formatting
+  (bold, italic, inline code; one pass, emphasis does not nest). The live
+  region re-renders the whole streamed buffer once per paint — a delta only
+  appends and marks the rows stale — and the commit pushes those rendered rows,
+  so what streams is what lands in scrollback.
+- **Not shipped**: diff rendering (line tinting, token LCS, hunk folding) was
+  written and never wired to the renderer, so it was deleted rather than
+  carried as dead weight. Tool output is emitted verbatim.
 - Tool calls: one live row (`spinner + verb + target + elapsed`), collapsing to
   `✓ read src/main.cxx  0.3s`. The committed row carries the target and the
   duration, because a bare `✓ read` names nothing; a call that rounds to `0.0s`

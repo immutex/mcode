@@ -27,4 +27,11 @@ namespace mcode::tui {
 	[[nodiscard]] auto token_color( token value, capabilities::color_depth depth )
 		-> std::string_view;
 
+	// The same resolution for a background. The table holds one value per
+	// token written for the foreground, so this rewrites a "38;" sequence into
+	// its "48;" form; reading it through `token_color` would emit a second
+	// foreground that overrides the span's real one.
+	[[nodiscard]] auto token_background( token value, capabilities::color_depth depth )
+		-> std::string_view;
+
 }

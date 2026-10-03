@@ -42,12 +42,33 @@ namespace mcode::tui {
 		std::vector< active_tool > tools;
 
 		// The model's reasoning, streamed before its answer. Rendered in its
-		// own colour and committed as a collapsed block.
+		// own colour and committed as a collapsed block. `rows` is the whole
+		// block: the region shows all of it, bounded, not just the last line.
+		//
+		// A delta only appends to `text` and marks `rows` stale: re-rendering
+		// the whole buffer per delta is quadratic in the answer's length. The
+		// rows are materialised whole by the next reader instead, so a burst
+		// of deltas costs at most one render per paint.
+		//
+		// `rows` is a pure function of `text`, materialised on read, which is
+		// why the pair is `mutable`.
 		std::string thinking_text;
-		styled_line thinking_line;
+		mutable std::vector< styled_line > thinking_rows;
 
+		// The answer, streamed the same way.
 		std::string streaming_text;
-		styled_line streaming_line;
+		mutable std::vector< styled_line > streaming_rows;
+
+		// Set by the delta path, cleared by the reader that re-renders. Every
+		// path that hands out or commits the rows materialises them first, so
+		// a reader never sees rows that lag the buffer. Mutable, because the
+		// readers take the state by const reference.
+		mutable bool thinking_stale = false;
+		mutable bool streaming_stale = false;
+
+		// Whole-buffer re-renders of the streamed blocks so far: the cost the
+		// delta path used to pay per token, and no longer does.
+		mutable std::uint64_t stream_render_count = 0;
 
 		// Finished blocks waiting to be written to scrollback, styled so the
 		// commit can colour them. One entry is one committed block, which may
@@ -65,10 +86,14 @@ namespace mcode::tui {
 		std::size_t input_cursor = 0;
 	};
 
+	// The frame builder's whole input. Reads the streamed rows, so it brings
+	// them up to date first: a frame can never paint a stale block.
 	[[nodiscard]] auto build_frame( const render_state& state, std::size_t row_count,
 		std::size_t column_count, std::size_t ambiguous_width ) -> cell_buffer;
 
-	// How many rows the state needs, bounded by the terminal.
+	// How many rows the state needs, bounded by the terminal. Reads the
+	// streamed rows, so it brings them up to date first: a region is never
+	// sized from stale rows.
 	[[nodiscard]] auto region_rows_for( const render_state& state, std::size_t screen_rows )
 		-> std::size_t;
 
@@ -148,7 +173,18 @@ namespace mcode::tui {
 		// Splits plain text on newlines and queues it as one message block.
 		auto queue_text( std::string_view text, token color = token::text ) -> void;
 
-		[[nodiscard]] auto state( ) const noexcept -> const render_state& { return state_; }
+		// The frame builder's input, with the streamed blocks materialised:
+		// reading the row vectors can never disagree with the buffer they were
+		// rendered from. Materialising allocates, so this is not `noexcept`.
+		[[nodiscard]] auto state( ) const -> const render_state&;
+
+		// Whole-buffer re-renders of the streamed blocks so far. A burst of
+		// deltas costs one per paint, not one per delta, and this is what
+		// makes that bound observable. It reports the work already done, so
+		// unlike `state` it never renders anything itself.
+		[[nodiscard]] auto stream_render_count( ) const noexcept -> std::uint64_t {
+			return state_.stream_render_count;
+		}
 
 		// The prompt row's content. `cursor_byte` is a byte offset into `text`.
 		auto set_prompt( std::string text, std::size_t cursor_byte ) -> void;
@@ -160,7 +196,7 @@ namespace mcode::tui {
 			std::uint64_t elapsed_ms ) -> void;
 
 	private:
-		// Commits the reasoning as one collapsed line, if any is pending.
+		// Commits the reasoning as one bounded block, if any is pending.
 		auto queue_thought( ) -> void;
 
 		[[nodiscard]] auto region_rows( ) const -> std::size_t;

@@ -71,6 +71,67 @@ namespace mcode::tui {
 			return 0;
 		}
 
+		// A foreground-family SGR rewritten as its background form: "38;2;" and
+		// "38;5;" become "48;2;" and "48;5;". The table stores one value per
+		// token, written for the foreground, so a background read straight from
+		// it would emit a SECOND foreground after the real one and win.
+		[[nodiscard]] auto as_background( const std::string_view sgr ) -> std::string {
+			auto out = std::string{ sgr };
+
+			if ( out.size( ) >= 3 && out[ 0 ] == '3' && out[ 1 ] == '8' && out[ 2 ] == ';' ) {
+				out[ 0 ] = '4';
+			}
+
+			return out;
+		}
+
+		// Built once per depth: converting per call would allocate on every
+		// frame for every background span.
+		[[nodiscard]] auto background_table( const capabilities::color_depth depth )
+			-> const std::array< std::string, ENTRIES.size( ) >& {
+			static const auto from_truecolor = [ ] {
+				auto out = std::array< std::string, ENTRIES.size( ) >{ };
+
+				for ( auto index = std::size_t{ 0 }; index < ENTRIES.size( ); ++index ) {
+					out[ index ] = as_background( truecolor_table( )[ index ] );
+				}
+
+				return out;
+			}( );
+
+			static const auto from_ansi256 = [ ] {
+				auto out = std::array< std::string, ENTRIES.size( ) >{ };
+
+				for ( auto index = std::size_t{ 0 }; index < ENTRIES.size( ); ++index ) {
+					out[ index ] = as_background( ENTRIES[ index ].ansi256 );
+				}
+
+				return out;
+			}( );
+
+			static const auto from_ansi16 = [ ] {
+				auto out = std::array< std::string, ENTRIES.size( ) >{ };
+
+				for ( auto index = std::size_t{ 0 }; index < ENTRIES.size( ); ++index ) {
+					out[ index ] = as_background( ENTRIES[ index ].ansi16 );
+				}
+
+				return out;
+			}( );
+
+			switch ( depth ) {
+				case capabilities::color_depth::truecolor:
+					return from_truecolor;
+				case capabilities::color_depth::ansi256:
+					return from_ansi256;
+				case capabilities::color_depth::ansi16:
+				case capabilities::color_depth::none:
+					return from_ansi16;
+			}
+
+			return from_ansi16;
+		}
+
 	}
 
 	auto theme_table( ) -> const std::vector< theme_entry >& {
@@ -102,6 +163,17 @@ namespace mcode::tui {
 		}
 
 		return { };
+	}
+
+	auto token_background( const token value, const capabilities::color_depth depth )
+		-> std::string_view {
+		// Same sentinel rule as the foreground: `none` means "no colour", not
+		// the colour named by entry zero.
+		if ( value == token::none || depth == capabilities::color_depth::none ) {
+			return { };
+		}
+
+		return background_table( depth )[ entry_index( value ) ];
 	}
 
 }

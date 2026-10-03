@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -66,7 +67,8 @@ namespace mcode::cli {
 	}
 
 	auto make_approval_source( mcode::tui::tty_session& session,
-		std::atomic< bool >& active, mcode::tui::render_coordinator& coordinator )
+		std::atomic< bool >& active, std::mutex& gate,
+		mcode::tui::render_coordinator& coordinator )
 		-> mcode::tui::ui_approval_source {
 		// The rows the block occupies right now, zero when none is drawn.
 		// Shared with the reader and the dismisser: both need the exact height,
@@ -74,8 +76,22 @@ namespace mcode::cli {
 		// eats the transcript above it.
 		auto rows = std::make_shared< std::size_t >( 0 );
 
-		auto read_answer = [ &session ]( ) {
-			return session.read_line( ANSWER_WAIT_MS );
+		// The read is the user's typing wait and holds no lock: a lock held
+		// across it would stop the pump from repainting for as long as the
+		// user thinks. Only the coordinator's mutation is serialized.
+		auto read_answer = [ &session, &gate, &coordinator ]( ) {
+			auto answer = session.read_line( ANSWER_WAIT_MS );
+
+			const auto held = std::lock_guard< std::mutex >{ gate };
+
+			// The reader echoed the answer and a newline. On the screen's last
+			// row that echo scrolls, and the coordinator then models a screen
+			// that has moved. The model and the caret are both put right
+			// before anything else is drawn against them.
+			coordinator.invalidate( );
+			session.write( coordinator.park( ) );
+
+			return answer;
 		};
 
 		// Every path out of `ask` ends here: an answered prompt, a denial, or
@@ -84,11 +100,15 @@ namespace mcode::cli {
 		// accepted one does. Leaving the block up suppresses the repaint pump
 		// for the rest of the turn, which is what made a bad answer look like a
 		// hung session.
-		auto dismiss = [ &session, &active, &coordinator, rows ]( ) {
+		auto dismiss = [ &session, &active, &gate, &coordinator, rows ]( ) {
+			const auto held = std::lock_guard< std::mutex >{ gate };
 			const auto emitter = mcode::tui::ansi_emitter{ session.caps( ) };
 
 			auto out = coordinator.park( );
 
+			// Exactly the rows the block drew. Nothing drawn, nothing to
+			// erase: a fixed count here would eat the transcript above a short
+			// block, or leave the tall block's own rows behind.
 			if ( *rows > 0 ) {
 				out += emitter.clear_region( *rows );
 			}
@@ -98,11 +118,18 @@ namespace mcode::cli {
 			session.write( emitter.synchronized( out ) );
 
 			*rows = 0;
+
+			// Cleared under the same lock the pump checks it under, so a
+			// repaint cannot pass the gate and then race this dismissal.
 			active.store( false );
 		};
 
-		auto present = [ &session, &active, &coordinator, rows ](
+		auto present = [ &session, &active, &gate, &coordinator, rows ](
 			const mcode::tui::ui_approval_source::prompt_view& view ) {
+			const auto held = std::lock_guard< std::mutex >{ gate };
+
+			// Set under the same lock the pump reads it under, so a repaint
+			// cannot pass the gate and then race this draw.
 			active.store( true );
 
 			// Written outside `flush`, so the coordinator's tracked frame no longer matches.
@@ -143,23 +170,32 @@ namespace mcode::cli {
 			block.write_line( lines.size( ), mcode::tui::styled_line{
 				{ std::string{ mcode::tui::PROMPT_PREFIX }, mcode::tui::token::accent } } );
 
-			// Erase exactly what the last draw used. The floor is the live
-			// region's own height, which the block replaces.
-			const auto erase = fresh ? std::size_t{ 0 }
-				: ( *rows > 0 ? *rows : mcode::tui::LIVE_REGION_ROWS );
+			// What the block covers that already holds something: its own rows
+			// from the last draw, or, on the first draw, the live region it
+			// takes the place of. After a detail commit the region was
+			// re-reserved blank, so there is nothing to erase then. The
+			// region's height is derived per frame, never assumed from a
+			// constant: it runs from two rows to the terminal's own height.
+			auto replaced = std::size_t{ 0 };
+
+			if ( !fresh ) {
+				replaced = *rows > 0 ? *rows
+					: mcode::tui::region_rows_for( coordinator.state( ),
+						static_cast< std::size_t >( session.size( ).second ) );
+			}
 
 			auto out = coordinator.park( );
 
-			if ( erase > 0 ) {
-				out += emitter.clear_region( erase );
+			if ( replaced > 0 ) {
+				out += emitter.clear_region( replaced );
 			}
 
 			// A taller block scrolls its extra rows into existence, rather than
 			// overwriting the transcript that sits above it.
-			if ( wanted > erase ) {
+			if ( wanted > replaced ) {
 				out += coordinator.park( );
 
-				for ( auto index = erase; index < wanted; ++index ) {
+				for ( auto index = replaced; index < wanted; ++index ) {
 					out += '\n';
 				}
 			}

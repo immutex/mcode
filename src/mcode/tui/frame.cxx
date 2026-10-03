@@ -83,7 +83,7 @@ namespace mcode::tui {
 				out += foreground;
 			}
 
-			const auto background = token_color( value.background, caps_.depth );
+			const auto background = token_background( value.background, caps_.depth );
 
 			if ( !background.empty( ) ) {
 				out += ';';

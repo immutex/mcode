@@ -728,6 +728,63 @@ code comments.
     consumes, accepts the long spellings, and always shows a rejection or a
     result.
 
+90. **A streamed answer was rendered one line deep and committed raw.** The
+    live region kept `streaming_line = render_inline( tail_of( text ) )`, so
+    every line but the last was invisible until the turn ended; at commit the
+    same text was pushed as one span with its newlines and markdown markers
+    intact. Both ends now go through `render_markdown`: the whole buffer is
+    re-rendered into `streaming_rows` (and `thinking_rows`) at most once per
+    paint -- a delta only appends and marks the rows stale -- the region counts
+    those rows so it grows with the block, and the commit renders whatever the
+    buffer holds before it pushes it. A block taller than the 16-row cap keeps
+    its newest rows, because the frame is filled bottom-up and the earliest rows
+    are the ones that fall off. The reasoning commits as a bounded block of
+    `THOUGHT_COMMIT_MAX_ROWS` rows under the `✻` gutter rather than a truncated
+    first line. The queueing and commit protocol moved to `transcript.cxx`,
+    which keeps `render.cxx` under the 600-line cap.
+
+91. **A raw-mode newline moves down without returning the carriage.** `commit`
+    separated committed rows with a bare `\n`. POSIX raw mode clears `OPOST`,
+    so the cursor kept the previous row's end column and every row of a
+    multi-row block started further right than the one above it -- the
+    stair-step was invisible while the commit was a single span with embedded
+    newlines, and obvious once it carried a rendered block. Windows keeps
+    `ENABLE_PROCESSED_OUTPUT`, which translates the newline, so the artifact was
+    POSIX-only. Committed rows now end with `\r\n`.
+
+92. **The streamed block's rows are materialised on read, never on the delta.**
+    Re-rendering the whole accumulated buffer per delta is quadratic in the
+    answer's length: measured over a 24 KB markdown answer fed one byte at a
+    time, 24089 deltas cost 24089 full renders and ~3.2 s of render work, on the
+    same thread the agent runs on. A delta now only appends to
+    `streaming_text`/`thinking_text` and sets a stale flag, and the rows are
+    re-rendered by the next reader -- `state()`, `region_rows_for` (which sizes
+    the region before the frame is built) and `build_frame` -- so the
+    whole-buffer render happens at most once per paint. The commit paths in
+    `apply` (`tool_start`, `turn_end`) refresh before they read the rows, so a
+    block is always committed from the text it holds. `transcript::render_block`
+    is still the only producer of rows: the deferral is a cache with one
+    materialisation site, not a second renderer. `stream_render_count()` makes
+    the bound assertable.
+
+93. **A commit must repaint the region in the same flush.** `flush` returned
+    `commit(...)` alone, and `commit` erases the region to print above it -- so
+    the screen sat with no prompt row and no status line until the next event
+    arrived. Committing several blocks in a burst (a tool call per delta) left
+    the region blank for most of a turn: sampled at 50 ms over one two-file read
+    turn, 204 of 1200 frames had no prompt row. The commit is now prepended to
+    the paint instead of replacing it, and the same sampling shows 0 of 1400.
+
+94. **A committed row must wrap with a hanging indent.** `cell_buffer` clips at
+    the row edge by design (the live region is a fixed grid), so a committed row
+    longer than the terminal was cut by the terminal itself and continued at
+    column 0 -- a wrapped bullet lost its indent and read as a new top-level
+    line. `transcript::wrap_rows` now wraps at word boundaries, on grapheme
+    clusters, carrying the row's own leading indent onto every continuation row
+    and keeping each span's colour, background and attributes across the break.
+    Fenced-code rows are passed through verbatim: their `token::code_bg`
+    background is the only surviving signal that they came from a fence.
+
 ## Building
 
 ```bash

@@ -7,6 +7,7 @@
 
 #include "mcode/tui/frame.hxx"
 #include "mcode/tui/theme.hxx"
+#include "mcode/tui/transcript.hxx"
 
 namespace mcode::tui {
 
@@ -15,11 +16,6 @@ namespace mcode::tui {
 		inline constexpr std::array< std::string_view, SPINNER_FRAMES > SPINNER_GLYPHS = {
 			"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
 		};
-
-		// One column wide, so every gutter lines up.
-		inline constexpr std::string_view GUTTER_THOUGHT = "✻";
-		inline constexpr std::string_view GUTTER_DONE = "✓";
-		inline constexpr std::string_view GUTTER_OUTPUT = "│";
 
 		// Measured over every tool, not the visible ones, so the target column
 		// does not shift as calls come and go.
@@ -47,6 +43,38 @@ namespace mcode::tui {
 
 		// A call faster than this rounds to 0.0s, which is noise on the row.
 		inline constexpr std::uint64_t MIN_SHOWN_ELAPSED_MS = 100;
+
+		// Re-renders one streamed buffer whose rows have fallen behind its
+		// text. This is the whole-buffer render the correctness model calls
+		// for, done once per read instead of once per delta.
+		auto refresh_one( const std::string_view text, bool& stale,
+			std::vector< styled_line >& rows, const token color, std::uint64_t& renders )
+			-> void {
+			if ( !stale ) {
+				return;
+			}
+
+			// A commit clears a buffer's text and its rows together, so an
+			// empty buffer has nothing left to render.
+			if ( text.empty( ) ) {
+				rows.clear( );
+			} else {
+				rows = transcript::render_block( text, color );
+				++renders;
+			}
+
+			stale = false;
+		}
+
+		// The one reader-side entry point: every path that hands out the row
+		// vectors calls this first, so a stale cache is never observed. It is
+		// idempotent, so calling it twice in a paint costs nothing.
+		auto refresh_streamed_rows( const render_state& state ) -> void {
+			refresh_one( state.thinking_text, state.thinking_stale, state.thinking_rows,
+				token::thinking, state.stream_render_count );
+			refresh_one( state.streaming_text, state.streaming_stale, state.streaming_rows,
+				token::text, state.stream_render_count );
+		}
 
 		[[nodiscard]] auto format_elapsed( const std::uint64_t ms ) -> std::string {
 			return std::to_string( ms / 1000 ) + "." + std::to_string( ( ms % 1000 ) / 100 ) + "s";
@@ -87,35 +115,6 @@ namespace mcode::tui {
 			}
 
 			return out + std::to_string( fraction );
-		}
-
-		// The live row shows only the tail, so a long chain of thought cannot
-		// grow the region without bound.
-		[[nodiscard]] auto tail_of( const std::string& text ) -> std::string_view {
-			const auto last_break = text.rfind( '\n' );
-
-			return last_break == std::string::npos
-				? std::string_view{ text }
-				: std::string_view{ text }.substr( last_break + 1 );
-		}
-
-		// Completion collapses the reasoning to one committed line, like every
-		// other live row. Committing the whole chain of thought would dump
-		// dozens of lines into scrollback per turn.
-		[[nodiscard]] auto thought_summary( const std::string& text, const std::size_t columns )
-			-> std::string {
-			const auto break_at = text.find( '\n' );
-			const auto first_line = std::string_view{ text }.substr( 0, break_at );
-			const auto gutter = string_width( GUTTER_THOUGHT, AMBIGUOUS_WIDTH ) + 1;
-			const auto budget = columns > gutter ? columns - gutter : columns;
-			const auto bounded = truncate_to_width( first_line, budget, AMBIGUOUS_WIDTH );
-
-			// Reserve the final column for the marker, or the line overruns.
-			if ( bounded.size( ) == first_line.size( ) || budget == 0 ) {
-				return bounded;
-			}
-
-			return truncate_to_width( first_line, budget - 1, AMBIGUOUS_WIDTH ) + "…";
 		}
 
 	}
@@ -209,80 +208,40 @@ namespace mcode::tui {
 		state_.turn_elapsed_ms = elapsed_ms;
 	}
 
-	auto render_coordinator::queue_block( std::vector< styled_line > lines ) -> void {
-		if ( lines.empty( ) ) {
-			return;
-		}
-
-		if ( transcript_started_ ) {
-			state_.pending_commit.push_back( styled_line{ } );
-		}
-
-		queue_rows( std::move( lines ) );
-	}
-
-	auto render_coordinator::queue_rows( std::vector< styled_line > lines ) -> void {
-		transcript_started_ = true;
-
-		for ( auto& line : lines ) {
-			state_.pending_commit.push_back( std::move( line ) );
-		}
-	}
-
-	auto render_coordinator::queue_text( const std::string_view text, const token color ) -> void {
-		// A trailing newline ends the block rather than opening a blank row.
-		auto body = text;
-
-		if ( !body.empty( ) && body.back( ) == '\n' ) {
-			body.remove_suffix( 1 );
-		}
-
-		if ( body.empty( ) ) {
-			return;
-		}
-
-		queue_block( std::vector< styled_line >{ styled_line{
-			{ std::string{ body }, color } } } );
-	}
-
-	auto render_coordinator::queue_thought( ) -> void {
-		if ( state_.thinking_text.empty( ) ) {
-			return;
-		}
-
-		queue_rows( std::vector< styled_line >{ styled_line{
-			{ std::string{ GUTTER_THOUGHT } + " ", token::thinking },
-			{ thought_summary( state_.thinking_text, screen_columns_ ), token::muted },
-		} } );
-
-		state_.thinking_text.clear( );
-		state_.thinking_line.clear( );
-	}
-
 	auto render_coordinator::apply( const event_queue::item& value ) -> void {
 		switch ( value.type ) {
+			// A delta appends and marks the rows stale. Re-rendering the whole
+			// buffer here would be quadratic in the answer's length, on the
+			// thread that also runs the agent; the next reader renders it
+			// once, which is at most once per paint.
 			case event_queue::kind::thinking_delta: {
 				state_.thinking_text += value.text;
-				state_.thinking_line = render_inline( tail_of( state_.thinking_text ),
-					token::thinking );
+				state_.thinking_stale = true;
 
 				break;
 			}
 
 			case event_queue::kind::assistant_delta: {
 				state_.streaming_text += value.text;
-				state_.streaming_line = render_inline( tail_of( state_.streaming_text ),
-					token::text );
+				state_.streaming_stale = true;
 
 				break;
 			}
 
 			case event_queue::kind::tool_start: {
+				// The commit reads the rows, so they are brought current here:
+				// once per closed block, not once per delta.
+				refresh_streamed_rows( state_ );
+
 				queue_thought( );
 
-				queue_text( state_.streaming_text );
+				// The model ended its prose before calling the tool, so this
+				// block closes here. What streams after the call opens a new
+				// one; the closed block is never committed twice.
+				queue_block( std::move( state_.streaming_rows ) );
 				state_.streaming_text.clear( );
-				state_.streaming_line.clear( );
+				state_.streaming_rows.clear( );
+				state_.streaming_stale = false;
 
 				auto tool = render_state::active_tool{ };
 				tool.verb = value.text;
@@ -331,24 +290,34 @@ namespace mcode::tui {
 			case event_queue::kind::turn_start: {
 				state_.tools.clear( );
 				state_.thinking_text.clear( );
-				state_.thinking_line.clear( );
+				state_.thinking_rows.clear( );
+				state_.thinking_stale = false;
 				state_.streaming_text.clear( );
-				state_.streaming_line.clear( );
+				state_.streaming_rows.clear( );
+				state_.streaming_stale = false;
 				state_.turn_elapsed_ms = 0;
 
 				break;
 			}
 
 			case event_queue::kind::turn_end: {
+				// As at a tool call: the rows are brought current once, then
+				// committed as they stand.
+				refresh_streamed_rows( state_ );
+
 				queue_thought( );
 
-				queue_text( state_.streaming_text );
+				// Only what is still buffered: a block already closed by a
+				// tool call is committed once, not again here.
+				queue_block( std::move( state_.streaming_rows ) );
 
 				state_.tools.clear( );
 				state_.thinking_text.clear( );
-				state_.thinking_line.clear( );
+				state_.thinking_rows.clear( );
+				state_.thinking_stale = false;
 				state_.streaming_text.clear( );
-				state_.streaming_line.clear( );
+				state_.streaming_rows.clear( );
+				state_.streaming_stale = false;
 
 				break;
 			}
@@ -367,15 +336,34 @@ namespace mcode::tui {
 		}
 	}
 
+	auto render_coordinator::state( ) const -> const render_state& {
+		// The rows are a cache of the buffers, so they are brought current
+		// here rather than left for the caller to notice. Every other reader
+		// goes through this or through `region_rows_for`, so no path can see
+		// rows that lag their buffer.
+		refresh_streamed_rows( state_ );
+
+		return state_;
+	}
+
 	auto render_coordinator::region_rows( ) const -> std::size_t {
 		return region_rows_for( state_, screen_rows_ );
 	}
 
 	auto render_coordinator::flush( ) -> std::string {
+		// The commit erases the region to print above it, so the region must be
+		// repainted in the same flush: returning the commit alone leaves the
+		// screen with no prompt row until the next event, which is what makes
+		// the input appear to vanish mid-turn.
+		auto out = std::string{ };
+
 		if ( !state_.pending_commit.empty( ) ) {
-			return commit( std::move( state_.pending_commit ) );
+			out += commit( std::move( state_.pending_commit ) );
 		}
 
+		// Sizing reads the streamed rows, so it materialises them first: the
+		// one whole-buffer render a paint costs happens here, however many
+		// deltas landed since the last one.
 		const auto rows = region_rows( );
 
 		// A height change moves every row. The terminal still shows the old
@@ -408,8 +396,8 @@ namespace mcode::tui {
 		current_ = build_frame( state_, painted_rows_, screen_columns_, AMBIGUOUS_WIDTH );
 
 		auto emitter = ansi_emitter{ caps_ };
-		auto bytes = std::move( scroll );
-		bytes += emitter.emit( previous_, current_ );
+		out += scroll;
+		out += emitter.emit( previous_, current_ );
 
 		// The caret belongs under the typed text, not where the last run ended.
 		const auto prompt_row = painted_rows_ - 1;
@@ -417,56 +405,21 @@ namespace mcode::tui {
 		const auto column = std::min(
 			std::size_t{ PROMPT_PREFIX_WIDTH } + state_.input_cursor, widest );
 
-		bytes += emitter.caret( prompt_row, prompt_row, column );
+		out += emitter.caret( prompt_row, prompt_row, column );
 
 		previous_ = current_;
-
-		return bytes;
-	}
-
-	auto render_coordinator::commit( std::vector< styled_line > lines ) -> std::string {
-		state_.pending_commit.clear( );
-
-		auto emitter = ansi_emitter{ caps_ };
-
-		// Park first: everything below is relative to the parked row.
-		auto out = park();
-		out += emitter.region_top( painted_rows_ );
-		out += "\x1b[0J";
-
-		// At depth `none` token_color resolves empty, so every SGR would be a
-		// bare reset: the committed bytes carry no escape at all.
-		const auto coloured = caps_.depth != capabilities::color_depth::none;
-
-		for ( const auto& line : lines ) {
-			// A fresh emitter per line: the pen cache would skip the SGR of a
-			// line whose first span repeats the previous line's last style.
-			auto pen = ansi_emitter{ caps_ };
-
-			for ( const auto& span : line ) {
-				if ( coloured ) {
-					out += pen.sgr( span_style( span ) );
-				}
-
-				out += span.text;
-			}
-
-			out += coloured ? "\x1b[0m\n" : "\n";
-		}
-
-		// Scroll the committed text clear of the region, whatever its length.
-		for ( auto index = std::size_t{ 0 }; index < painted_rows_; ++index ) {
-			out += '\n';
-		}
-
-		out += park();
-
-		previous_.clear( );
 
 		return out;
 	}
 
-	auto region_rows_for( const render_state& state, const std::size_t screen_rows ) -> std::size_t {
+	auto region_rows_for( const render_state& state, const std::size_t screen_rows )
+		-> std::size_t {
+		// The row counts below are what this measures, so the buffers are
+		// materialised first: a region sized from stale rows would lag a paint
+		// behind the text. This is also the refresh the paint relies on, since
+		// `flush` sizes the region before it builds the frame.
+		refresh_streamed_rows( state );
+
 		// prompt + status
 		auto rows = std::size_t{ 2 };
 
@@ -474,13 +427,8 @@ namespace mcode::tui {
 			rows += state.palette.matches.size( );
 		}
 
-		if ( !state.thinking_line.empty( ) ) {
-			++rows;
-		}
-
-		if ( !state.streaming_line.empty( ) ) {
-			++rows;
-		}
+		rows += state.thinking_rows.size( );
+		rows += state.streaming_rows.size( );
 
 		rows += state.tools.size( );
 
@@ -493,6 +441,11 @@ namespace mcode::tui {
 
 	auto build_frame( const render_state& state, const std::size_t row_count,
 		const std::size_t column_count, const std::size_t ambiguous_width ) -> cell_buffer {
+		// Last line of defence for the invariant: the frame is built from the
+		// same materialised rows every other reader sees. A no-op once the
+		// paint's sizing pass has refreshed them.
+		refresh_streamed_rows( state );
+
 		auto buffer = cell_buffer{ row_count, column_count, ambiguous_width };
 
 		if ( row_count == 0 || column_count == 0 ) {
@@ -580,21 +533,17 @@ namespace mcode::tui {
 			}
 		}
 
-		if ( !state.thinking_line.empty( ) ) {
-			auto line = styled_line{ };
-			line.push_back( { std::string{ GUTTER_THOUGHT } + " ", token::thinking } );
-			line.insert( line.end( ), state.thinking_line.begin( ), state.thinking_line.end( ) );
+		// Newest row first, so a block taller than the region loses its earliest
+		// rows and keeps the text the user is watching.
+		const auto write_block = [ & ]( const std::vector< styled_line >& rows,
+			const std::string_view gutter, const token color ) {
+			for ( auto index = rows.size( ); index > 0; --index ) {
+				write_up( transcript::prefix_row( rows[ index - 1 ], gutter, color ) );
+			}
+		};
 
-			write_up( line );
-		}
-
-		if ( !state.streaming_line.empty( ) ) {
-			auto line = styled_line{ };
-			line.push_back( { std::string{ GUTTER_OUTPUT } + " ", token::muted } );
-			line.insert( line.end( ), state.streaming_line.begin( ), state.streaming_line.end( ) );
-
-			write_up( line );
-		}
+		write_block( state.thinking_rows, GUTTER_THOUGHT, token::thinking );
+		write_block( state.streaming_rows, GUTTER_OUTPUT, token::muted );
 
 		return buffer;
 	}

@@ -4,11 +4,13 @@
 #include <cctype>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "mcode/tui/cell.hxx"
 #include "mcode/tui/frame.hxx"
 #include "mcode/tui/render.hxx"
 #include "mcode/tui/theme.hxx"
+#include "mcode/tui/transcript.hxx"
 
 using namespace mcode::tui;
 
@@ -16,6 +18,54 @@ namespace {
 
 	constexpr std::size_t ROWS = 4;
 	constexpr std::size_t COLUMNS = 40;
+
+	[[nodiscard]] auto row_width( const styled_line& row ) -> std::size_t {
+		auto total = std::size_t{ 0 };
+
+		for ( const auto& span : row ) {
+			total += string_width( span.text, 1 );
+		}
+
+		return total;
+	}
+
+	[[nodiscard]] auto row_text( const styled_line& row ) -> std::string {
+		auto text = std::string{ };
+
+		for ( const auto& span : row ) {
+			text += span.text;
+		}
+
+		return text;
+	}
+
+	[[nodiscard]] auto row_bold( const styled_line& row ) -> bool {
+		for ( const auto& span : row ) {
+			if ( span.bold ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	// A state's rendered rows against a fresh render of the same buffer: a
+	// cache that lags shows up as a text difference, which is what this
+	// compares.
+	[[nodiscard]] auto same_rows( const std::vector< styled_line >& left,
+		const std::vector< styled_line >& right ) -> bool {
+		if ( left.size( ) != right.size( ) ) {
+			return false;
+		}
+
+		for ( auto index = std::size_t{ 0 }; index < left.size( ); ++index ) {
+			if ( row_text( left[ index ] ) != row_text( right[ index ] ) ) {
+				return false;
+			}
+		}
+
+		return true;
+	}
 
 }
 
@@ -166,6 +216,15 @@ TEST_CASE( "the theme resolves one depth per session", "[tui][theme]" ) {
 	// value here would be emitted after the real one and win.
 	CHECK( token_color( token::none, capabilities::color_depth::truecolor ).empty( ) );
 	CHECK( token_color( token::none, capabilities::color_depth::ansi16 ).empty( ) );
+
+	// A background token is stored foreground-shaped, so it must be rewritten
+	// into the 48 family; reading it through token_color would emit a second
+	// foreground and the code block would render as near-black text.
+	CHECK( token_background( token::code_bg, capabilities::color_depth::truecolor ) ==
+		"48;2;26;27;38" );
+	CHECK( token_background( token::code_bg, capabilities::color_depth::ansi256 ) ==
+		"48;5;234" );
+	CHECK( token_background( token::none, capabilities::color_depth::truecolor ).empty( ) );
 
 	for ( const auto& entry : theme_table( ) ) {
 		if ( entry.name == token::none ) {
@@ -444,9 +503,9 @@ TEST_CASE( "a committed answer is erased from the region and printed",
 	CHECK( bytes.find( "Red" ) != std::string::npos );
 }
 
-TEST_CASE( "a chain of thought commits as one line", "[tui][render]" ) {
-	// the live row shows only the tail, so committing the whole text would
-	// dump dozens of lines into scrollback per turn.
+TEST_CASE( "a chain of thought commits as a block, not one line", "[tui][render]" ) {
+	// the collapsed block shows the reasoning, bounded: the first line alone
+	// hid everything the model actually thought.
 	auto coordinator = render_coordinator{ };
 
 	auto caps = capabilities{ };
@@ -466,11 +525,11 @@ TEST_CASE( "a chain of thought commits as one line", "[tui][render]" ) {
 	const auto bytes = coordinator.flush( );
 
 	CHECK( bytes.find( "first thought" ) != std::string::npos );
-	CHECK( bytes.find( "second thought" ) == std::string::npos );
-	CHECK( bytes.find( "third thought" ) == std::string::npos );
+	CHECK( bytes.find( "second thought" ) != std::string::npos );
+	CHECK( bytes.find( "third thought" ) != std::string::npos );
 }
 
-TEST_CASE( "a long chain of thought is bounded to the terminal width",
+TEST_CASE( "a chain of thought longer than its budget commits its newest rows",
 	"[tui][render]" ) {
 	auto coordinator = render_coordinator{ };
 
@@ -479,28 +538,32 @@ TEST_CASE( "a long chain of thought is bounded to the terminal width",
 	coordinator.set_capabilities( caps );
 	coordinator.resize( 24, 40 );
 
+	auto text = std::string{ };
+
+	for ( auto index = std::size_t{ 0 }; index < THOUGHT_COMMIT_MAX_ROWS + 2; ++index ) {
+		text += "thought " + std::to_string( index ) + "\n";
+	}
+
+	text += "last thought";
+
 	auto delta = event_queue::item{ };
 	delta.type = event_queue::kind::thinking_delta;
-	delta.text = std::string( 200, 'x' );
+	delta.text = text;
 	coordinator.apply( delta );
 
 	auto end = event_queue::item{ };
 	end.type = event_queue::kind::turn_end;
 	coordinator.apply( end );
 
+	// one committed row per rendered row, bounded to the budget.
+	REQUIRE( coordinator.state( ).pending_commit.size( ) == THOUGHT_COMMIT_MAX_ROWS );
+
 	const auto bytes = coordinator.flush( );
 
-	// No committed line may exceed the terminal width.
-	auto longest = std::size_t{ 0 };
-	auto run = std::size_t{ 0 };
-
-	for ( const auto character : bytes ) {
-		run = character == 'x' ? run + 1 : 0;
-		longest = std::max( longest, run );
-	}
-
-	CHECK( longest > 0 );
-	CHECK( longest < 40 );
+	// the block keeps its newest rows, so the head of the chain is dropped.
+	CHECK( bytes.find( "✻ thought 3" ) != std::string::npos );
+	CHECK( bytes.find( "last thought" ) != std::string::npos );
+	CHECK( bytes.find( "thought 0" ) == std::string::npos );
 }
 
 TEST_CASE( "a turn's answer survives the turn ending", "[tui][render]" ) {
@@ -524,4 +587,498 @@ TEST_CASE( "a turn's answer survives the turn ending", "[tui][render]" ) {
 	const auto bytes = coordinator.flush( );
 
 	CHECK( bytes.find( "the answer" ) != std::string::npos );
+}
+
+TEST_CASE( "a streamed answer shows every line, formatted, while it streams",
+	"[tui][render]" ) {
+	// only the tail of the buffer used to reach the frame, so every line but
+	// the last stayed invisible until the turn ended.
+	auto coordinator = render_coordinator{ };
+
+	auto caps = capabilities{ };
+	caps.depth = capabilities::color_depth::none;
+	coordinator.set_capabilities( caps );
+	coordinator.resize( 30, 60 );
+
+	auto delta = event_queue::item{ };
+	delta.type = event_queue::kind::assistant_delta;
+	delta.text = "first line\nsecond **line**\nthird line";
+	coordinator.apply( delta );
+
+	REQUIRE( coordinator.state( ).streaming_rows.size( ) == 3 );
+
+	// the region grows with the block: prompt + status + three rows.
+	CHECK( region_rows_for( coordinator.state( ), 30 ) == 5 );
+
+	const auto bytes = coordinator.flush( );
+
+	CHECK( bytes.find( "first line" ) != std::string::npos );
+	CHECK( bytes.find( "third line" ) != std::string::npos );
+
+	// the bold span carries its own SGR, so the markers never reach the frame.
+	CHECK( bytes.find( "second " ) != std::string::npos );
+	CHECK( bytes.find( "line" ) != std::string::npos );
+	CHECK( bytes.find( "**" ) == std::string::npos );
+}
+
+TEST_CASE( "a streamed block taller than the region keeps its newest rows",
+	"[tui][render]" ) {
+	auto coordinator = render_coordinator{ };
+
+	auto caps = capabilities{ };
+	caps.depth = capabilities::color_depth::none;
+	coordinator.set_capabilities( caps );
+	coordinator.resize( 30, 60 );
+
+	auto text = std::string{ };
+
+	for ( auto index = std::size_t{ 0 }; index <= 40; ++index ) {
+		text += "row" + std::to_string( index ) + "\n";
+	}
+
+	text += "row41";
+
+	auto delta = event_queue::item{ };
+	delta.type = event_queue::kind::assistant_delta;
+	delta.text = text;
+	coordinator.apply( delta );
+
+	REQUIRE( coordinator.state( ).streaming_rows.size( ) == 42 );
+	CHECK( region_rows_for( coordinator.state( ), 30 ) == LIVE_REGION_MAX_ROWS );
+
+	const auto bytes = coordinator.flush( );
+
+	CHECK( bytes.find( "row41" ) != std::string::npos );
+	CHECK( bytes.find( "row0" ) == std::string::npos );
+}
+
+TEST_CASE( "a committed answer is a block of formatted rows", "[tui][render]" ) {
+	auto coordinator = render_coordinator{ };
+
+	auto caps = capabilities{ };
+	caps.depth = capabilities::color_depth::none;
+	coordinator.set_capabilities( caps );
+	coordinator.resize( 30, 60 );
+
+	auto delta = event_queue::item{ };
+	delta.type = event_queue::kind::assistant_delta;
+	delta.text = "**bold** answer\nsecond row\n";
+	coordinator.apply( delta );
+
+	auto end = event_queue::item{ };
+	end.type = event_queue::kind::turn_end;
+	coordinator.apply( end );
+
+	// two rendered rows, not one span carrying an embedded newline.
+	REQUIRE( coordinator.state( ).pending_commit.size( ) == 2 );
+
+	const auto bytes = coordinator.flush( );
+
+	CHECK( bytes.find( "bold answer" ) != std::string::npos );
+	CHECK( bytes.find( "second row" ) != std::string::npos );
+	CHECK( bytes.find( "**" ) == std::string::npos );
+}
+
+TEST_CASE( "a committed row wraps at word boundaries within the column budget",
+	"[tui][transcript]" ) {
+	auto text = std::string{ };
+
+	for ( auto index = std::size_t{ 0 }; index < 40; ++index ) {
+		text += "word ";
+	}
+
+	const auto source = transcript::render_block( text, token::text );
+
+	REQUIRE( source.size( ) == 1 );
+	REQUIRE( row_width( source.front( ) ) > 40 );
+
+	const auto wrapped = transcript::wrap_rows( source, 40, 1 );
+
+	REQUIRE( wrapped.size( ) > 1 );
+
+	for ( const auto& row : wrapped ) {
+		CHECK( row_width( row ) <= 40 );
+
+		// every row holds whole words: the split never lands mid-word.
+		auto rest = row_text( row );
+
+		while ( !rest.empty( ) ) {
+			REQUIRE( rest.starts_with( "word" ) );
+			rest.erase( 0, 4 );
+
+			if ( rest.starts_with( " " ) ) {
+				rest.erase( 0, 1 );
+			}
+		}
+	}
+}
+
+TEST_CASE( "a wrapped bullet hangs its continuation rows under the text",
+	"[tui][transcript]" ) {
+	const auto text = std::string{ "- " } +
+		"the quick brown fox jumps over the lazy dog and keeps on running";
+
+	const auto source = transcript::render_block( text, token::text );
+
+	REQUIRE( source.size( ) == 1 );
+	REQUIRE( source.front( ).size( ) == 2 );
+	REQUIRE( source.front( ).front( ).text == "• " );
+	REQUIRE( row_width( source.front( ) ) > 40 );
+
+	const auto wrapped = transcript::wrap_rows( source, 40, 1 );
+
+	REQUIRE( wrapped.size( ) > 1 );
+
+	// the marker is two columns wide, and each continuation repeats them as
+	// spaces, so the text hangs under the bullet's body and not at column 0.
+	for ( auto index = std::size_t{ 1 }; index < wrapped.size( ); ++index ) {
+		REQUIRE_FALSE( wrapped[ index ].empty( ) );
+		CHECK( wrapped[ index ].front( ).text == "  " );
+		CHECK( row_width( wrapped[ index ] ) <= 40 );
+	}
+}
+
+TEST_CASE( "a wrapped blockquote repeats its gutter on continuation rows",
+	"[tui][transcript]" ) {
+	const auto text = std::string{ "> " } +
+		"the quick brown fox jumps over the lazy dog and keeps on running";
+
+	const auto source = transcript::render_block( text, token::text );
+
+	REQUIRE( source.size( ) == 1 );
+	REQUIRE( source.front( ).front( ).text == "│ " );
+
+	const auto wrapped = transcript::wrap_rows( source, 40, 1 );
+
+	REQUIRE( wrapped.size( ) > 1 );
+
+	for ( auto index = std::size_t{ 1 }; index < wrapped.size( ); ++index ) {
+		REQUIRE_FALSE( wrapped[ index ].empty( ) );
+		CHECK( wrapped[ index ].front( ).text == "│ " );
+	}
+}
+
+TEST_CASE( "a bold span straddling the wrap point stays bold on both rows",
+	"[tui][transcript]" ) {
+	const auto row = styled_line{
+		{ "start ", token::text },
+		{ "the bold run crosses the wrap column here", token::text, token::none, true },
+	};
+
+	REQUIRE( row_width( row ) > 24 );
+
+	const auto wrapped = transcript::wrap_row( row, 24, 1 );
+
+	REQUIRE( wrapped.size( ) >= 2 );
+	CHECK_FALSE( wrapped.front( ).front( ).bold );
+
+	for ( const auto& line : wrapped ) {
+		CHECK( row_bold( line ) );
+		CHECK( row_width( line ) <= 24 );
+	}
+}
+
+TEST_CASE( "a single word longer than the row splits on cluster boundaries",
+	"[tui][transcript]" ) {
+	const auto word = std::string( 100, 'w' );
+	const auto row = styled_line{ { word, token::text } };
+
+	const auto wrapped = transcript::wrap_row( row, 30, 1 );
+
+	REQUIRE( wrapped.size( ) > 1 );
+
+	auto joined = std::string{ };
+
+	for ( const auto& line : wrapped ) {
+		CHECK( row_width( line ) <= 30 );
+		joined += row_text( line );
+	}
+
+	// nothing is dropped and nothing overflows.
+	CHECK( joined == word );
+}
+
+TEST_CASE( "a fenced code row is passed through unmodified", "[tui][transcript]" ) {
+	const auto row = styled_line{ { std::string( 80, 'x' ), token::text, token::code_bg } };
+
+	const auto wrapped = transcript::wrap_row( row, 20, 1 );
+
+	REQUIRE( wrapped.size( ) == 1 );
+	REQUIRE( wrapped.front( ).size( ) == 1 );
+	CHECK( wrapped.front( ).front( ).text == row.front( ).text );
+	CHECK( wrapped.front( ).front( ).background == token::code_bg );
+	CHECK( row_width( wrapped.front( ) ) == 80 );
+}
+
+TEST_CASE( "the commit path wraps rows to the coordinator's own width",
+	"[tui][render]" ) {
+	auto coordinator = render_coordinator{ };
+
+	auto caps = capabilities{ };
+	caps.depth = capabilities::color_depth::none;
+	coordinator.set_capabilities( caps );
+
+	// one column stays reserved, so the commit wraps to 39 columns.
+	coordinator.resize( 24, 40 );
+
+	auto text = std::string{ };
+
+	for ( auto index = std::size_t{ 0 }; index < 30; ++index ) {
+		text += "token ";
+	}
+
+	coordinator.queue_text( text );
+
+	const auto bytes = coordinator.flush( );
+
+	auto start = bytes.find( "\x1b[0J" );
+
+	REQUIRE( start != std::string::npos );
+	start += 4;
+
+	// at depth none the committed rows carry no escape, so the rows are the
+	// text between the erase and the region's scroll.
+	auto rows = std::vector< std::string >{ };
+
+	while ( start < bytes.size( ) ) {
+		const auto stop = bytes.find( "\r\n", start );
+
+		if ( stop == std::string::npos ) {
+			break;
+		}
+
+		rows.push_back( bytes.substr( start, stop - start ) );
+		start = stop + 2;
+	}
+
+	REQUIRE( rows.size( ) > 1 );
+
+	for ( const auto& row : rows ) {
+		CHECK( string_width( row, 1 ) <= 39 );
+	}
+}
+
+TEST_CASE( "a burst of deltas is rendered once per paint, not once per delta",
+	"[tui][render]" ) {
+	auto coordinator = render_coordinator{ };
+
+	auto caps = capabilities{ };
+	caps.depth = capabilities::color_depth::none;
+	coordinator.set_capabilities( caps );
+	coordinator.resize( 30, 60 );
+
+	auto delta = event_queue::item{ };
+	delta.type = event_queue::kind::assistant_delta;
+
+	// A line at a time, the way the provider streams. Re-rendering the whole
+	// buffer per delta is quadratic in the answer's length, and that cost is
+	// what made a long answer feel slow.
+	const auto lines = std::size_t{ 500 };
+
+	for ( auto index = std::size_t{ 0 }; index < lines; ++index ) {
+		delta.text = "line " + std::to_string( index ) + "\n";
+		coordinator.apply( delta );
+	}
+
+	// the deltas only appended: nothing has re-rendered the buffer.
+	CHECK( coordinator.stream_render_count( ) == 0 );
+
+	const auto bytes = coordinator.flush( );
+
+	// one paint, one whole-buffer render, whatever the delta count.
+	CHECK( coordinator.stream_render_count( ) == 1 );
+
+	// and the rows that paint built are the whole buffer, not the last delta.
+	REQUIRE( coordinator.state( ).streaming_rows.size( ) == lines );
+	CHECK( bytes.find( "line 499" ) != std::string::npos );
+
+	// a paint with nothing new renders nothing at all: the caret is the only
+	// thing it writes.
+	const auto idle = coordinator.flush( );
+
+	CHECK( idle == std::string{ "\x1b[3G" } );
+	CHECK( coordinator.stream_render_count( ) == 1 );
+
+	// the reasoning block is bounded the same way.
+	delta.type = event_queue::kind::thinking_delta;
+
+	const auto thoughts = std::size_t{ 100 };
+
+	for ( auto index = std::size_t{ 0 }; index < thoughts; ++index ) {
+		delta.text = "thought " + std::to_string( index ) + "\n";
+		coordinator.apply( delta );
+	}
+
+	CHECK( coordinator.stream_render_count( ) == 1 );
+
+	const auto painted = coordinator.flush( );
+
+	CHECK( coordinator.stream_render_count( ) == 2 );
+	CHECK( coordinator.state( ).thinking_rows.size( ) == thoughts );
+
+	// the region keeps the newest rows, so the newest thought is on screen.
+	CHECK( painted.find( "thought 99" ) != std::string::npos );
+}
+
+TEST_CASE( "sizing a state materialises the block it holds", "[tui][render]" ) {
+	// the region's height is read from the rows, so the sizing path is one of
+	// the readers that has to bring them up to date: a height taken from
+	// stale rows lags the text by a frame.
+	auto state = render_state{ };
+	state.streaming_text = "one\ntwo";
+	state.streaming_stale = true;
+
+	REQUIRE( state.streaming_rows.empty( ) );
+
+	// prompt + status + two rows.
+	CHECK( region_rows_for( state, 30 ) == 4 );
+	CHECK( state.streaming_rows.size( ) == 2 );
+	CHECK( state.stream_render_count == 1 );
+
+	// a second sizing is free: the rows already match the buffer.
+	CHECK( region_rows_for( state, 30 ) == 4 );
+	CHECK( state.stream_render_count == 1 );
+
+	// the frame builder is the same reader, so a stale state still paints its
+	// buffer: it is the second caller of the one render path, not a second
+	// render path.
+	auto painted = render_state{ };
+	painted.streaming_text = "stale but current";
+	painted.streaming_stale = true;
+
+	const auto frame = build_frame( painted, ROWS, COLUMNS, 1 );
+
+	CHECK( painted.streaming_rows.size( ) == 1 );
+	CHECK( painted.stream_render_count == 1 );
+	CHECK( frame.rows( ) == ROWS );
+}
+
+TEST_CASE( "a tool call closes the block with the text streamed so far",
+	"[tui][render]" ) {
+	// no paint happened between the deltas and the call, so the commit has to
+	// render the buffer it holds: committing a row cache the deltas left
+	// behind would drop the prose.
+	auto coordinator = render_coordinator{ };
+
+	auto caps = capabilities{ };
+	caps.depth = capabilities::color_depth::none;
+	coordinator.set_capabilities( caps );
+	coordinator.resize( 30, 60 );
+
+	auto delta = event_queue::item{ };
+	delta.type = event_queue::kind::assistant_delta;
+	delta.text = "prose before the call\nsecond row of it";
+	coordinator.apply( delta );
+
+	auto start = event_queue::item{ };
+	start.type = event_queue::kind::tool_start;
+	start.text = "bash";
+	coordinator.apply( start );
+
+	const auto bytes = coordinator.flush( );
+
+	CHECK( bytes.find( "prose before the call" ) != std::string::npos );
+	CHECK( bytes.find( "second row of it" ) != std::string::npos );
+
+	// and the closed block is gone from the live region.
+	CHECK( coordinator.state( ).streaming_text.empty( ) );
+	CHECK( coordinator.state( ).streaming_rows.empty( ) );
+}
+
+TEST_CASE( "a turn end commits the buffer, not the row cache", "[tui][render]" ) {
+	// the deltas left the rows stale and no paint ran between them and the
+	// end of the turn, so the commit is the only thing that materialises the
+	// block. Committing the stale cache would print nothing at all.
+	auto coordinator = render_coordinator{ };
+
+	auto caps = capabilities{ };
+	caps.depth = capabilities::color_depth::none;
+	coordinator.set_capabilities( caps );
+	coordinator.resize( 30, 60 );
+
+	auto delta = event_queue::item{ };
+	delta.type = event_queue::kind::assistant_delta;
+	delta.text = "**bold** answer\nsecond row\n";
+	coordinator.apply( delta );
+
+	auto end = event_queue::item{ };
+	end.type = event_queue::kind::turn_end;
+	coordinator.apply( end );
+
+	// two rows, formatted, and no markdown markers in the committed block.
+	REQUIRE( coordinator.state( ).pending_commit.size( ) == 2 );
+	CHECK( row_text( coordinator.state( ).pending_commit[ 0 ] ) == "bold answer" );
+	CHECK( row_bold( coordinator.state( ).pending_commit[ 0 ] ) );
+	CHECK( row_text( coordinator.state( ).pending_commit[ 1 ] ) == "second row" );
+
+	const auto bytes = coordinator.flush( );
+
+	CHECK( bytes.find( "**" ) == std::string::npos );
+	CHECK( bytes.find( "bold answer" ) != std::string::npos );
+}
+
+TEST_CASE( "a thought closes with the reasoning streamed so far",
+	"[tui][render]" ) {
+	// the thought block commits from its rendered rows, and the deltas left
+	// them stale: the commit path is what materialises them.
+	auto coordinator = render_coordinator{ };
+
+	auto caps = capabilities{ };
+	caps.depth = capabilities::color_depth::none;
+	coordinator.set_capabilities( caps );
+	coordinator.resize( 30, 60 );
+
+	auto delta = event_queue::item{ };
+	delta.type = event_queue::kind::thinking_delta;
+	delta.text = "weighed the first option\nweighed the second";
+	coordinator.apply( delta );
+
+	auto start = event_queue::item{ };
+	start.type = event_queue::kind::tool_start;
+	start.text = "read";
+	coordinator.apply( start );
+
+	const auto bytes = coordinator.flush( );
+
+	CHECK( bytes.find( "weighed the first option" ) != std::string::npos );
+	CHECK( bytes.find( "weighed the second" ) != std::string::npos );
+}
+
+TEST_CASE( "a render happens once per paint, whatever the delta rate",
+	"[tui][render]" ) {
+	// The pump's real shape: drain a tick's deltas, then paint once. The
+	// bound is renders == paints, and every paint has to show the whole
+	// buffer streamed so far -- not the tick's slice of it.
+	auto coordinator = render_coordinator{ };
+
+	auto caps = capabilities{ };
+	caps.depth = capabilities::color_depth::none;
+	coordinator.set_capabilities( caps );
+	coordinator.resize( 30, 60 );
+
+	auto delta = event_queue::item{ };
+	delta.type = event_queue::kind::assistant_delta;
+
+	const auto ticks = std::size_t{ 25 };
+	const auto per_tick = std::size_t{ 20 };
+	auto text = std::string{ };
+
+	for ( auto tick = std::size_t{ 0 }; tick < ticks; ++tick ) {
+		for ( auto index = std::size_t{ 0 }; index < per_tick; ++index ) {
+			const auto piece = "word" + std::to_string( tick ) + " ";
+			delta.text = piece;
+			coordinator.apply( delta );
+			text += piece;
+		}
+
+		// one render per paint, and the rows are the whole buffer.
+		const auto painted = coordinator.flush( );
+
+		REQUIRE( coordinator.stream_render_count( ) == tick + 1 );
+		REQUIRE_FALSE( painted.empty( ) );
+		REQUIRE( same_rows( coordinator.state( ).streaming_rows,
+			transcript::render_block( text, token::text ) ) );
+	}
+
+	CHECK( coordinator.state( ).streaming_text == text );
 }
