@@ -45,6 +45,9 @@ namespace mcode::tui {
 			return widest;
 		}
 
+		// A call faster than this rounds to 0.0s, which is noise on the row.
+		inline constexpr std::uint64_t MIN_SHOWN_ELAPSED_MS = 100;
+
 		[[nodiscard]] auto format_elapsed( const std::uint64_t ms ) -> std::string {
 			return std::to_string( ms / 1000 ) + "." + std::to_string( ( ms % 1000 ) / 100 ) + "s";
 		}
@@ -206,20 +209,40 @@ namespace mcode::tui {
 		state_.turn_elapsed_ms = elapsed_ms;
 	}
 
-	auto render_coordinator::queue_block( std::string text ) -> void {
-		if ( text.empty( ) ) {
+	auto render_coordinator::queue_block( std::vector< styled_line > lines ) -> void {
+		if ( lines.empty( ) ) {
 			return;
 		}
 
-		if ( !state_.pending_commit.empty( ) ) {
-			state_.pending_commit += '\n';
+		if ( transcript_started_ ) {
+			state_.pending_commit.push_back( styled_line{ } );
 		}
 
-		state_.pending_commit += text;
+		queue_rows( std::move( lines ) );
+	}
 
-		if ( state_.pending_commit.back( ) != '\n' ) {
-			state_.pending_commit += '\n';
+	auto render_coordinator::queue_rows( std::vector< styled_line > lines ) -> void {
+		transcript_started_ = true;
+
+		for ( auto& line : lines ) {
+			state_.pending_commit.push_back( std::move( line ) );
 		}
+	}
+
+	auto render_coordinator::queue_text( const std::string_view text, const token color ) -> void {
+		// A trailing newline ends the block rather than opening a blank row.
+		auto body = text;
+
+		if ( !body.empty( ) && body.back( ) == '\n' ) {
+			body.remove_suffix( 1 );
+		}
+
+		if ( body.empty( ) ) {
+			return;
+		}
+
+		queue_block( std::vector< styled_line >{ styled_line{
+			{ std::string{ body }, color } } } );
 	}
 
 	auto render_coordinator::queue_thought( ) -> void {
@@ -227,8 +250,11 @@ namespace mcode::tui {
 			return;
 		}
 
-		queue_block( std::string{ GUTTER_THOUGHT } + " " +
-			thought_summary( state_.thinking_text, screen_columns_ ) );
+		queue_rows( std::vector< styled_line >{ styled_line{
+			{ std::string{ GUTTER_THOUGHT } + " ", token::thinking },
+			{ thought_summary( state_.thinking_text, screen_columns_ ), token::muted },
+		} } );
+
 		state_.thinking_text.clear( );
 		state_.thinking_line.clear( );
 	}
@@ -254,7 +280,7 @@ namespace mcode::tui {
 			case event_queue::kind::tool_start: {
 				queue_thought( );
 
-				queue_block( state_.streaming_text );
+				queue_text( state_.streaming_text );
 				state_.streaming_text.clear( );
 				state_.streaming_line.clear( );
 
@@ -269,11 +295,35 @@ namespace mcode::tui {
 			}
 
 			case event_queue::kind::tool_end: {
-				queue_block( std::string{ GUTTER_DONE } + " " + value.text );
+				auto line = styled_line{ };
+				line.push_back( { std::string{ GUTTER_DONE } + " ", token::success } );
+				line.push_back( { value.text, token::text } );
 
 				if ( !state_.tools.empty( ) ) {
+					const auto& tool = state_.tools.back( );
+
+					if ( !tool.target.empty( ) ) {
+						// The live row's target column, so targets line up.
+						const auto verb_width = string_width( value.text, AMBIGUOUS_WIDTH );
+						const auto widest = widest_verb( state_.tools );
+						const auto gap = widest + 2 > verb_width ? widest + 2 - verb_width
+							: std::size_t{ 0 };
+
+						line.push_back( { std::string( gap, ' ' ), token::none } );
+						line.push_back( { tool.target, token::muted } );
+					}
+
+					// An unstamped call never ran a clock, and a call that
+					// rounds to 0.0s is noise on the row.
+					if ( tool.started_ms != 0 && tool.elapsed_ms >= MIN_SHOWN_ELAPSED_MS ) {
+						line.push_back( { "  " + format_elapsed( tool.elapsed_ms ),
+							token::muted } );
+					}
+
 					state_.tools.pop_back( );
 				}
+
+				queue_rows( std::vector< styled_line >{ std::move( line ) } );
 
 				break;
 			}
@@ -292,7 +342,7 @@ namespace mcode::tui {
 			case event_queue::kind::turn_end: {
 				queue_thought( );
 
-				queue_block( state_.streaming_text );
+				queue_text( state_.streaming_text );
 
 				state_.tools.clear( );
 				state_.thinking_text.clear( );
@@ -374,7 +424,7 @@ namespace mcode::tui {
 		return bytes;
 	}
 
-	auto render_coordinator::commit( std::string text ) -> std::string {
+	auto render_coordinator::commit( std::vector< styled_line > lines ) -> std::string {
 		state_.pending_commit.clear( );
 
 		auto emitter = ansi_emitter{ caps_ };
@@ -383,10 +433,25 @@ namespace mcode::tui {
 		auto out = park();
 		out += emitter.region_top( painted_rows_ );
 		out += "\x1b[0J";
-		out += text;
 
-		if ( text.empty( ) || text.back( ) != '\n' ) {
-			out += '\n';
+		// At depth `none` token_color resolves empty, so every SGR would be a
+		// bare reset: the committed bytes carry no escape at all.
+		const auto coloured = caps_.depth != capabilities::color_depth::none;
+
+		for ( const auto& line : lines ) {
+			// A fresh emitter per line: the pen cache would skip the SGR of a
+			// line whose first span repeats the previous line's last style.
+			auto pen = ansi_emitter{ caps_ };
+
+			for ( const auto& span : line ) {
+				if ( coloured ) {
+					out += pen.sgr( span_style( span ) );
+				}
+
+				out += span.text;
+			}
+
+			out += coloured ? "\x1b[0m\n" : "\n";
 		}
 
 		// Scroll the committed text clear of the region, whatever its length.

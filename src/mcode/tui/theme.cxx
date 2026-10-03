@@ -80,6 +80,14 @@ namespace mcode::tui {
 	}
 
 	auto token_color( const token value, const capabilities::color_depth depth ) -> std::string_view {
+		// `none` is the absent sentinel, not a colour: it is the default
+		// background of every span. Resolving it to a value would emit a
+		// second foreground after the real one, and the terminal applies the
+		// last, so every span would render in the sentinel's colour.
+		if ( value == token::none || depth == capabilities::color_depth::none ) {
+			return { };
+		}
+
 		const auto index = entry_index( value );
 
 		switch ( depth ) {

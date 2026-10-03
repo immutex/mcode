@@ -704,6 +704,30 @@ code comments.
     with unresolved externals. `cli/slash.cxx` was moved into the library for
     exactly this reason; `cli_repl.cxx` stays out because nothing links it.
 
+87. **`token::none` is the absent sentinel, and resolving it to a colour made
+    the whole UI monochrome.** It is the default `background` of every span, and
+    `sgr` appends the background unconditionally, so a resolved value emitted a
+    *second foreground* after the real one. A terminal applies the last, so
+    every span rendered in `none`'s colour and the theme was effectively unused.
+    `token_color` now returns empty for it. Any token used as a background needs
+    a `48;`-family value, never a `38;` one.
+
+88. **The console INPUT codepage must be set to UTF-8 alongside the output one.**
+    The output side was set to `CP_UTF8` and restored on exit, but input was
+    left at the process default, so a non-ASCII keystroke or paste arrived as
+    legacy-codepage bytes, decoded as invalid UTF-8, and rendered as a gap in
+    the prompt echo. `SetConsoleCP`/`GetConsoleCP` now mirror the output pair.
+
+89. **A raw-mode line reader must echo, and must never re-prompt silently.**
+    `ENABLE_ECHO_INPUT` is off (deliberately: the console is read with
+    `ReadConsoleInputA`), so nothing the user types reaches the screen unless
+    the reader writes it back -- a prompt that takes input but shows none reads
+    as a hang. The same failure came from the other side: an unrecognised answer
+    re-read without repainting, so `yes` (rather than the single letter `y`)
+    looped forever with a byte-identical screen. The prompt now echoes what it
+    consumes, accepts the long spellings, and always shows a rejection or a
+    result.
+
 ## Building
 
 ```bash

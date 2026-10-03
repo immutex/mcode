@@ -5,6 +5,7 @@
 
 #include <array>
 #include <chrono>
+#include <string>
 #include <utility>
 
 #include <windows.h>
@@ -12,6 +13,14 @@
 #include "mcode/platform/seams.hxx"
 
 namespace mcode::tui {
+
+	namespace {
+
+		// Raw mode disables echo, so erasing a character is the session's job:
+		// backspace, blank over the cell, backspace again.
+		inline constexpr std::string_view ERASE_SEQUENCE = "\b \b";
+
+	}
 
 	auto tty_session::create( ) -> result< tty_session > {
 		auto session = tty_session{ };
@@ -61,6 +70,17 @@ namespace mcode::tui {
 			SetConsoleOutputCP( CP_UTF8 );
 		}
 
+		// The input side has the mirror problem: keystrokes and pastes are
+		// decoded by the console with the INPUT codepage before the session
+		// ever sees them, so under the legacy default a non-ASCII character
+		// arrives as a byte sequence that is not valid UTF-8 and the renderer
+		// paints the gap. Same tolerance as the output page.
+		session.saved_input_cp_ = GetConsoleCP( );
+
+		if ( session.saved_input_cp_ != 0 ) {
+			SetConsoleCP( CP_UTF8 );
+		}
+
 		session.raw_active_ = true;
 		session.attached_ = true;
 
@@ -76,10 +96,11 @@ namespace mcode::tui {
 		attached_( other.attached_ ), input_handle_( other.input_handle_ ),
 		output_handle_( other.output_handle_ ), in_mode_( other.in_mode_ ),
 		out_mode_( other.out_mode_ ), saved_output_cp_( other.saved_output_cp_ ),
-		saved_( other.saved_ ) {
+		saved_input_cp_( other.saved_input_cp_ ), saved_( other.saved_ ) {
 		other.attached_ = false;
 		other.saved_ = false;
 		other.saved_output_cp_ = 0;
+		other.saved_input_cp_ = 0;
 		other.raw_active_ = false;
 	}
 
@@ -95,11 +116,13 @@ namespace mcode::tui {
 			in_mode_ = other.in_mode_;
 			out_mode_ = other.out_mode_;
 			saved_output_cp_ = other.saved_output_cp_;
+			saved_input_cp_ = other.saved_input_cp_;
 			saved_ = other.saved_;
 
 			other.attached_ = false;
 			other.saved_ = false;
 			other.saved_output_cp_ = 0;
+			other.saved_input_cp_ = 0;
 			other.raw_active_ = false;
 		}
 
@@ -119,6 +142,10 @@ namespace mcode::tui {
 
 		if ( saved_output_cp_ != 0 ) {
 			SetConsoleOutputCP( saved_output_cp_ );
+		}
+
+		if ( saved_input_cp_ != 0 ) {
+			SetConsoleCP( saved_input_cp_ );
 		}
 	}
 
@@ -145,6 +172,16 @@ namespace mcode::tui {
 
 		auto line = std::string{ };
 		auto got_enter = false;
+
+		// Raw mode disabled echo, so nothing the user types reaches the screen
+		// unless the session writes it back. Only accepted keys are echoed, so
+		// a read that times out leaves the display untouched.
+		const auto echo = [ this ]( const std::string_view bytes ) {
+			auto written = static_cast< unsigned long >( 0 );
+
+			WriteFile( output_handle_, bytes.data( ),
+				static_cast< unsigned long >( bytes.size( ) ), &written, nullptr );
+		};
 
 		const auto deadline = GetTickCount64( ) + wait_ms;
 
@@ -187,6 +224,10 @@ namespace mcode::tui {
 				}
 
 				if ( key.uChar.AsciiChar == '\r' || key.uChar.AsciiChar == '\n' ) {
+					// The caller advances its own row, so the key itself only
+					// returns the cursor to column zero.
+					echo( "\r\n" );
+
 					got_enter = true;
 
 					break;
@@ -199,12 +240,16 @@ namespace mcode::tui {
 				if ( key.uChar.AsciiChar == '\b' ) {
 					if ( !line.empty( ) ) {
 						line.pop_back( );
+
+						echo( ERASE_SEQUENCE );
 					}
 
 					continue;
 				}
 
 				line.push_back( key.uChar.AsciiChar );
+
+				echo( std::string_view{ &key.uChar.AsciiChar, 1 } );
 			}
 		}
 

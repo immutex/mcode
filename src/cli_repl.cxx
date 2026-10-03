@@ -439,13 +439,14 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 				break;
 			}
 
-			coordinator.queue_block( result.output );
+			coordinator.queue_text( result.output );
 			show_prompt( );
 
 			continue;
 		}
 
-		coordinator.queue_block( std::string{ mcode::tui::USER_GUTTER } + " " + *submitted );
+		coordinator.queue_text( std::string{ mcode::tui::USER_GUTTER } + " " + *submitted,
+			mcode::tui::token::accent );
 
 		show_prompt( );
 

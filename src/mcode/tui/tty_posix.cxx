@@ -17,6 +17,14 @@
 
 namespace mcode::tui {
 
+	namespace {
+
+		// Raw mode disables echo, so erasing a character is the session's job:
+		// backspace, blank over the cell, backspace again.
+		inline constexpr std::string_view ERASE_SEQUENCE = "\b \b";
+
+	}
+
 	auto tty_session::create( ) -> result< tty_session > {
 		auto session = tty_session{ };
 
@@ -167,6 +175,10 @@ namespace mcode::tui {
 			}
 
 			if ( byte == '\r' || byte == '\n' ) {
+				// The caller advances its own row, so the key itself only
+				// returns the cursor to column zero.
+				write( "\r\n" );
+
 				got_enter = true;
 
 				break;
@@ -175,6 +187,8 @@ namespace mcode::tui {
 			if ( byte == 0x7F || byte == 0x08 ) {
 				if ( !line.empty( ) ) {
 					line.pop_back( );
+
+					write( ERASE_SEQUENCE );
 				}
 
 				continue;
@@ -185,6 +199,8 @@ namespace mcode::tui {
 			}
 
 			line.push_back( byte );
+
+			write( std::string_view{ &byte, 1 } );
 		}
 
 		if ( got_eof && line.empty( ) ) {

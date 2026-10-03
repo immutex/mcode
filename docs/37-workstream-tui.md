@@ -150,9 +150,15 @@ The only part that cannot be faked, so it is built first and kept small.
   were deleted rather than carried as dead weight. Tool output is emitted
   verbatim.
 - Tool calls: one live row (`spinner + verb + target + elapsed`), collapsing to
-  `✓ edit src/x.cxx +12 −3 1.2s`. The status line carries the meter:
-  `model ▸ 12.4k tok ▸ $0.031 ▸ 4.2s`. **No progress bars** — a token stream
-  has no known total, so show counts.
+  `✓ read src/main.cxx  0.3s`. The committed row carries the target and the
+  duration, because a bare `✓ read` names nothing; a call that rounds to `0.0s`
+  omits the duration rather than printing noise. The status line carries the
+  meter: `model ▸ 12.4k tok ▸ $0.031 ▸ 4.2s`. **No progress bars** — a token
+  stream has no known total, so show counts.
+- Committed transcript lines carry SGR: `commit()` colours each span through
+  the same `token_color` resolution the live region uses. Blank lines separate
+  message *groups*, never consecutive rows of one group (several tool rows in a
+  step are adjacent), which is what every surveyed agent TUI does.
 
 ### The approval prompt, inside the UI
 
@@ -166,6 +172,18 @@ The prompt must keep the semantics the engine depends on: `[?]` calls the
 detail callback and re-prompts, an unrecognised answer re-prompts, and a closed
 input is `refused` (which the engine resolves as deny). A prompt that defaults
 is a prompt that grants by accident.
+
+Two rules follow from the surveyed tools, and both were bugs here first:
+
+- **The prompt is re-presented on every pass, with a reason.** A rejection
+  redraws the question and the option list and says what arrived
+  (`not an answer: "yeszzz"  (y/a/n/d, or ? for details)`). A silent re-prompt is
+  indistinguishable from a hang, and no surveyed tool does it.
+- **The option labels state their scope.** `a` writes a rule to the project
+  store on disk and `d` is session-only, so the labels say which is which —
+  the one a user regrets getting wrong is the one that outlives the session.
+  Answers are trimmed and case-folded, so `yes`/`Always` work as well as the
+  single letters, and `?` prints the detail text rather than discarding it.
 
 ### The REPL
 

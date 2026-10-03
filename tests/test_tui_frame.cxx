@@ -162,7 +162,16 @@ TEST_CASE( "the theme resolves one depth per session", "[tui][theme]" ) {
 	CHECK( token_color( token::accent, capabilities::color_depth::ansi16 ) == "94" );
 	CHECK( token_color( token::accent, capabilities::color_depth::none ).empty( ) );
 
+	// `none` is the absent sentinel and must resolve to no colour at all; a
+	// value here would be emitted after the real one and win.
+	CHECK( token_color( token::none, capabilities::color_depth::truecolor ).empty( ) );
+	CHECK( token_color( token::none, capabilities::color_depth::ansi16 ).empty( ) );
+
 	for ( const auto& entry : theme_table( ) ) {
+		if ( entry.name == token::none ) {
+			continue;
+		}
+
 		CHECK_FALSE( token_color( entry.name, capabilities::color_depth::truecolor ).empty( ) );
 		CHECK_FALSE( std::string_view{ entry.truecolor }.empty( ) );
 	}

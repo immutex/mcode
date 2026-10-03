@@ -45,13 +45,15 @@ namespace mcode::tui {
 		// Moves the parked cursor to the region's top row.
 		[[nodiscard]] auto region_top( std::size_t row_count ) const -> std::string;
 
+		// The bytes that move the pen to `value`. Committed scrollback is raw
+		// text rather than a cell diff, so it resolves colour through here.
+		[[nodiscard]] auto sgr( const style& value ) -> std::string;
+
 	private:
 		// A relative row move plus a column move, from a known row. Static: it
 		// holds no pen state.
 		[[nodiscard]] static auto move_to( std::size_t from_row, std::size_t to_row,
 			std::size_t column ) -> std::string;
-
-		[[nodiscard]] auto sgr( const style& value ) -> std::string;
 
 		capabilities caps_;
 		style pen_;

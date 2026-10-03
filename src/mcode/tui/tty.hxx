@@ -130,6 +130,7 @@ namespace mcode::tui {
 		unsigned long in_mode_ = 0;
 		unsigned long out_mode_ = 0;
 		unsigned int saved_output_cp_ = 0;
+		unsigned int saved_input_cp_ = 0;
 		bool saved_ = false;
 #else
 		bool saved_ = false;

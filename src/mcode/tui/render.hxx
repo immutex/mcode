@@ -49,8 +49,10 @@ namespace mcode::tui {
 		std::string streaming_text;
 		styled_line streaming_line;
 
-		// Finished text waiting to be written to scrollback.
-		std::string pending_commit;
+		// Finished blocks waiting to be written to scrollback, styled so the
+		// commit can colour them. One entry is one committed block, which may
+		// span several rows; an empty entry is the blank line between groups.
+		std::vector< styled_line > pending_commit;
 
 		slash_palette palette;
 
@@ -132,12 +134,19 @@ namespace mcode::tui {
 		// The bytes to write for the current state. Empty when nothing changed.
 		[[nodiscard]] auto flush( ) -> std::string;
 
-		// Writes finished text to scrollback and re-reserves the region.
-		[[nodiscard]] auto commit( std::string text ) -> std::string;
+		// Writes finished lines to scrollback and re-reserves the region.
+		[[nodiscard]] auto commit( std::vector< styled_line > lines ) -> std::string;
 
-		// Queues text for the next commit, with the blank line that separates
-		// message groups.
-		auto queue_block( std::string text ) -> void;
+		// Queues a message block: one blank line separates it from the block
+		// before it, so groups never run together.
+		auto queue_block( std::vector< styled_line > lines ) -> void;
+
+		// Queues rows that continue the group already open: the tool rows of
+		// one step, and the thought line they follow, stay adjacent.
+		auto queue_rows( std::vector< styled_line > lines ) -> void;
+
+		// Splits plain text on newlines and queues it as one message block.
+		auto queue_text( std::string_view text, token color = token::text ) -> void;
 
 		[[nodiscard]] auto state( ) const noexcept -> const render_state& { return state_; }
 
@@ -163,6 +172,10 @@ namespace mcode::tui {
 		std::size_t screen_rows_ = 24;
 		std::size_t screen_columns_ = 80;
 		std::size_t painted_rows_ = LIVE_REGION_ROWS;
+
+		// True once any row has been queued, so the first group is not preceded
+		// by a blank line.
+		bool transcript_started_ = false;
 	};
 
 	// Braille, one frame per SPINNER_INTERVAL_MS. Every glyph is single-width.
