@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include "mcode/platform/seams.hxx"
+#include "mcode/tui/cell.hxx"
 
 namespace mcode::tui {
 

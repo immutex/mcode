@@ -107,7 +107,12 @@ namespace mcode {
 		auto charge( const std::uint64_t tokens, const double usd ) noexcept -> void {
 			steps_used.fetch_add( 1 );
 			tokens_used.fetch_add( tokens );
-			usd_used.fetch_add( usd );
+
+			// atomic<double> has no fetch_add in the standard, so the add is a compare-exchange loop.
+			auto current = usd_used.load( );
+
+			while ( !usd_used.compare_exchange_weak( current, current + usd ) ) {
+			}
 		}
 	};
 
