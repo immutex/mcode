@@ -114,11 +114,12 @@ TEST_CASE( "bash refuses compound commands and exec runners", "[tools][bash]" ) 
 		!= std::string::npos );
 }
 
-// a shell would collapse the two spaces, so exact stdout proves argv was executed, not the raw text
+// the tool executes argv directly, so a quoted argument with two spaces must arrive as one entry:
+// printf '%s' with a split argument would print just "a"
 #if defined( _WIN32 )
 inline constexpr auto ARGV_COMMAND = R"({"command":"findstr /c:\"a  b\" spacing.txt"})";
 #else
-inline constexpr auto ARGV_COMMAND = R"({"command":"grep -x \"a  b\" spacing.txt"})";
+inline constexpr auto ARGV_COMMAND = R"({"command":"printf '%s' 'a  b'"})";
 #endif
 
 TEST_CASE( "bash executes the parsed argv, not the raw string", "[tools][bash]" ) {
@@ -127,5 +128,11 @@ TEST_CASE( "bash executes the parsed argv, not the raw string", "[tools][bash]" 
 
 	const auto out = run_tool( handle_bash, ARGV_COMMAND, setup );
 	CHECK( out.find( "\"exit_code\":0" ) != std::string::npos );
+
+#if defined( _WIN32 )
 	CHECK( out.find( "\"stdout\":\"a  b\\n\"" ) != std::string::npos );
+#else
+	// one argument with both spaces intact; a split would leave printf printing "a"
+	CHECK( out.find( "\"stdout\":\"a  b\"" ) != std::string::npos );
+#endif
 }
