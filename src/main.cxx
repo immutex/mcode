@@ -96,7 +96,8 @@ auto main( int argument_count, char** arguments ) -> int {
 		}
 
 		if ( !std::filesystem::exists( fixture ) ) {
-			std::fprintf( stderr, "mcode: fixture repo not found: %s\n", fixture.string( ).c_str( ) );
+			std::fprintf( stderr, "mcode: fixture repo not found: %s\n",
+				fixture.string( ).c_str( ) );
 
 			return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
 		}
@@ -124,6 +125,14 @@ auto main( int argument_count, char** arguments ) -> int {
 
 	if ( !argv.empty( ) && ( argv.front( ) == "--help" || argv.front( ) == "-h" ) ) {
 		std::fputs( mcode::cli::usage_text( "mcode" ).c_str( ), stdout );
+
+		return 0;
+	}
+
+	if ( !argv.empty( ) && ( argv.front( ) == "--version" || argv.front( ) == "-V" ) ) {
+		std::printf( "%s %s (%s, %s)\n", std::string{ mcode::NAME }.c_str( ),
+			std::string{ mcode::VERSION }.c_str( ), std::string{ mcode::PLATFORM }.c_str( ),
+			std::string{ mcode::COMPILER }.c_str( ) );
 
 		return 0;
 	}
@@ -165,14 +174,16 @@ auto run_smoke( ) -> int {
 
 	section( "C++23 library support" );
 	const auto support = mcode::detect_library_support( );
-	std::printf( "  generator=%d move_only_function=%d print=%d expected=%d\n", support.generator ? 1 : 0,
-		support.move_only_function ? 1 : 0, support.print ? 1 : 0, support.expected ? 1 : 0 );
+	std::printf( "  generator=%d move_only_function=%d print=%d expected=%d\n",
+		support.generator ? 1 : 0, support.move_only_function ? 1 : 0, support.print ? 1 : 0,
+		support.expected ? 1 : 0 );
 	check( support.expected, "std::expected available" );
 
 	section( "yyjson (JSON)" );
 
 	{
-		auto doc = mcode::json::document::parse( R"({"model":"mcode","steps":3,"nested":{"a":1}})" );
+		auto doc = mcode::json::document::parse(
+			R"({"model":"mcode","steps":3,"nested":{"a":1}})" );
 		check( static_cast< bool >( doc ), "parsed a JSON object" );
 
 		if ( doc ) {
@@ -201,7 +212,8 @@ auto run_smoke( ) -> int {
 		check( accepted, "mutable DOM accepted string and integer members" );
 
 		auto built = builder.dump( false );
-		check( built && built->find( "\"name\"" ) != std::string::npos, "mutable DOM built and serialised" );
+		check( built && built->find( "\"name\"" ) != std::string::npos,
+			"mutable DOM built and serialised" );
 	}
 
 	section( "simdutf (Unicode)" );
@@ -218,7 +230,8 @@ auto run_smoke( ) -> int {
 		check( mcode::text::is_valid_utf8( cut ), "truncation landed on a code-point boundary" );
 
 		const auto cleaned = mcode::text::sanitize_utf8( "ok\xFF\xFEok" );
-		check( mcode::text::is_valid_utf8( cleaned ), "sanitised an invalid buffer to valid UTF-8" );
+		check( mcode::text::is_valid_utf8( cleaned ),
+			"sanitised an invalid buffer to valid UTF-8" );
 
 		auto wide = mcode::text::to_utf16( utf8 );
 		check( wide && wide->size( ) == 2, "transcoded UTF-8 to UTF-16 for Win32 APIs" );
@@ -347,7 +360,8 @@ auto run_smoke( ) -> int {
 		for ( const auto& entry : environment ) {
 			const auto& key = entry.first;
 
-			if ( key.find( "TOKEN" ) != std::string::npos || key.find( "SECRET" ) != std::string::npos ||
+			if ( key.find( "TOKEN" ) != std::string::npos ||
+				key.find( "SECRET" ) != std::string::npos ||
 				key.find( "KEY" ) != std::string::npos ) {
 				leaked = true;
 			}

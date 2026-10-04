@@ -15,5 +15,9 @@ namespace mcode::perm {
 
 	[[nodiscard]] auto is_exec_runner( std::string_view program ) noexcept -> bool;
 
+	// `env sh -c …`, `timeout 5 …`, `nice -n 10 …` and `nohup …` all run the program after them.
+	[[nodiscard]] auto unwrap_command( const std::vector< std::string >& argv )
+		-> std::vector< std::string >;
+
 }
 

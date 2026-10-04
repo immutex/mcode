@@ -22,11 +22,6 @@ namespace mcode::perm {
 		"fdisk", "fdisk.exe", "diskpart", "diskpart.exe", "format", "format.exe",
 	};
 
-	inline constexpr std::string_view RM_PROGRAM = "rm";
-	inline constexpr std::string_view RM_RECURSE_FORCE = "-rf";
-	inline constexpr std::string_view RM_FORCE_RECURSE = "-fr";
-
-	inline constexpr std::string_view DD_PROGRAM = "dd";
 	inline constexpr std::string_view DD_OF_PREFIX = "of=";
 
 	inline constexpr std::string_view DEV_PREFIX = "/dev/";
@@ -116,21 +111,54 @@ namespace mcode::perm {
 
 	}
 
-	[[nodiscard]] auto floor_recursive_delete( const std::vector< std::string >& argv,
+	[[nodiscard]] auto floor_recursive_delete( const std::vector< std::string >& raw_argv,
 		const mcode::workspace& space ) -> std::optional< std::string > {
-		if ( !token_equals( argv.front( ), RM_PROGRAM ) ) {
+		const auto argv = unwrap_command( raw_argv );
+
+		if ( argv.empty( ) ) {
+			return std::nullopt;
+		}
+
+		const auto program = program_name( argv );
+
+		if ( program != "rm" && program != "rm.exe" ) {
 			return std::nullopt;
 		}
 
 		auto recursive = false;
+		auto force = false;
 		auto targets = std::vector< std::string >{ };
 
 		for ( auto index = std::size_t{ 1 }; index < argv.size( ); ++index ) {
 			const auto& token = argv[ index ];
 
-			if ( token_equals( token, RM_RECURSE_FORCE ) ||
-				token_equals( token, RM_FORCE_RECURSE ) ) {
+			if ( token == "--recursive" ) {
 				recursive = true;
+
+				continue;
+			}
+
+			if ( token == "--force" ) {
+				force = true;
+
+				continue;
+			}
+
+			if ( token.starts_with( "--" ) ) {
+				continue;
+			}
+
+			if ( token.size( ) > 1 && token.front( ) == '-' ) {
+				// a cluster such as `-rfv`, where every letter is its own flag.
+				for ( const auto letter : token.substr( 1 ) ) {
+					if ( letter == 'r' || letter == 'R' ) {
+						recursive = true;
+					}
+
+					if ( letter == 'f' ) {
+						force = true;
+					}
+				}
 
 				continue;
 			}
@@ -142,7 +170,7 @@ namespace mcode::perm {
 			targets.push_back( token );
 		}
 
-		if ( !recursive || targets.empty( ) ) {
+		if ( !recursive || !force || targets.empty( ) ) {
 			return std::nullopt;
 		}
 
@@ -227,9 +255,17 @@ namespace mcode::perm {
 		return std::nullopt;
 	}
 
-	[[nodiscard]] auto floor_raw_device_write( const std::vector< std::string >& argv )
+	[[nodiscard]] auto floor_raw_device_write( const std::vector< std::string >& raw_argv )
 		-> std::optional< std::string > {
-		if ( !token_equals( argv.front( ), DD_PROGRAM ) ) {
+		const auto argv = unwrap_command( raw_argv );
+
+		if ( argv.empty( ) ) {
+			return std::nullopt;
+		}
+
+		const auto program = program_name( argv );
+
+		if ( program != "dd" && program != "dd.exe" ) {
 			return std::nullopt;
 		}
 
@@ -285,7 +321,12 @@ namespace mcode::perm {
 			return std::nullopt;
 		}
 
-		const auto& argv = *parsed;
+		// the wrappers are stripped here and again inside the checks, so `env timeout 5 rm -rf /` fires.
+		const auto argv = unwrap_command( *parsed );
+
+		if ( argv.empty( ) ) {
+			return std::nullopt;
+		}
 
 		if ( const auto hit = floor_privilege_escalation( argv ) ) {
 			return hit;

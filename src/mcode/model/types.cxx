@@ -45,15 +45,22 @@ namespace mcode::model {
 		reasoning = std::max( reasoning, event.reasoning_tokens );
 	}
 
-	auto usage::total_tokens( ) const noexcept -> std::int64_t {
-		// cached reads are a subset of input at every provider that reports them.
-		return input + output;
+	auto total_tokens( const capabilities& caps, const usage& counts ) noexcept -> std::int64_t {
+		// a provider reporting input without cache reads or writes left them out of the total.
+		const auto extra_input = caps.cached_read_in_input
+			? std::int64_t{ 0 }
+			: counts.cached_read + counts.cache_write;
+
+		return counts.input + extra_input + counts.output;
 	}
 
 	auto compute_cost( const capabilities& model_capabilities, const usage& counts ) -> double {
 		constexpr auto PER_MILLION = 1'000'000.0;
 
-		const auto billed_input = std::max< std::int64_t >( 0, counts.input - counts.cached_read );
+		// subtracting cache reads from input a provider already excluded bills input at zero.
+		const auto billed_input = model_capabilities.cached_read_in_input
+			? std::max< std::int64_t >( 0, counts.input - counts.cached_read )
+			: counts.input;
 
 		return ( static_cast< double >( billed_input ) * model_capabilities.price_input +
 			static_cast< double >( counts.cached_read ) * model_capabilities.price_cached_read +

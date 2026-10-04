@@ -166,3 +166,62 @@ TEST_CASE( "a description past the cap is refused", "[loader]" ) {
 
 	std::filesystem::remove_all( root );
 }
+
+TEST_CASE( "prefixed permission entries are declarations, not permissions", "[loader]" ) {
+	const auto root = scratch_root( );
+
+	write( root / "declaring" / "ext.toml",
+		"name = \"declaring\"\nversion = \"0.1.0\"\napi_version = 1\n"
+		"permissions = [\"net\", \"net:api.openai.com\", \"credential:OPENAI_API_KEY\"]\n" );
+
+	auto manifest = ext::load_manifest( root / "declaring" );
+
+	REQUIRE( static_cast< bool >( manifest ) );
+
+	if ( !manifest ) {
+		FAIL( manifest.error( ).msg );
+	}
+
+	// the bare entry is the permission; a prefixed one only narrows it
+	REQUIRE( manifest->has_permission( "net" ) );
+	REQUIRE_FALSE( manifest->has_permission( "net:api.openai.com" ) );
+
+	REQUIRE( manifest->net_hosts( ).size( ) == 1 );
+	REQUIRE( manifest->net_hosts( ).front( ) == "api.openai.com" );
+
+	REQUIRE( manifest->credential_names( ).size( ) == 1 );
+	REQUIRE( manifest->credential_names( ).front( ) == "OPENAI_API_KEY" );
+
+	std::filesystem::remove_all( root );
+}
+
+TEST_CASE( "a malformed declaration fails the manifest", "[loader]" ) {
+	const auto root = scratch_root( );
+
+	const auto cases = std::vector< std::pair< const char*, const char* > >{
+		{ R"(["net", "net:"])", "empty host" },
+		{ R"(["net", "net:https://api.openai.com/v1"])", "a URL is not a host" },
+		{ R"(["net", "net:*.openai.com"])", "no wildcard" },
+		{ R"(["net:api.openai.com"])", "net: without the bare net" },
+		{ R"(["credential:"])", "empty credential name" },
+		{ R"(["credential:1BAD"])", "not an environment variable name" },
+		{ R"(["net", "net:api.openai.com", "net:api.openai.com"])", "duplicate declaration" },
+		{ R"(["fs_read", "fs_read"])", "duplicate permission" },
+	};
+
+	for ( const auto& [ permissions, label ] : cases ) {
+		write( root / "declaring" / "ext.toml",
+			std::string{ "name = \"declaring\"\nversion = \"0.1.0\"\napi_version = 1\n"
+				"permissions = " } + permissions + "\n" );
+
+		auto manifest = ext::load_manifest( root / "declaring" );
+
+		CHECK_FALSE( static_cast< bool >( manifest ) );
+
+		if ( manifest ) {
+			FAIL( "case '" << label << "' was accepted but should not be" );
+		}
+	}
+
+	std::filesystem::remove_all( root );
+}

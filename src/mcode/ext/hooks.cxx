@@ -180,18 +180,20 @@ namespace mcode::ext {
 	auto hook_registry::record_failure( const std::uint64_t identifier ) -> void {
 		++total_failures_;
 
-		const auto& count = ++consecutive_failures_[ identifier ];
-
-		if ( count < QUARANTINE_THRESHOLD ) {
-			return;
-		}
-
+		// a handler may have unsubscribed itself: nothing is left to count or quarantine.
 		const auto* subscription = find( identifier );
 
 		if ( subscription == nullptr ) {
 			return;
 		}
 
+		const auto& count = ++consecutive_failures_[ identifier ];
+
+		if ( count < QUARANTINE_THRESHOLD ) {
+			return;
+		}
+
+		// copied before detach_owner erases the element this pointer names.
 		const auto owner = subscription->owner;
 		auto* host = subscription->host;
 
@@ -208,7 +210,11 @@ namespace mcode::ext {
 	}
 
 	auto hook_registry::record_success( const std::uint64_t identifier ) -> void {
-		consecutive_failures_[ identifier ] = 0;
+		const auto found = consecutive_failures_.find( identifier );
+
+		if ( found != consecutive_failures_.end( ) ) {
+			found->second = 0;
+		}
 	}
 
 	auto hook_registry::subscribe( lua_host& host, const std::string_view name,
@@ -277,10 +283,11 @@ namespace mcode::ext {
 		return identifier;
 	}
 
-	auto hook_registry::unsubscribe( const std::uint64_t identifier ) -> bool {
+	auto hook_registry::unsubscribe( const std::uint64_t identifier,
+		const std::string_view owner ) -> bool {
 		for ( auto iterator = subscriptions_.begin( ); iterator != subscriptions_.end( );
 			++iterator ) {
-			if ( iterator->id != identifier ) {
+			if ( iterator->id != identifier || iterator->owner != owner ) {
 				continue;
 			}
 
@@ -320,28 +327,35 @@ namespace mcode::ext {
 
 	auto hook_registry::call_handler( const hook_subscription& subscription,
 		const delivered_event& delivered ) -> std::optional< events::veto > {
-		if ( quarantined_.contains( subscription.owner ) ) {
+		// snapshotted before the pcall: a handler that calls mcode.off erases the element below.
+		const auto identifier = subscription.id;
+		const auto owner = subscription.owner;
+		const auto vetoable = subscription.vetoable;
+		const auto function_reference = subscription.function_reference;
+		auto* host = subscription.host;
+
+		if ( quarantined_.contains( owner ) ) {
 			return std::nullopt;
 		}
 
-		auto* state = subscription.host != nullptr ? subscription.host->raw( ) : nullptr;
+		auto* state = host != nullptr ? host->raw( ) : nullptr;
 
 		if ( state == nullptr ) {
-			record_failure( subscription.id );
+			record_failure( identifier );
 
 			return std::nullopt;
 		}
 
 		// budgets the dispatch: hooks and tool calls never go through run/eval.
-		auto budget = lua_host::budget_scope{ subscription.host };
+		auto budget = lua_host::budget_scope{ host };
 
 		const auto depth = lua_gettop( state );
 
-		lua_getref( state, subscription.function_reference );
+		lua_getref( state, function_reference );
 
 		if ( lua_type( state, -1 ) != LUA_TFUNCTION ) {
 			lua_settop( state, depth );
-			record_failure( subscription.id );
+			record_failure( identifier );
 
 			return std::nullopt;
 		}
@@ -351,30 +365,30 @@ namespace mcode::ext {
 
 		if ( auto pushed = push_json( state, table ); !pushed ) {
 			lua_settop( state, depth );
-			record_failure( subscription.id );
+			record_failure( identifier );
 
 			return std::nullopt;
 		}
 
 		if ( lua_pcall( state, 1, 1, 0 ) != 0 ) {
 			lua_settop( state, depth );
-			record_failure( subscription.id );
+			record_failure( identifier );
 
 			return std::nullopt;
 		}
 
 		auto outcome = std::optional< events::veto >{ };
 
-		if ( subscription.vetoable && lua_type( state, -1 ) == LUA_TBOOLEAN &&
+		if ( vetoable && lua_type( state, -1 ) == LUA_TBOOLEAN &&
 			lua_toboolean( state, -1 ) == 0 ) {
 			auto reason = events::veto{ };
-			reason.reason = "vetoed by " + subscription.owner;
-			reason.source = subscription.owner;
+			reason.reason = "vetoed by " + owner;
+			reason.source = owner;
 
 			outcome = reason;
 		}
 
-		if ( subscription.vetoable && lua_type( state, -1 ) == LUA_TTABLE ) {
+		if ( vetoable && lua_type( state, -1 ) == LUA_TTABLE ) {
 			lua_getfield( state, -1, "veto" );
 
 			if ( lua_type( state, -1 ) == LUA_TSTRING ) {
@@ -384,7 +398,7 @@ namespace mcode::ext {
 				if ( text != nullptr ) {
 					auto reason = events::veto{ };
 					reason.reason.assign( text, length );
-					reason.source = subscription.owner;
+					reason.source = owner;
 
 					outcome = reason;
 				}
@@ -394,7 +408,7 @@ namespace mcode::ext {
 		}
 
 		lua_settop( state, depth );
-		record_success( subscription.id );
+		record_success( identifier );
 
 		return outcome;
 	}

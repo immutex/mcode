@@ -130,7 +130,7 @@ TEST_CASE( "a sandboxed child can write inside write_paths", "[sandbox]" ) {
 }
 
 TEST_CASE( "no sandboxed child survives the harness", "[sandbox]" ) {
-	// kill-on-close: closing the Job handle at return kills every process inside it
+	// kill-on-close is the only thing that can kill a grandchild of the terminated direct child
 	auto root = test::scratch_directory( "mcode-sandbox-orphan" );
 
 	std::filesystem::create_directories( root );
@@ -140,18 +140,27 @@ TEST_CASE( "no sandboxed child survives the harness", "[sandbox]" ) {
 	profile.write_paths.push_back( root );
 	profile.allow_network = false;
 
+	// the inner cmd is a grandchild the direct child waits on, so only the Job can reach it
 	auto options = process_options{ };
 	options.executable = "cmd.exe";
-	options.args = { "/c", "echo ran > marker.txt" };
+	options.args = { "/c", "cmd.exe", "/c",
+		"for /l %i in (1,1,120) do (echo beat >> beat.txt & ping -n 2 127.0.0.1 > nul)" };
 	options.working_directory = root.string( );
 	options.sandbox = &profile;
-	options.timeout = std::chrono::milliseconds{ 10'000 };
+	options.timeout = std::chrono::milliseconds{ 2'000 };
 
 	const auto outcome = run_process( options );
 	REQUIRE( static_cast< bool >( outcome ) );
 
-	CHECK( outcome->exit_code == 0 );
-	CHECK( std::filesystem::exists( root / "marker.txt" ) );
+	auto error = std::error_code{ };
+	const auto beats = std::filesystem::file_size( root / "beat.txt", error );
+	REQUIRE_FALSE( error );
+	REQUIRE( beats > 0 );
+
+	std::this_thread::sleep_for( std::chrono::seconds{ 3 } );
+
+	// a live grandchild appends every second, so an unchanged size means it was killed
+	CHECK( std::filesystem::file_size( root / "beat.txt", error ) == beats );
 
 	std::filesystem::remove_all( root );
 }

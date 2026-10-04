@@ -18,31 +18,6 @@ namespace mcode::ext {
 		inline constexpr auto NET_TIMEOUT_SECONDS = std::int64_t{ 30 };
 		inline constexpr auto NET_MAX_RESPONSE_BYTES = std::uint64_t{ 4 * 1024 * 1024 };
 
-		// the allowlist compares lowercased hosts, not full URLs.
-		[[nodiscard]] auto host_of( const std::string_view url ) -> std::string {
-			const auto parsed = mcode::net::parse_url( url );
-
-			if ( !parsed ) {
-				return { };
-			}
-
-			auto host = parsed->host;
-
-			for ( auto& character : host ) {
-				if ( character >= 'A' && character <= 'Z' ) {
-					character = static_cast< char >( character - 'A' + 'a' );
-				}
-			}
-
-			return host;
-		}
-
-		// an absent net_hosts key with the `net` permission permits nothing: fail-closed.
-		[[nodiscard]] auto declared_hosts( const api_surface& self )
-			-> const std::vector< std::string >& {
-			return self.net_hosts( );
-		}
-
 		// the one policy check: both entry points go through it.
 		[[nodiscard]] auto host_allowed( const api_surface& self,
 			const std::string_view url, std::string& reason ) -> bool {
@@ -52,7 +27,7 @@ namespace mcode::ext {
 				return false;
 			}
 
-			const auto host = host_of( url );
+			const auto host = url_host( url );
 
 			if ( host.empty( ) ) {
 				reason = "the URL could not be parsed";
@@ -60,13 +35,12 @@ namespace mcode::ext {
 				return false;
 			}
 
-			for ( const auto& declared : declared_hosts( self ) ) {
-				if ( declared == host ) {
-					return true;
-				}
+			// an undeclared host permits nothing: fail-closed rather than absent.
+			if ( host_declared( self, host ) ) {
+				return true;
 			}
 
-			reason = "'" + host + "' is not in this extension's declared net hosts";
+			reason = "'" + host + "' is not declared as a 'net:<host>' permission";
 
 			return false;
 		}

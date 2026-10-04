@@ -3,6 +3,7 @@
 #include "mcode/ext/api_cmd.hxx"
 #include "mcode/ext/api_context.hxx"
 #include "mcode/ext/api_fs.hxx"
+#include "mcode/ext/api_gate.hxx"
 #include "mcode/ext/api_internal.hxx"
 #include "mcode/ext/api_net.hxx"
 #include "mcode/ext/api_timer.hxx"
@@ -11,6 +12,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -34,6 +36,32 @@ namespace mcode::ext {
 
 		constexpr auto MAX_LOGGED_ARGUMENTS = 8;
 		constexpr auto MAX_LOGGED_LENGTH = 2048;
+
+		// an unrecognised class prompts: the read default auto-approves inside the workspace.
+		[[nodiscard]] auto declared_tool_class( const std::string_view declared )
+			-> std::optional< tool_class > {
+			if ( declared == "read" ) {
+				return tool_class::read;
+			}
+
+			if ( declared == "write" ) {
+				return tool_class::write;
+			}
+
+			if ( declared == "exec" ) {
+				return tool_class::exec;
+			}
+
+			if ( declared == "net" ) {
+				return tool_class::net;
+			}
+
+			if ( declared == "spawn" ) {
+				return tool_class::spawn;
+			}
+
+			return std::nullopt;
+		}
 
 		auto to_text( lua_State* state, const int index ) -> std::string {
 			if ( lua_type( state, index ) == LUA_TSTRING ||
@@ -128,7 +156,8 @@ namespace mcode::ext {
 		auto definition_value = tool_def{ };
 		definition_value.name = tool.name;
 		definition_value.description = tool.description;
-		definition_value.klass = tool_class::read;
+		definition_value.klass = declared_tool_class(
+			read_field_string( state, definition, "permission" ) ).value_or( tool_class::exec );
 		definition_value.source = tool_source::user_extension;
 		definition_value.owner = tool.owner;
 		definition_value.deferrable = true;
@@ -235,7 +264,7 @@ namespace mcode::ext {
 			lua_error( state );
 		}
 
-		if ( !self->manifest_.has_permission( "net" ) ) {
+		if ( !manifest_allows( *self, "net" ) ) {
 			const auto message = std::string{ "mcode.model.register: extension '" } +
 				self->manifest_.name + "' declares no 'net' permission";
 
@@ -243,7 +272,30 @@ namespace mcode::ext {
 			lua_error( state );
 		}
 
-		if ( auto added = self->providers_->add( std::move( *descriptor ) ); !added ) {
+		const auto host = url_host( descriptor->endpoint );
+
+		if ( host.empty( ) || !host_declared( *self, host ) ) {
+			const auto message = std::string{ "mcode.model.register: extension '" } +
+				self->manifest_.name + "' may not reach '" +
+				( host.empty( ) ? descriptor->endpoint : host ) +
+				"'; declare it as a 'net:<host>' permission";
+
+			lua_pushlstring( state, message.data( ), message.size( ) );
+			lua_error( state );
+		}
+
+		if ( descriptor->auth.from == model::auth_spec::source::environment &&
+			!credential_declared( *self, descriptor->auth.name ) ) {
+			const auto message = std::string{ "mcode.model.register: extension '" } +
+				self->manifest_.name + "' may not read the credential '" +
+				descriptor->auth.name + "'; declare it as a 'credential:<NAME>' permission";
+
+			lua_pushlstring( state, message.data( ), message.size( ) );
+			lua_error( state );
+		}
+
+		if ( auto added = self->providers_->add( std::move( *descriptor ),
+			self->manifest_.name ); !added ) {
 			const auto message = std::string{ "mcode.model.register: " } + added.error( ).msg;
 
 			lua_pushlstring( state, message.data( ), message.size( ) );
@@ -392,7 +444,6 @@ namespace mcode::ext {
 					const std::string& ) > >( *request.session_forker );
 		}
 
-		net_hosts_ = request.net_hosts;
 		http_client_ = request.http_client;
 
 		if ( request.web_searcher ) {
@@ -423,8 +474,9 @@ namespace mcode::ext {
 					std::string_view ) > >( *request.skill_sink );
 		}
 
-		timers_ = std::make_unique< timer_registry >(
-			[ this ]( ) { pump_timers_once( ); } );
+		timers_ = std::make_unique< timer_registry >( timer_registry::actions{
+			.fire = [ this ]( const int reference ) { fire_timer( reference ); },
+			.release = [ this ]( const int reference ) { release_timer( reference ); } } );
 
 		if ( request.files != nullptr ) {
 			auto context = std::make_unique< tools::tool_context >( );

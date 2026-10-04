@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -8,6 +9,8 @@
 #include "mcode/model/types.hxx"
 #include "mcode/tui/mention.hxx"
 #include "mcode/tui/palette.hxx"
+
+#include "test_scratch.hxx"
 
 using namespace mcode;
 
@@ -416,5 +419,26 @@ TEST_CASE( "the command source is what a bare prompt implies",
 
 	CHECK_FALSE( palette.open );
 	CHECK( controller.source( ) == cli::palette_source::commands );
+}
+
+TEST_CASE( "an export argument names the file, inside the session's working directory",
+	"[cli][slash]" ) {
+	const auto directory = test::scratch_directory( "mcode-export" );
+
+	auto deps = agent_loop::dependencies{ };
+	deps.workspace_root = directory.string( );
+
+	auto loop = agent_loop{ deps };
+	const auto& builtins = cli::builtin_commands( );
+	const auto match = cli::match_command( "/export notes.md", builtins );
+
+	REQUIRE( match.entry != nullptr );
+
+	const auto result = cli::run_command( match, loop, builtins );
+
+	CHECK( result.output.find( "notes.md" ) != std::string::npos );
+	CHECK( std::filesystem::exists( directory / "notes.md" ) );
+
+	std::filesystem::remove_all( directory );
 }
 

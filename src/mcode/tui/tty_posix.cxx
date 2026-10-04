@@ -249,7 +249,12 @@ namespace mcode::tui {
 			auto byte = char{ };
 			const auto count = ::read( STDIN_FILENO, &byte, 1 );
 
-			if ( count <= 0 ) {
+			// vmin=0/vtime=1: a zero-length read is the timer expiring, not end of input
+			if ( count == 0 ) {
+				continue;
+			}
+
+			if ( count < 0 ) {
 				got_eof = true;
 
 				break;
@@ -340,29 +345,6 @@ namespace mcode::tui {
 	}
 
 	namespace {
-
-		// How many bytes the UTF-8 sequence starting with `lead` occupies.
-		// Zero for a continuation byte, which cannot start one.
-		auto utf8_length( const unsigned char lead ) -> std::size_t {
-			if ( ( lead & 0x80 ) == 0 ) {
-				return 1;
-			}
-
-			if ( ( lead & 0xE0 ) == 0xC0 ) {
-				return 2;
-			}
-
-			if ( ( lead & 0xF0 ) == 0xE0 ) {
-				return 3;
-			}
-
-			if ( ( lead & 0xF8 ) == 0xF0 ) {
-				return 4;
-			}
-
-			return 0;
-		}
-
 
 		struct escape_result {
 			key_event event;
@@ -494,11 +476,10 @@ namespace mcode::tui {
 				}
 
 				// a UTF-8 character, waiting if this read split the sequence
-				const auto length = utf8_length( first );
+				const auto length = utf8_lead_length( carry[ cursor ] );
 
 				if ( length == 0 ) {
-					// A stray continuation byte: drop it rather than insert
-					// half a character.
+					// a byte that cannot start a sequence: drop it rather than insert half a glyph
 					++cursor;
 
 					continue;
@@ -506,6 +487,15 @@ namespace mcode::tui {
 
 				if ( cursor + length > carry.size( ) ) {
 					break;
+				}
+
+				// the strict decoder rejects a bad continuation, an overlong form and a surrogate
+				const auto decoded = decode_utf8( std::string_view{ carry }.substr( cursor ) );
+
+				if ( decoded.length != length ) {
+					++cursor;
+
+					continue;
 				}
 
 				auto event = key_event{ };
@@ -556,7 +546,12 @@ namespace mcode::tui {
 				auto bytes = std::array< char, 256 >{ };
 				const auto count = ::read( STDIN_FILENO, bytes.data( ), bytes.size( ) );
 
-				if ( count <= 0 ) {
+				// vmin=0/vtime=1: a zero-length read is the timer, not end of input
+				if ( count == 0 ) {
+					continue;
+				}
+
+				if ( count < 0 ) {
 					event.type = key_event::kind::exit;
 
 					return event;

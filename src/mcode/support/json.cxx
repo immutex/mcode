@@ -28,7 +28,8 @@ namespace mcode::json {
 			if ( yyjson_is_uint( value ) ) {
 				const auto wide = yyjson_get_uint( value );
 
-				if ( wide > static_cast< std::uint64_t >( std::numeric_limits< std::int64_t >::max( ) ) ) {
+				if ( wide > static_cast< std::uint64_t >(
+					std::numeric_limits< std::int64_t >::max( ) ) ) {
 					return std::unexpected( fail( errc::json, std::string{ what } +
 						" is too large for a 64-bit signed integer" ) );
 				}
@@ -172,7 +173,8 @@ namespace mcode::json {
 			}
 
 			if ( entry->type != node::kind::integer ) {
-				return std::unexpected( fail( errc::json, "key is not an integer: " + std::string{ key } ) );
+				return std::unexpected( fail( errc::json,
+					"key is not an integer: " + std::string{ key } ) );
 			}
 
 			return entry->integer;
@@ -206,7 +208,8 @@ namespace mcode::json {
 			}
 
 			if ( entry->type != node::kind::string ) {
-				return std::unexpected( fail( errc::json, "key is not a string: " + std::string{ key } ) );
+				return std::unexpected( fail( errc::json,
+					"key is not a string: " + std::string{ key } ) );
 			}
 
 			return entry->text;
@@ -229,7 +232,8 @@ namespace mcode::json {
 		}
 
 		if ( !yyjson_is_str( found ) ) {
-			return std::unexpected( fail( errc::json, "key is not a string: " + std::string{ key } ) );
+			return std::unexpected( fail( errc::json,
+				"key is not a string: " + std::string{ key } ) );
 		}
 
 		return std::string{ yyjson_get_str( found ), yyjson_get_len( found ) };
@@ -244,14 +248,16 @@ namespace mcode::json {
 		auto* found = yyjson_ptr_getn( root, path.data( ), path.size( ) );
 
 		if ( found == nullptr ) {
-			return std::unexpected( fail( errc::json, "pointer not found: " + std::string{ path } ) );
+			return std::unexpected( fail( errc::json,
+				"pointer not found: " + std::string{ path } ) );
 		}
 
 		if ( yyjson_is_str( found ) ) {
 			return std::string{ yyjson_get_str( found ), yyjson_get_len( found ) };
 		}
 
-		const auto rendered = detail::owned_cstr{ yyjson_val_write( found, YYJSON_WRITE_NOFLAG, nullptr ) };
+		const auto rendered =
+			detail::owned_cstr{ yyjson_val_write( found, YYJSON_WRITE_NOFLAG, nullptr ) };
 
 		if ( !rendered ) {
 			return std::unexpected( fail( errc::json, "failed to render pointer value" ) );
@@ -268,7 +274,8 @@ namespace mcode::json {
 		auto* found = yyjson_ptr_getn( yyjson_doc_get_root( doc_ ), path.data( ), path.size( ) );
 
 		if ( found == nullptr ) {
-			return std::unexpected( fail( errc::json, "pointer not found: " + std::string{ path } ) );
+			return std::unexpected( fail( errc::json,
+				"pointer not found: " + std::string{ path } ) );
 		}
 
 		if ( !yyjson_is_str( found ) ) {
@@ -306,9 +313,89 @@ namespace mcode::json {
 
 	}
 
+	namespace {
+
+		// the byte length a well-formed UTF-8 sequence would have, or 0 for an invalid lead byte
+		auto utf8_sequence_length( const std::string_view text, const std::size_t index )
+			-> std::size_t {
+			const auto lead = static_cast< unsigned char >( text[ index ] );
+
+			if ( lead >= 0xC2 && lead <= 0xDF ) {
+				return 2;
+			}
+
+			if ( lead >= 0xE0 && lead <= 0xEF ) {
+				return 3;
+			}
+
+			if ( lead >= 0xF0 && lead <= 0xF4 ) {
+				return 4;
+			}
+
+			return 0;
+		}
+
+		auto valid_utf8_at( const std::string_view text, const std::size_t index,
+			const std::size_t length ) -> bool {
+			if ( index + length > text.size( ) ) {
+				return false;
+			}
+
+			for ( auto offset = std::size_t{ 1 }; offset < length; ++offset ) {
+				const auto byte = static_cast< unsigned char >( text[ index + offset ] );
+
+				if ( byte < 0x80 || byte > 0xBF ) {
+					return false;
+				}
+			}
+
+			// reject overlongs, surrogates and code points past U+10FFFF
+			const auto lead = static_cast< unsigned char >( text[ index ] );
+			const auto second = static_cast< unsigned char >( text[ index + 1 ] );
+
+			if ( lead == 0xE0 ) {
+				return second >= 0xA0;
+			}
+
+			if ( lead == 0xED ) {
+				return second <= 0x9F;
+			}
+
+			if ( lead == 0xF0 ) {
+				return second >= 0x90;
+			}
+
+			if ( lead == 0xF4 ) {
+				return second <= 0x8F;
+			}
+
+			return true;
+		}
+
+	}
+
 	auto append_escaped( std::string& out, const std::string_view text ) -> void {
-		for ( const auto character : text ) {
-			switch ( character ) {
+		auto index = std::size_t{ 0 };
+
+		while ( index < text.size( ) ) {
+			const auto character = static_cast< unsigned char >( text[ index ] );
+
+			if ( character >= 0x80 ) {
+				const auto length = utf8_sequence_length( text, index );
+
+				if ( length != 0 && valid_utf8_at( text, index, length ) ) {
+					out.append( text.data( ) + index, length );
+					index += length;
+				} else {
+					// invalid UTF-8 would make the whole document invalid, so it is replaced
+					out += "\xEF\xBF\xBD";
+					++index;
+				}
+
+				continue;
+			}
+
+			switch ( text[ index ] ) {
 				case '"': out += "\\\""; break;
 				case '\\': out += "\\\\"; break;
 				case '\b': out += "\\b"; break;
@@ -318,15 +405,16 @@ namespace mcode::json {
 				case '\t': out += "\\t"; break;
 
 				default:
-					if ( static_cast< unsigned char >( character ) < 0x20 ) {
+					if ( character < 0x20 ) {
 						auto buffer = std::array< char, 8 >{ };
-						std::snprintf( buffer.data( ), buffer.size( ), "\\u%04x",
-							static_cast< unsigned char >( character ) );
+						std::snprintf( buffer.data( ), buffer.size( ), "\\u%04x", character );
 						out += buffer.data( );
 					} else {
-						out += character;
+						out += text[ index ];
 					}
 			}
+
+			++index;
 		}
 	}
 
@@ -335,7 +423,8 @@ namespace mcode::json {
 			return { };
 		}
 
-		return object_keys_of( yyjson_ptr_getn( yyjson_doc_get_root( doc_ ), path.data( ), path.size( ) ) );
+		return object_keys_of(
+			yyjson_ptr_getn( yyjson_doc_get_root( doc_ ), path.data( ), path.size( ) ) );
 	}
 
 	auto document::pointer_raw( const std::string_view path ) const -> result< std::string > {
@@ -346,10 +435,12 @@ namespace mcode::json {
 		auto* found = yyjson_ptr_getn( yyjson_doc_get_root( doc_ ), path.data( ), path.size( ) );
 
 		if ( found == nullptr ) {
-			return std::unexpected( fail( errc::json, "pointer not found: " + std::string{ path } ) );
+			return std::unexpected( fail( errc::json,
+				"pointer not found: " + std::string{ path } ) );
 		}
 
-		const auto rendered = detail::owned_cstr{ yyjson_val_write( found, YYJSON_WRITE_NOFLAG, nullptr ) };
+		const auto rendered =
+			detail::owned_cstr{ yyjson_val_write( found, YYJSON_WRITE_NOFLAG, nullptr ) };
 
 		if ( !rendered ) {
 			return std::unexpected( fail( errc::json, "failed to render pointer value" ) );
@@ -366,7 +457,8 @@ namespace mcode::json {
 		auto* found = yyjson_ptr_getn( yyjson_doc_get_root( doc_ ), path.data( ), path.size( ) );
 
 		if ( found == nullptr ) {
-			return std::unexpected( fail( errc::json, "pointer not found: " + std::string{ path } ) );
+			return std::unexpected( fail( errc::json,
+				"pointer not found: " + std::string{ path } ) );
 		}
 
 		return to_int64( found, "pointer " + std::string{ path } );
@@ -380,7 +472,8 @@ namespace mcode::json {
 		auto* found = yyjson_ptr_getn( yyjson_doc_get_root( doc_ ), path.data( ), path.size( ) );
 
 		if ( found == nullptr ) {
-			return std::unexpected( fail( errc::json, "pointer not found: " + std::string{ path } ) );
+			return std::unexpected( fail( errc::json,
+				"pointer not found: " + std::string{ path } ) );
 		}
 
 		if ( !yyjson_is_bool( found ) ) {
@@ -400,7 +493,8 @@ namespace mcode::json {
 		auto* found = yyjson_ptr_getn( yyjson_doc_get_root( doc_ ), path.data( ), path.size( ) );
 
 		if ( found == nullptr ) {
-			return std::unexpected( fail( errc::json, "pointer not found: " + std::string{ path } ) );
+			return std::unexpected( fail( errc::json,
+				"pointer not found: " + std::string{ path } ) );
 		}
 
 		if ( !yyjson_is_arr( found ) ) {
@@ -431,7 +525,8 @@ namespace mcode::json {
 			return false;
 		}
 
-		return yyjson_ptr_getn( yyjson_doc_get_root( doc_ ), path.data( ), path.size( ) ) != nullptr;
+		return yyjson_ptr_getn(
+			yyjson_doc_get_root( doc_ ), path.data( ), path.size( ) ) != nullptr;
 	}
 
 }

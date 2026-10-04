@@ -93,8 +93,7 @@ namespace mcode::model {
 	struct cache_plan {
 		cache_mode mode = cache_mode::none;
 
-		// Byte offsets into the rendered body; the renderer applies them right to left. The
-		// assembler fills them, because only the rendered bytes know where the prefix ends.
+		// byte offsets into the rendered body, applied right to left; the assembler fills them.
 		std::vector< std::size_t > breakpoints;
 	};
 
@@ -156,7 +155,6 @@ namespace mcode::model {
 		std::int64_t reasoning = 0;
 
 		auto add( const chat_event& event ) -> void;
-		[[nodiscard]] auto total_tokens( ) const noexcept -> std::int64_t;
 	};
 
 	// The window assumed for a model the table does not know; without one it never compacts.
@@ -172,6 +170,9 @@ namespace mcode::model {
 		bool supports_thinking = false;
 		bool supports_effort = false;
 
+		// false for providers that report input tokens excluding cache reads and writes.
+		bool cached_read_in_input = true;
+
 		std::int64_t context_window = 0;
 		std::int64_t max_output_tokens = 0;
 
@@ -186,6 +187,10 @@ namespace mcode::model {
 			return context_window > 0 ? context_window : DEFAULT_CONTEXT_WINDOW;
 		}
 	};
+
+	// the tokens a request consumed, including cache reads a provider left out of input.
+	[[nodiscard]] auto total_tokens( const capabilities& caps, const usage& counts ) noexcept
+		-> std::int64_t;
 
 	// computed from provider-reported usage only; an unknown model prices at zero.
 	[[nodiscard]] auto compute_cost( const capabilities& caps, const usage& counts ) -> double;

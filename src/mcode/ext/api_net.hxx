@@ -1,6 +1,6 @@
 #pragma once
 
-// an API-level allowlist, not the process-level egress proxy; only manifest-declared hosts.
+// the policy lives in api_gate: one `net:<host>` declaration gates every outbound host.
 
 #include <string>
 

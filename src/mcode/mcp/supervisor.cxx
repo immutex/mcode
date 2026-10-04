@@ -3,7 +3,6 @@
 #include "mcode/fs/workspace.hxx"
 #include "mcode/support/logging.hxx"
 
-#include <thread>
 #include <utility>
 
 namespace mcode::mcp {
@@ -60,6 +59,7 @@ namespace mcode::mcp {
 		client_ = std::make_unique< client >( *transport_ );
 
 		client_->attach( );
+		client_->set_end_handler( [ this ] { on_transport_eof( ); } );
 
 		auto caps = client_->initialize( );
 
@@ -109,62 +109,63 @@ namespace mcode::mcp {
 		return delay;
 	}
 
-	auto supervisor::handle_eof( ) -> bool {
-		if ( state_ == server_state::stopped || state_ == server_state::failed ) {
-			return false;
-		}
-
+	auto supervisor::attempt_restart( ) -> void {
 		state_ = server_state::restarting;
-
-		// the old transport's destructor shuts down an already-dead child: a no-op, not an error
-		if ( client_ ) {
-			client_->on_eof( );
-		}
 
 		client_.reset( );
 		transport_.reset( );
 
-		const auto delay = backoff_delay( );
-		std::this_thread::sleep_for( delay );
-
 		auto reconnected = connect( );
 
-		if ( !reconnected ) {
-			++restarts_;
+		if ( reconnected ) {
+			restarts_ = 0;
+			state_ = server_state::ready;
 
-			last_error_ = reconnected.error( ).msg;
-
-			if ( restarts_ >= RESTART_BACKOFF_STEPS ) {
-				state_ = server_state::failed;
-
-				if ( handlers_.on_gone ) {
-					handlers_.on_gone( last_error_ );
-				}
-
-				return false;
+			if ( handlers_.on_ready ) {
+				handlers_.on_ready( tools_ );
 			}
 
-			return handle_eof( );
+			return;
 		}
 
-		restarts_ = 0;
-		state_ = server_state::ready;
+		++restarts_;
+		last_error_ = reconnected.error( ).msg;
 
-		if ( handlers_.on_ready ) {
-			handlers_.on_ready( tools_ );
+		if ( restarts_ >= RESTART_BACKOFF_STEPS ) {
+			state_ = server_state::failed;
+
+			if ( handlers_.on_gone ) {
+				handlers_.on_gone( last_error_ );
+			}
+
+			return;
 		}
 
-		return true;
+		// retried on the next pump after the backoff, so the caller is never blocked here
+		restart_pending_ = true;
+		next_attempt_ = std::chrono::steady_clock::now( ) + backoff_delay( );
 	}
 
 	auto supervisor::on_transport_eof( ) -> void {
-		handle_eof( );
+		if ( state_ == server_state::stopped || state_ == server_state::failed ) {
+			return;
+		}
+
+		if ( restart_pending_ ) {
+			return;
+		}
+
+		restart_pending_ = true;
+		next_attempt_ = std::chrono::steady_clock::now( );
 	}
 
 	auto supervisor::shutdown( ) -> void {
 		if ( state_ == server_state::stopped ) {
 			return;
 		}
+
+		state_ = server_state::stopped;
+		restart_pending_ = false;
 
 		if ( client_ ) {
 			client_->on_eof( );
@@ -177,14 +178,25 @@ namespace mcode::mcp {
 				logger( )->warn( "mcp: stdin close failed: {}", closed.error( ).msg );
 			}
 
-			transport_->finalize( );
+			// the drainer joins only once the child is dead, or a server ignoring EOF hangs it
+			transport_->wait_exit( proc::SESSION_GRACE_WAIT );
 			transport_->stop( );
+			transport_->finalize( );
 		}
-
-		state_ = server_state::stopped;
 	}
 
 	auto supervisor::pump( const std::chrono::milliseconds window ) -> void {
+		if ( restart_pending_ ) {
+			if ( std::chrono::steady_clock::now( ) < next_attempt_ ) {
+				return;
+			}
+
+			restart_pending_ = false;
+			attempt_restart( );
+
+			return;
+		}
+
 		if ( transport_ ) {
 			transport_->pump( window );
 		}

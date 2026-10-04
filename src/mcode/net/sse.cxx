@@ -31,25 +31,38 @@ namespace mcode::net {
 	}
 
 	auto sse_parser::feed( const std::string_view chunk ) -> void {
-		buffer_.append( chunk );
+		auto content = chunk;
+
+		// A CRLF split across chunks: the CR ended the line already, so this LF is its pair.
+		if ( pending_cr_terminator_ && !content.empty( ) && content.front( ) == '\n' ) {
+			content.remove_prefix( 1 );
+		}
+
+		pending_cr_terminator_ = false;
+		buffer_.append( content );
 
 		auto position = std::size_t{ 0 };
 
 		while ( position < buffer_.size( ) ) {
-			const auto newline = buffer_.find( '\n', position );
+			const auto terminator = buffer_.find_first_of( "\r\n", position );
 
-			if ( newline == std::string::npos ) {
+			if ( terminator == std::string::npos ) {
 				break;
 			}
 
-			auto line = std::string_view{ buffer_ }.substr( position, newline - position );
+			process_line( std::string_view{ buffer_ }.substr( position, terminator - position ) );
 
-			if ( !line.empty( ) && line.back( ) == '\r' ) {
-				line.remove_suffix( 1 );
+			position = terminator + 1;
+
+			if ( buffer_[ terminator ] == '\r' ) {
+				if ( position < buffer_.size( ) ) {
+					if ( buffer_[ position ] == '\n' ) {
+						++position;
+					}
+				} else {
+					pending_cr_terminator_ = true;
+				}
 			}
-
-			process_line( line );
-			position = newline + 1;
 		}
 
 		if ( position > 0 ) {
@@ -115,18 +128,10 @@ namespace mcode::net {
 	}
 
 	auto sse_parser::finish( ) -> void {
-		if ( !buffer_.empty( ) ) {
-			auto line = std::string_view{ buffer_ };
-
-			if ( !line.empty( ) && line.back( ) == '\r' ) {
-				line.remove_suffix( 1 );
-			}
-
-			process_line( line );
-			buffer_.clear( );
-		}
-
-		dispatch( );
+		// the spec discards an event still open at EOF: only a terminated blank line dispatches.
+		buffer_.clear( );
+		current_ = sse_event{ };
+		saw_data_ = false;
 	}
 
 	auto extract_delta_text( const std::string_view data_payload ) -> result< std::string > {

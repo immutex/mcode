@@ -13,6 +13,7 @@
 #include <unistd.h>
 #endif
 
+#include "mcode/agent/loop.hxx"
 #include "mcode/cli/exec.hxx"
 #include "mcode/core/error.hxx"
 #include "mcode/platform/seams.hxx"
@@ -145,8 +146,7 @@ TEST_CASE( "project scope may only add restrictions", "[config]" ) {
 	auto root = test::scratch_directory( "mcode-config-test" ) / "project";
 
 	write_file( root / "ok.toml", R"(
-[permissions.deny]
-"rm -rf" = "always"
+permissions.deny = ["rm -rf"]
 )" );
 
 	auto accepted = config::load_layer( config::scope::project, root / "ok.toml" );
@@ -184,8 +184,7 @@ TEST_CASE( "user scope may set anything the project may not", "[config]" ) {
 	write_file( root / "config.toml", R"(
 model = "some-model"
 sandbox = "enforce"
-[permissions.allow]
-"ls" = "always"
+permissions.deny = ["ls"]
 )" );
 
 	auto loaded = config::load_layer( config::scope::user, root / "config.toml" );
@@ -193,6 +192,52 @@ sandbox = "enforce"
 	REQUIRE( loaded->values.get_string( "model" ) == std::string{ "some-model" } );
 
 	std::filesystem::remove_all( root.parent_path( ) );
+}
+
+TEST_CASE( "a deeper permissions key is refused, never silently dropped", "[config]" ) {
+	auto root = test::scratch_directory( "mcode-config-deep" ) / "user";
+
+	write_file( root / "config.toml", R"(
+[permissions.deny]
+"rm -rf" = "always"
+)" );
+
+	auto refused = config::load_layer( config::scope::user, root / "config.toml" );
+	CHECK_FALSE( static_cast< bool >( refused ) );
+
+	if ( refused ) {
+		return;
+	}
+
+	CHECK( refused.error( ).msg.find( "permissions.deny" ) != std::string::npos );
+
+	std::filesystem::remove_all( root.parent_path( ) );
+}
+
+TEST_CASE( "a scalar permission rule is refused, never an empty list", "[config]" ) {
+	auto root = test::scratch_directory( "mcode-config-scalar" ) / "user";
+
+	write_file( root / "config.toml", R"(
+permissions.deny = "rm -rf /"
+)" );
+
+	auto refused = config::load_layer( config::scope::user, root / "config.toml" );
+	CHECK_FALSE( static_cast< bool >( refused ) );
+
+	std::filesystem::remove_all( root.parent_path( ) );
+
+	// the accessor itself is fail-closed too, for a value that reached a merged config
+	auto user = toml::parse( "deny = \"rm -rf /\"\n" );
+	REQUIRE( static_cast< bool >( user ) );
+
+	auto layers = std::vector< config::layer >{ };
+	layers.push_back( { .level = config::scope::user, .origin = { },
+		.values = std::move( *user ) } );
+
+	auto merged = config::merged_config::merge( std::move( layers ) );
+	REQUIRE( static_cast< bool >( merged ) );
+
+	CHECK_FALSE( static_cast< bool >( merged->get_string_array( "deny" ) ) );
 }
 
 TEST_CASE( "later scopes override scalars and merge arrays", "[config]" ) {
@@ -210,8 +255,10 @@ deny = ["b"]
 	REQUIRE( static_cast< bool >( project ) );
 
 	auto layers = std::vector< config::layer >{ };
-	layers.push_back( { .level = config::scope::user, .origin = { }, .values = std::move( *user ) } );
-	layers.push_back( { .level = config::scope::project, .origin = { }, .values = std::move( *project ) } );
+	layers.push_back( { .level = config::scope::user, .origin = { },
+		.values = std::move( *user ) } );
+	layers.push_back( { .level = config::scope::project, .origin = { },
+		.values = std::move( *project ) } );
 
 	auto merged = config::merged_config::merge( std::move( layers ) );
 	REQUIRE( static_cast< bool >( merged ) );
@@ -220,12 +267,15 @@ deny = ["b"]
 
 	// lists append rather than replace, so a project file cannot erase the user's deny rules.
 	auto deny = merged->get_string_array( "deny" );
-	REQUIRE( deny.size( ) == 2 );
-	REQUIRE( deny[ 0 ] == "a" );
-	REQUIRE( deny[ 1 ] == "b" );
+	REQUIRE( static_cast< bool >( deny ) );
+	REQUIRE( deny->size( ) == 2 );
+	REQUIRE( ( *deny )[ 0 ] == "a" );
+	REQUIRE( ( *deny )[ 1 ] == "b" );
 
-	REQUIRE( merged->source_of( "model" ) == std::optional< config::scope >{ config::scope::user } );
-	REQUIRE( merged->source_of( "deny" ) == std::optional< config::scope >{ config::scope::project } );
+	REQUIRE( merged->source_of( "model" )
+		== std::optional< config::scope >{ config::scope::user } );
+	REQUIRE( merged->source_of( "deny" )
+		== std::optional< config::scope >{ config::scope::project } );
 }
 
 TEST_CASE( "merge is independent of layer order", "[config]" ) {
@@ -235,8 +285,10 @@ TEST_CASE( "merge is independent of layer order", "[config]" ) {
 	REQUIRE( static_cast< bool >( high ) );
 
 	auto forward = std::vector< config::layer >{ };
-	forward.push_back( { .level = config::scope::user, .origin = { }, .values = std::move( *low ) } );
-	forward.push_back( { .level = config::scope::project, .origin = { }, .values = std::move( *high ) } );
+	forward.push_back( { .level = config::scope::user, .origin = { },
+		.values = std::move( *low ) } );
+	forward.push_back( { .level = config::scope::project, .origin = { },
+		.values = std::move( *high ) } );
 
 	auto merged = config::merged_config::merge( std::move( forward ) );
 	REQUIRE( static_cast< bool >( merged ) );
@@ -263,7 +315,8 @@ TEST_CASE( "the seven platform seams exist and report honestly", "[platform]" ) 
 
 	// apply_sandbox is not called here: on POSIX it confines the calling process.
 	if ( platform::sandbox_capability_level( ) == platform::sandbox_capability::unavailable ) {
-		REQUIRE( platform::sandbox_network_level( ) == platform::sandbox_network_support::unavailable );
+		REQUIRE( platform::sandbox_network_level( )
+			== platform::sandbox_network_support::unavailable );
 	}
 
 	// on POSIX `kill(0, 0)` and `kill(-1, 0)` succeed, so an unvalidated pid reports as alive.
@@ -337,9 +390,11 @@ TEST_CASE( "every exit code is the documented number", "[cli]" ) {
 }
 
 TEST_CASE( "budget exhaustion is not an interruption", "[cli]" ) {
-	REQUIRE( cli::exit_code_for( errc::budget_exhausted ) == cli::exit_code::budget_exhausted );
+	REQUIRE( cli::exit_code_for( errc::budget_exhausted )
+		== cli::exit_code::budget_exhausted );
 	REQUIRE( cli::exit_code_for( errc::cancelled ) == cli::exit_code::interrupted );
-	REQUIRE( cli::exit_code_for( errc::budget_exhausted ) != cli::exit_code_for( errc::cancelled ) );
+	REQUIRE( cli::exit_code_for( errc::budget_exhausted )
+		!= cli::exit_code_for( errc::cancelled ) );
 }
 
 TEST_CASE( "the error-to-exit mapping is total", "[cli]" ) {
@@ -361,6 +416,36 @@ TEST_CASE( "the error-to-exit mapping is total", "[cli]" ) {
 
 		REQUIRE( cli::exit_code_for( code ) != cli::exit_code::success );
 	}
+}
+
+TEST_CASE( "a handoff that is neither a budget stop nor a denial still fails", "[cli]" ) {
+	auto completion = turn_outcome{ };
+	completion.final_state = loop_state::handoff;
+
+	// An unverified turn ends in handoff with no recorded reason: that is a completion.
+	REQUIRE( cli::exit_code_for_run( completion, false, false ) == cli::exit_code::success );
+
+	// A failed model call or a guard trip hands off with the reason recorded.
+	auto gave_up = completion;
+	gave_up.summary_json = R"({"reason":"thrash beyond replan guard"})";
+
+	REQUIRE( cli::exit_code_for_run( gave_up, false, false ) == cli::exit_code::provider_error );
+
+	// The budget and the denial stay more specific than the give-up reason.
+	REQUIRE( cli::exit_code_for_run( gave_up, true, false )
+		== cli::exit_code::budget_exhausted );
+	REQUIRE( cli::exit_code_for_run( gave_up, false, true )
+		== cli::exit_code::permission_denied );
+
+	auto failed = turn_outcome{ };
+	failed.final_state = loop_state::failed;
+
+	REQUIRE( cli::exit_code_for_run( failed, false, false ) == cli::exit_code::provider_error );
+
+	auto done = turn_outcome{ };
+	done.final_state = loop_state::done;
+
+	REQUIRE( cli::exit_code_for_run( done, false, false ) == cli::exit_code::success );
 }
 
 TEST_CASE( "a UTF-8 BOM does not make the file unreadable", "[toml]" ) {
@@ -420,4 +505,25 @@ TEST_CASE( "the float parser accepts and refuses exactly what it says", "[toml]"
 
 	// underflow to zero is refused, not reported as 0.
 	CHECK_FALSE( support::parse_double( "1e-400", value ) );
+}
+
+TEST_CASE( "the float parser rounds once, not per decade", "[toml]" ) {
+	auto value = 0.0;
+
+	REQUIRE( support::parse_double( "3.14", value ) );
+	CHECK( value == 3.14 );
+
+	REQUIRE( support::parse_double( "1e100", value ) );
+	CHECK( value == 1e100 );
+
+	REQUIRE( support::parse_double( "1.7976931348623157e308", value ) );
+	CHECK( value == 1.7976931348623157e308 );
+
+	// DBL_MIN is a normal double even though 10^-324 itself underflows
+	REQUIRE( support::parse_double( "2.2250738585072014e-308", value ) );
+	CHECK( value == 2.2250738585072014e-308 );
+
+	// a zero significand stays zero whatever the exponent
+	REQUIRE( support::parse_double( "0e400", value ) );
+	CHECK( value == 0.0 );
 }

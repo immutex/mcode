@@ -55,27 +55,27 @@ Our resolver is ~80 lines, resolves only inside the extension root, executes no 
 |---|---|---|
 | `mcode.api_version` | integer, monotonic | Neovim `api_level` |
 | `mcode.capabilities` | set of strings for optional features | Neovim `ui_options` |
-| `mcode.tool.register(def) -> id` | `def = {name, description, schema, permission, run(args, ctx) -> result, err}`; name collision = load error | Kong load-time validation |
+| `mcode.tool.register(def) -> id` | `def = {name, description, schema, permission, run(args, ctx) -> result, err}`; name collision = load error. `permission` is the tool's `tool_class` (`read`/`write`/`exec`/`net`/`spawn`) and decides what the call is checked against (`06` §Core tool set); an undeclared or unrecognised value is treated as `exec`, which prompts, never as the auto-approving `read` default | Kong load-time validation |
 | `mcode.tool.unregister(id)` | deferred if mid-dispatch | `nvim_del_user_command` |
 | `mcode.cmd.register(name, fn, opts)` | slash command with optional completion fn | `nvim_create_user_command` |
 | `mcode.on(event, fn, opts?) -> id` | subscribe; `opts.once` only — ordering is registration order | Neovim autocmd, `wezterm.on` |
-| `mcode.off(id)` | unsubscribe **by id** | mpv's closure-identity unregistration is a known wart |
+| `mcode.off(id)` | unsubscribe **by id**, and only for a subscription the caller owns: another extension's id is refused, so a guard's veto cannot be removed by the extension it guards | mpv's closure-identity unregistration is a known wart |
 | `mcode.emit(event, payload)` | fire a custom event; plain data only | `wezterm.emit` |
 | `mcode.defer(fn)` | hop onto the loop thread from a callback | `vim.schedule` (the E5560 fix) |
-| `mcode.timer.at(ms, fn)` / `.every(ms, fn) -> h` | `h:stop()`; host-anchored, survives GC | mpv `add_timeout`; Hammerspoon's GC footgun is the anti-lesson |
+| `mcode.timer.at(ms, fn)` / `.every(ms, fn) -> h` | `h:stop()`; host-anchored, survives GC. Fired by the loop between steps, on the loop's thread and under the per-call budget, so a handler never runs concurrently with a hook or a tool call | mpv `add_timeout`; Hammerspoon's GC footgun is the anti-lesson |
 | `mcode.log.debug/info/warn/error(...)` | auto-prefixed with the extension name | Kong's per-plugin log namespace |
 | `mcode.notify(msg, level)` | user-visible, attributed | `vim.notify` |
 | `mcode.cfg.get(key, default)` | read merged config, validated against the manifest | Kong `schema.lua` |
 | `mcode.session.snapshot() -> table` | plain-data copy (ids, counts, current goal); never live references | Neovim bridge copy semantics |
 | `mcode.session.fork(at_seq, label) -> branch_id` | Branch the event log at a seq (`04` §Session branching). Append-only: records a `branch.created` event, copies nothing | Needed by `/fork`, `--best-of`, and any extension doing speculative work |
 | `mcode.spawn(argv, opts) -> res, err` | subprocess; `res = {exit_code, stdout, stderr}`; async via callback | mpv `utils.subprocess` |
-| `mcode.net.get(url, opts)` / `mcode.net.search(query, opts)` | **Gated** HTTP: egress proxy, SSRF filtering (incl. CGNAT and v4-mapped v6), DNS pinning, per-hop redirect revalidation, byte and timeout caps, untrusted-content delimiting. Checked against the calling extension's manifest permissions. The only network access an extension has (`23` §Network split) | The core of the network split: the subsystem is C++, the tool surface is Lua |
+| `mcode.net.get(url, opts)` / `mcode.net.search(query, opts)` | **Gated** HTTP: egress proxy, SSRF filtering (incl. CGNAT and v4-mapped v6), DNS pinning, per-hop redirect revalidation, byte and timeout caps, untrusted-content delimiting. Checked against the calling extension's manifest permissions: the bare `net` permission **and** a `net:<host>` declaration for the URL's host (`19` §Manifest). The only network access an extension has (`23` §Network split) | The core of the network split: the subsystem is C++, the tool surface is Lua |
 | `mcode.fs.read(path)` / `mcode.fs.write(path, data, opts)` | permission-checked, workspace-scoped | `vim.fs`, mpv `utils` |
 | `mcode.skill.register(def)` | register a skill: `{name, description, body, path?}`; discovery may also find `SKILL.md` on disk (`08`) | `SKILL.md` convention |
 | `mcode.mcp.register(def)` | declare/configure an MCP server: `{name, transport, command/url, tools?}`; tools land in the registry as `mcp__<server>__<tool>` (`07`) | Kong declarative config |
 | `mcode.context.add_instructions(text, opts?)` | contribute to the system prompt; **budgeted and counted** (`19`) | Neovim `before_agent_start`-style rewrite, but budgeted |
 | `mcode.ext.name` | the calling extension's own name, as a string | Needed for self-attribution without a `debug` API that we removed |
-| `mcode.model.register(def)` | declare a provider: endpoint, auth, and the JSON-pointer mapping from its stream to the canonical event model (`15` §Provider seam). **Requires `net`.** The hot path stays in C++; this is data, not a callback | `26` decision 2 |
+| `mcode.model.register(def)` | declare a provider: endpoint, auth, and the JSON-pointer mapping from its stream to the canonical event model (`15` §Provider seam). **Requires `net`**, a `net:<host>` declaration for the endpoint's host, and — when `auth.from = "env"` — a `credential:<NAME>` declaration for `auth.name` (`19` §Manifest). The hot path stays in C++; this is data, not a callback | `26` decision 2 |
 
 ### Quarantine, enforced (added after E8)
 
@@ -155,6 +155,10 @@ The lesson is recorded rather than glossed: **a freeze declared before the featu
 | `mcp` | `mcp.register` | `nil, "permission denied"` |
 | `context` | `context.add_instructions` | `nil, "permission denied"` |
 | `session_fork` | `session.fork` | `nil, "permission denied"` |
+| `net:<host>` | the hosts `net.get`, `net.search` and a `model.register` endpoint may address | that host is refused |
+| `credential:<NAME>` | the environment variables a `model.register` `auth` block may name | that name is refused |
+
+**`net:<host>` and `credential:<NAME>` are declarations, not permissions** (`19` §Manifest): they narrow what the bare `net` permission already gates, and they are checked at call time against the calling extension. `net:<host>` requires the bare `net` in the same manifest, matches the URL's host exactly (case-insensitively, no wildcards), and covers `net.get`, `net.search`, and a provider endpoint — one mechanism for every outbound host an extension can name.
 
 **A denied call is environmental failure, not a contract violation** — it returns `nil, err`, matching `fs.read` on a missing file. A permission check that throws would turn a policy decision into an error path the extension cannot handle gracefully.
 

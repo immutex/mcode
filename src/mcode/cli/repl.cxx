@@ -16,21 +16,8 @@ namespace mcode::cli {
 			return cli::exit_code_for( outcome.error( ).code );
 		}
 
-		auto code = cli::exit_code::success;
-
-		if ( outcome->final_state == mcode::loop_state::failed ) {
-			code = cli::exit_code::provider_error;
-		} else if ( outcome->final_state == mcode::loop_state::handoff ) {
-			// A budget handoff is the more specific cause; a denial is checked
-			// after it, matching run_exec's mapping.
-			if ( loop_->budget( ).exhausted( ) ) {
-				code = cli::exit_code::budget_exhausted;
-			} else if ( loop_->permission_denied( ) ) {
-				code = cli::exit_code::permission_denied;
-			}
-		}
-
-		return code;
+		return exit_code_for_run( *outcome, loop_->budget( ).exhausted( ),
+			loop_->permission_denied( ) );
 	}
 
 	auto run_session( const std::vector< std::string >& arguments,

@@ -239,6 +239,8 @@ namespace mcode {
 					sandbox_state->job.get( ), sandbox_state->token.get( ) );
 
 				if ( !raw ) {
+					platform::sandbox_windows_close_pipes( *raw_pipes );
+
 					return std::unexpected( raw.error( ) );
 				}
 
@@ -254,6 +256,9 @@ namespace mcode {
 				raw_pipes->parent_stdin = nullptr;
 				raw_pipes->parent_stdout = nullptr;
 				raw_pipes->parent_stderr = nullptr;
+
+				// the child owns its ends now; the parent's copies would hide EOF forever
+				platform::sandbox_windows_close_pipes( *raw_pipes );
 			} else {
 				child.emplace( context, options.executable, options.args,
 					process::process_stdio{ in, out.pipe, err.pipe }, environment );

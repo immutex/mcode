@@ -130,20 +130,28 @@ namespace mcode::cli {
 				"itself once the context window is " + std::to_string( trigger ) + "% full";
 		}
 
-		[[nodiscard]] auto export_text( const std::vector< mcode::model::message >& history )
-			-> std::string {
+		[[nodiscard]] auto export_text( const mcode::agent_loop& loop,
+			const std::string_view argument ) -> std::string {
 			auto error_code = std::error_code{ };
-			const auto directory = std::filesystem::current_path( error_code );
+			const auto root = loop.workspace_root( );
+			const auto directory = root.empty( )
+				? std::filesystem::current_path( error_code )
+				: std::filesystem::path{ std::string{ root } };
 
 			if ( error_code ) {
 				return "export failed: cannot read the working directory: " +
 					error_code.message( );
 			}
 
-			const auto name = std::string{ EXPORT_FILE_PREFIX } +
-				std::to_string( mcode::support::epoch_milliseconds( ) ) +
-				std::string{ EXPORT_FILE_SUFFIX };
-			const auto path = directory / name;
+			auto path = std::filesystem::path{ };
+
+			if ( argument.empty( ) ) {
+				path = directory / ( std::string{ EXPORT_FILE_PREFIX } +
+					std::to_string( mcode::support::epoch_milliseconds( ) ) +
+					std::string{ EXPORT_FILE_SUFFIX } );
+			} else {
+				path = directory / std::filesystem::path{ std::string{ argument } };
+			}
 
 			auto out = std::ofstream{ path, std::ios::binary | std::ios::trunc };
 
@@ -151,14 +159,14 @@ namespace mcode::cli {
 				return "export failed: cannot write " + path.string( );
 			}
 
-			out << render_transcript_markdown( history );
+			out << render_transcript_markdown( loop.history( ) );
 			out.flush( );
 
 			if ( !out ) {
 				return "export failed: writing " + path.string( ) + " did not complete";
 			}
 
-			return "exported " + std::to_string( history.size( ) ) + " messages to " +
+			return "exported " + std::to_string( loop.history( ).size( ) ) + " messages to " +
 				path.string( );
 		}
 
@@ -172,7 +180,8 @@ namespace mcode::cli {
 			{ "model", "Show the model this session runs" },
 			{ "tools", "List the tools the agent can call" },
 			{ "compact", "Report how the history is compacted (no on-demand compaction)" },
-			{ "export", "Write the session transcript to a Markdown file" },
+			{ "export", "Write the session transcript to a Markdown file, named by an argument "
+				"or generated" },
 			{ "mention", "Pick a workspace file to mention as @path" },
 			{ "exit", "End the session" },
 		};
@@ -269,7 +278,8 @@ namespace mcode::cli {
 			return !folded_prefix( entry ) && contains( entry );
 		} );
 		collect( [ & ]( const std::string& entry ) {
-			return !folded_prefix( entry ) && !contains( entry ) && folded_subsequence( entry, query );
+			return !folded_prefix( entry ) && !contains( entry ) &&
+				folded_subsequence( entry, query );
 		} );
 
 		return out;
@@ -445,7 +455,7 @@ namespace mcode::cli {
 		} else if ( match.name == "compact" ) {
 			result.output = compact_text( );
 		} else if ( match.name == "export" ) {
-			result.output = export_text( loop.history( ) );
+			result.output = export_text( loop, match.arguments );
 		} else if ( match.name == "mention" ) {
 			result.open_mention = true;
 		} else {

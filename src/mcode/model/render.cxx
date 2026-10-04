@@ -37,7 +37,8 @@ namespace mcode::model {
 						auto& function = entry.members[ "function" ];
 						function = json::node::make_object( );
 						function.members[ "name" ] = json::node::make_string( piece.tool_name );
-						function.members[ "arguments" ] = json::node::make_string( piece.args_json );
+						function.members[ "arguments" ] =
+							json::node::make_string( piece.args_json );
 
 						calls.items.push_back( std::move( entry ) );
 						break;
@@ -46,11 +47,13 @@ namespace mcode::model {
 					case block_kind::tool_result: {
 						auto entry = json::node::make_object( );
 						entry.members[ "role" ] = json::node::make_string( fields.role_tool );
-						entry.members[ "tool_call_id" ] = json::node::make_string( piece.tool_call_id );
+						entry.members[ "tool_call_id" ] =
+							json::node::make_string( piece.tool_call_id );
 						entry.members[ "content" ] = json::node::make_string( piece.result_json );
 
 						out.members[ "role" ] = json::node::make_string( fields.role_tool );
-						out.members[ "tool_call_id" ] = json::node::make_string( piece.tool_call_id );
+						out.members[ "tool_call_id" ] =
+							json::node::make_string( piece.tool_call_id );
 						out.members[ "content" ] = json::node::make_string( piece.result_json );
 
 						return out;
@@ -68,10 +71,13 @@ namespace mcode::model {
 		}
 
 		// sorted by name: the array's byte order is part of the cache prefix.
-		[[nodiscard]] auto render_tools( const std::vector< tool_spec >& tools ) -> result< json::node > {
+		[[nodiscard]] auto render_tools( const std::vector< tool_spec >& tools )
+			-> result< json::node > {
 			auto sorted = tools;
 			std::sort( sorted.begin( ), sorted.end( ),
-				[]( const tool_spec& left, const tool_spec& right ) { return left.name < right.name; } );
+				[]( const tool_spec& left, const tool_spec& right ) {
+					return left.name < right.name;
+				} );
 
 			auto out = json::node::make_array( );
 
@@ -80,7 +86,8 @@ namespace mcode::model {
 
 				if ( !schema ) {
 					return std::unexpected( fail( errc::json,
-						"tool '" + tool.name + "' has a schema that is not JSON: " + schema.error( ).msg ) );
+						"tool '" + tool.name + "' has a schema that is not JSON: " +
+						schema.error( ).msg ) );
 				}
 
 				auto entry = json::node::make_object( );
@@ -144,7 +151,8 @@ namespace mcode::model {
 			for ( const auto offset : applied ) {
 				if ( offset > body.size( ) ) {
 					return std::unexpected( fail( errc::protocol,
-						"cache breakpoint " + std::to_string( offset ) + " is past the rendered body" ) );
+						"cache breakpoint " + std::to_string( offset ) +
+						" is past the rendered body" ) );
 				}
 
 				body.insert( offset, CACHE_MARKER );
@@ -219,7 +227,8 @@ namespace mcode::model {
 
 			for ( auto& [ key, value ] : body.members ) {
 				if ( !built.set_node( key, std::move( value ) ) ) {
-					return std::unexpected( fail( errc::json, "failed to build the request body" ) );
+					return std::unexpected( fail( errc::json,
+						"failed to build the request body" ) );
 				}
 			}
 
@@ -237,8 +246,8 @@ namespace mcode::model {
 	auto render_request( const stream_request& request ) -> result< std::string > {
 		if ( !is_renderable_shape( request.provider ) ) {
 			return std::unexpected( fail( errc::unsupported,
-				"provider '" + request.provider.name +
-				"' uses a request shape this build cannot render; only the chat-completions shape is supported" ) );
+				"provider '" + request.provider.name + "' uses a request shape this build "
+				"cannot render; only the chat-completions shape is supported" ) );
 		}
 
 		return render_chat_completions( request.request, request.provider.request );
@@ -254,7 +263,8 @@ namespace mcode::model {
 
 		// The markers are the caller's: the assembler fills them, because a byte offset into
 		// the rendered body is not something a caller can compute from the messages alone.
-		if ( request.cache.mode == cache_mode::explicit_markers && !request.cache.breakpoints.empty( ) ) {
+		if ( request.cache.mode == cache_mode::explicit_markers &&
+			!request.cache.breakpoints.empty( ) ) {
 			return apply_breakpoints( std::move( *text ), request.cache.breakpoints );
 		}
 

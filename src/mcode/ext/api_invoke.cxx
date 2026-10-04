@@ -47,6 +47,9 @@ namespace mcode::ext {
 			return std::unexpected( fail( errc::lua_error, "the host has no thread" ) );
 		}
 
+		// budgets the call: a model-invoked extension tool must not hang the session.
+		auto budget = lua_host::budget_scope{ host_ };
+
 		const auto depth = lua_gettop( state );
 
 		lua_getref( state, tool->function_reference );

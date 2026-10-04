@@ -111,15 +111,32 @@ TEST_CASE( "a bare field with no colon is tolerated", "[sse]" ) {
 	CHECK( captured.events[ 0 ].data == "\nvalue" );
 }
 
-TEST_CASE( "finish flushes an unterminated final event", "[sse]" ) {
+TEST_CASE( "a lone CR terminates a line", "[sse]" ) {
+	auto captured = harness{ };
+	captured.feed( "data: one\r\rdata: two\r\r" );
+
+	REQUIRE( captured.events.size( ) == 2 );
+	CHECK( captured.events[ 0 ].data == "one" );
+	CHECK( captured.events[ 1 ].data == "two" );
+}
+
+TEST_CASE( "a CRLF split across chunks is one terminator", "[sse]" ) {
+	auto captured = harness{ };
+	captured.feed( "data: split\r" );
+	captured.feed( "\n\r\n" );
+
+	REQUIRE( captured.events.size( ) == 1 );
+	CHECK( captured.events[ 0 ].data == "split" );
+}
+
+TEST_CASE( "an event still open at EOF is discarded", "[sse]" ) {
 	auto captured = harness{ };
 	captured.feed( "data: last one" );
 	CHECK( captured.events.empty( ) );
 
 	captured.parser.finish( );
 
-	REQUIRE( captured.events.size( ) == 1 );
-	CHECK( captured.events[ 0 ].data == "last one" );
+	CHECK( captured.events.empty( ) );
 }
 
 TEST_CASE( "only one leading space after the colon is stripped", "[sse]" ) {

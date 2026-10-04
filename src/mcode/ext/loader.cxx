@@ -54,6 +54,15 @@ namespace mcode::ext {
 		return found->second->invoke( tool_name, arguments_json );
 	}
 
+	// every loaded surface, on the caller's thread: timers never fire concurrently with a hook.
+	auto load_result::pump_timers( ) -> void {
+		for ( auto& extension : extensions ) {
+			if ( extension.surface != nullptr ) {
+				extension.surface->pump_timers( );
+			}
+		}
+	}
+
 	namespace {
 
 		// runs before the VM is destroyed: the closures it registered live in that VM.

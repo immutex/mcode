@@ -109,7 +109,8 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	const auto base_url = config->get_string( "model.base_url" );
 
 	if ( provider_name.empty( ) ) {
-		std::fprintf( stderr, "mcode: no provider configured; set [model] provider in config.toml\n" );
+		std::fprintf( stderr,
+			"mcode: no provider configured; set [model] provider in config.toml\n" );
 		stream.emit_run_end( mcode::cli::exit_code::usage_error, "no provider configured" );
 
 		return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
@@ -134,7 +135,8 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	auto skills_options = mcode::skills::session_context_options{ };
 	skills_options.workspace = workspace_path;
 
-	const auto data_directory = mcode::platform::app_data_path( mcode::platform::data_kind::config );
+	const auto data_directory = mcode::platform::app_data_path(
+		mcode::platform::data_kind::config );
 	const auto bundled_directory = mcode::platform::executable_directory( );
 
 	if ( data_directory ) {
@@ -318,9 +320,19 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		}
 
 		// Read from the merged config: reading a raw layer would bypass the never-widen rule.
-		engine.add_config_rules( mcode::perm::rule_scope::user,
-			config->get_string_array( "permissions.deny" ),
-			config->get_string_array( "permissions.ask" ) );
+		auto deny_rules = config->get_string_array( "permissions.deny" );
+		auto ask_rules = config->get_string_array( "permissions.ask" );
+
+		if ( !deny_rules || !ask_rules ) {
+			const auto problem = !deny_rules ? deny_rules.error( ) : ask_rules.error( );
+
+			std::fprintf( stderr, "mcode: %s\n", problem.msg.c_str( ) );
+			stream.emit_run_end( mcode::cli::exit_code::usage_error, problem.msg );
+
+			return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
+		}
+
+		engine.add_config_rules( mcode::perm::rule_scope::user, *deny_rules, *ask_rules );
 
 		if ( const auto loaded = engine.load_store( ); !loaded ) {
 			std::fprintf( stderr, "mcode: %s\n", loaded.error( ).msg.c_str( ) );
@@ -335,7 +347,8 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		}
 	}
 
-	auto run_id = std::to_string( static_cast< long long >( mcode::support::epoch_milliseconds( ) ) );
+	auto run_id = std::to_string(
+		static_cast< long long >( mcode::support::epoch_milliseconds( ) ) );
 
 	auto tools_context = mcode::tools::tool_context{ };
 	tools_context.space = &*space;
@@ -392,6 +405,9 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	dependencies.instruction_chain = skills_context.chain.text;
 	dependencies.skill_index = skills_context.skill_index;
 
+	// the loop drives the timers: one pump per step, on the thread the VM belongs to.
+	dependencies.pump_timers = [ &extensions ]( ) { extensions.pump_timers( ); };
+
 	// Must outlive the loop: the supervisors own the child processes the loop dispatches into.
 	auto mcp_servers = mcode::mcp::server_set{ };
 
@@ -432,25 +448,15 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		return mcode::cli::to_int( mcode::cli::exit_code_for( outcome.error( ).code ) );
 	}
 
-	auto code = mcode::cli::exit_code::success;
-
-	if ( outcome->final_state == mcode::loop_state::failed ) {
-		code = mcode::cli::exit_code::provider_error;
-	} else if ( outcome->final_state == mcode::loop_state::handoff ) {
-		// Budget before denial: a run that ran out of steps and was denied is a budget exit.
-		if ( loop.budget( ).exhausted( ) ) {
-			code = mcode::cli::exit_code::budget_exhausted;
-		} else if ( loop.permission_denied( ) ) {
-			code = mcode::cli::exit_code::permission_denied;
-		}
-	}
+	const auto code = mcode::cli::exit_code_for_run( *outcome, loop.budget( ).exhausted( ),
+		loop.permission_denied( ) );
 
 	if ( parsed->verbose ) {
 		const auto usage = client.accumulated_usage( );
 		const auto cost = mcode::model::compute_cost( *caps, usage );
 
 		std::fprintf( stderr, "mcode: %d steps, %lld in, %lld out, $%.4f\n",
-			static_cast< int >( outcome->model_calls ),
+			static_cast< int >( outcome->steps ),
 			static_cast< long long >( usage.input ), static_cast< long long >( usage.output ),
 			cost );
 	}

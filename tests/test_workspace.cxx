@@ -114,6 +114,65 @@ TEST_CASE( "containment is component-wise, not a string prefix", "[workspace]" )
 	CHECK_FALSE( opened->resolve( sibling.string( ) ) );
 }
 
+TEST_CASE( "a symlink inside the root that points outside is refused", "[workspace]" ) {
+	// fail-closed containment: canonicalize resolves the link, so the target is what is compared
+	const auto root = test::scratch_directory( "mcode-link-test" );
+	const auto outside = test::scratch_directory( "mcode-link-outside" );
+
+	{
+		auto out = std::ofstream{ outside / "secret.txt" };
+		out << "outside\n";
+	}
+
+	auto error = std::error_code{ };
+	std::filesystem::create_directory_symlink( outside, root / "link", error );
+
+	if ( error ) {
+		WARN( "skipped: cannot create a symlink here (" << error.message( ) << ")" );
+		std::filesystem::remove_all( root );
+		std::filesystem::remove_all( outside );
+
+		return;
+	}
+
+	auto file_error = std::error_code{ };
+	std::filesystem::create_symlink( outside / "secret.txt", root / "file-link", file_error );
+
+	if ( file_error ) {
+		WARN( "the file symlink could not be created (" << file_error.message( ) << ")" );
+	}
+
+	auto opened = workspace::open( root );
+	REQUIRE( static_cast< bool >( opened ) );
+
+	if ( !opened ) {
+		FAIL( opened.error( ).msg );
+	}
+
+	CHECK_FALSE( opened->contains( root / "link" ) );
+
+	const auto through_directory = opened->resolve( "link/secret.txt" );
+	CHECK_FALSE( static_cast< bool >( through_directory ) );
+
+	const auto read = opened->read_file( "link/secret.txt" );
+	CHECK_FALSE( static_cast< bool >( read ) );
+
+	const auto write = opened->write_file( "link/planted.txt", "x", mcode::write_mode::create );
+	CHECK_FALSE( static_cast< bool >( write ) );
+	CHECK_FALSE( std::filesystem::exists( outside / "planted.txt" ) );
+
+	if ( !file_error ) {
+		const auto through_file = opened->resolve( "file-link" );
+		CHECK_FALSE( static_cast< bool >( through_file ) );
+
+		const auto linked_read = opened->read_file( "file-link" );
+		CHECK_FALSE( static_cast< bool >( linked_read ) );
+	}
+
+	std::filesystem::remove_all( root );
+	std::filesystem::remove_all( outside );
+}
+
 TEST_CASE( "glob matches with *, ?, and **", "[workspace]" ) {
 	const auto directory = temp_directory{ };
 	std::filesystem::create_directories( directory.path / "src" / "deep" );

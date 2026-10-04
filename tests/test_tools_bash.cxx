@@ -114,10 +114,18 @@ TEST_CASE( "bash refuses compound commands and exec runners", "[tools][bash]" ) 
 		!= std::string::npos );
 }
 
+// a shell would collapse the two spaces, so exact stdout proves argv was executed, not the raw text
+#if defined( _WIN32 )
+inline constexpr auto ARGV_COMMAND = R"({"command":"findstr /c:\"a  b\" spacing.txt"})";
+#else
+inline constexpr auto ARGV_COMMAND = R"({"command":"grep -x \"a  b\" spacing.txt"})";
+#endif
+
 TEST_CASE( "bash executes the parsed argv, not the raw string", "[tools][bash]" ) {
 	auto setup = fixture{ true };
+	setup.write_raw( "spacing.txt", "a  b\na b\n" );
 
-	const auto out = run_tool( handle_bash, NO_MATCH_COMMAND, setup );
-	CHECK( out.find( "\"ok\":true" ) != std::string::npos );
-	CHECK( out.find( "\"exit_code\":1" ) != std::string::npos );
+	const auto out = run_tool( handle_bash, ARGV_COMMAND, setup );
+	CHECK( out.find( "\"exit_code\":0" ) != std::string::npos );
+	CHECK( out.find( "\"stdout\":\"a  b\\n\"" ) != std::string::npos );
 }

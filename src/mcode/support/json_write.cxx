@@ -4,6 +4,7 @@
 
 #include <yyjson.h>
 
+#include <cstddef>
 #include <limits>
 #include <string>
 #include <utility>
@@ -13,7 +14,15 @@ namespace mcode::json {
 
 	namespace {
 
-		auto from_val( yyjson_val* source ) -> result< node > {
+		// bounds from_val's recursion; yyjson's own reader depth limit is disabled by default
+		inline constexpr std::size_t MAX_JSON_DEPTH = 256;
+
+		auto from_val( yyjson_val* source, const std::size_t depth ) -> result< node > {
+			if ( depth > MAX_JSON_DEPTH ) {
+				return std::unexpected( fail( errc::json,
+					"JSON nesting exceeds the depth bound" ) );
+			}
+
 			if ( source == nullptr ) {
 				return std::unexpected( fail( errc::json, "null value" ) );
 			}
@@ -43,7 +52,8 @@ namespace mcode::json {
 			if ( yyjson_is_uint( source ) ) {
 				const auto wide = yyjson_get_uint( source );
 
-				if ( wide > static_cast< std::uint64_t >( std::numeric_limits< std::int64_t >::max( ) ) ) {
+				if ( wide > static_cast< std::uint64_t >(
+					std::numeric_limits< std::int64_t >::max( ) ) ) {
 					return std::unexpected( fail( errc::json,
 						"integer is too large for a 64-bit signed integer" ) );
 				}
@@ -76,7 +86,7 @@ namespace mcode::json {
 				yyjson_val* item = nullptr;
 
 				yyjson_arr_foreach( source, index, count, item ) {
-					auto converted = from_val( item );
+					auto converted = from_val( item, depth + 1 );
 
 					if ( !converted ) {
 						return std::unexpected( converted.error( ) );
@@ -102,13 +112,14 @@ namespace mcode::json {
 						return std::unexpected( fail( errc::json, "object key is not a string" ) );
 					}
 
-					auto converted = from_val( yyjson_obj_iter_get_val( name ) );
+					auto converted = from_val( yyjson_obj_iter_get_val( name ), depth + 1 );
 
 					if ( !converted ) {
 						return std::unexpected( converted.error( ) );
 					}
 
-					out.members.emplace( std::string{ yyjson_get_str( name ), yyjson_get_len( name ) },
+					out.members.emplace(
+						std::string{ yyjson_get_str( name ), yyjson_get_len( name ) },
 						std::move( *converted ) );
 				}
 
@@ -264,7 +275,8 @@ namespace mcode::json {
 		}
 
 		if ( root_.type != node::kind::array ) {
-			return std::unexpected( fail( errc::json, "append on a document whose root is not an array" ) );
+			return std::unexpected( fail( errc::json,
+				"append on a document whose root is not an array" ) );
 		}
 
 		root_.items.push_back( std::move( value ) );
@@ -314,7 +326,7 @@ namespace mcode::json {
 			return std::unexpected( parsed.error( ) );
 		}
 
-		auto converted = from_val( yyjson_doc_get_root( parsed->doc_ ) );
+		auto converted = from_val( yyjson_doc_get_root( parsed->doc_ ), 0 );
 
 		if ( !converted ) {
 			return std::unexpected( converted.error( ) );
@@ -362,7 +374,7 @@ namespace mcode::json {
 			return std::unexpected( fail( errc::json, "parsed document has no root" ) );
 		}
 
-		return from_val( root );
+		return from_val( root, 0 );
 	}
 
 	auto document::size( ) const noexcept -> std::size_t {
@@ -396,12 +408,13 @@ namespace mcode::json {
 			yyjson_mut_doc_set_root( doc.get( ), root );
 
 			auto write_error = yyjson_write_err{ };
-			const auto raw = detail::owned_cstr{
-				yyjson_mut_write_opts( doc.get( ), detail::write_flags( pretty ), nullptr, nullptr, &write_error ) };
+			const auto raw = detail::owned_cstr{ yyjson_mut_write_opts(
+				doc.get( ), detail::write_flags( pretty ), nullptr, nullptr, &write_error ) };
 
 			if ( !raw ) {
 				return std::unexpected(
-					fail( errc::json, write_error.msg != nullptr ? write_error.msg : "write error" ) );
+					fail( errc::json,
+						write_error.msg != nullptr ? write_error.msg : "write error" ) );
 			}
 
 			return std::string{ raw.get( ) };
@@ -413,7 +426,8 @@ namespace mcode::json {
 
 		auto write_error = yyjson_write_err{ };
 		const auto raw =
-			detail::owned_cstr{ yyjson_write_opts( doc_, detail::write_flags( pretty ), nullptr, nullptr, &write_error ) };
+			detail::owned_cstr{ yyjson_write_opts(
+				doc_, detail::write_flags( pretty ), nullptr, nullptr, &write_error ) };
 
 		if ( !raw ) {
 			return std::unexpected(
@@ -425,8 +439,8 @@ namespace mcode::json {
 
 	auto canonicalize( const std::string_view text ) -> result< std::string > {
 		yyjson_read_err read_error{ };
-		yyjson_doc* raw = yyjson_read_opts( const_cast< char* >( text.data( ) ), text.size( ), YYJSON_READ_NOFLAG,
-			nullptr, &read_error );
+		yyjson_doc* raw = yyjson_read_opts( const_cast< char* >( text.data( ) ), text.size( ),
+			YYJSON_READ_NOFLAG, nullptr, &read_error );
 
 		if ( raw == nullptr ) {
 			auto message = std::string{ "yyjson: " };
@@ -438,7 +452,7 @@ namespace mcode::json {
 		auto owned = std::unique_ptr< yyjson_doc, void ( * )( yyjson_doc* ) >(
 			raw, yyjson_doc_free );
 
-		auto converted = from_val( yyjson_doc_get_root( owned.get( ) ) );
+		auto converted = from_val( yyjson_doc_get_root( owned.get( ) ), 0 );
 
 		if ( !converted ) {
 			return std::unexpected( converted.error( ) );
@@ -458,8 +472,10 @@ namespace mcode::json {
 
 		const auto prefix = std::string_view{ R"({"value":)" };
 
-		if ( dumped->size( ) < prefix.size( ) + 1 || dumped->substr( 0, prefix.size( ) ) != prefix ) {
-			return std::unexpected( fail( errc::json, "canonicalize produced an unexpected shape" ) );
+		if ( dumped->size( ) < prefix.size( ) + 1 ||
+			dumped->substr( 0, prefix.size( ) ) != prefix ) {
+			return std::unexpected( fail( errc::json,
+				"canonicalize produced an unexpected shape" ) );
 		}
 
 		return dumped->substr( prefix.size( ), dumped->size( ) - prefix.size( ) - 1 );

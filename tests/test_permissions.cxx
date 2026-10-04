@@ -112,12 +112,47 @@ namespace permission_test {
 		CHECK( setup.write( target ) == perm::permission_decision::allow );
 
 		// writes outside the workspace are never auto-persisted.
-		const auto layer = setup.store.load( );
-		REQUIRE( layer.has_value( ) );
+		CHECK_FALSE( std::filesystem::exists( setup.store.file( ) ) );
 
-		if ( layer->has_value( ) ) {
-			CHECK( ( **layer ).paths.find( target ) == ( **layer ).paths.end( ) );
-		}
+		// the answer is a session allow, so the same request does not prompt again.
+		CHECK( setup.write( target ) == perm::permission_decision::allow );
+		CHECK( setup.approval.asks( ) == 1 );
+	}
+
+	TEST_CASE( "a hand-written paths entry is enforced, not just re-rendered",
+		"[perm][store]" ) {
+		auto setup = rig{ };
+
+		const auto outside = test::scratch_directory( "mcode-perm-paths" );
+		const auto notes = ( outside / "notes" / "a.txt" ).generic_string( );
+		const auto secrets = ( outside / "secrets" / "key.txt" ).generic_string( );
+
+		const auto file = test::scratch_directory( "mcode-perm-paths-store" ) / "permissions.json";
+		write_store_file( file, "{\"version\":1,\"paths\":{\"" + notes + "\":\"allow\",\""
+			+ secrets + "\":\"deny\"}}" );
+
+		auto store = perm::remember_store{ file };
+		auto engine = perm::permission_engine{ setup.space, &store };
+		engine.set_approval_source( &setup.approval );
+
+		REQUIRE( engine.load_store( ).has_value( ) );
+
+		auto allowed = perm::permission_request{ };
+		allowed.tool_name = "read";
+		allowed.klass = tool_class::read;
+		allowed.resource = notes;
+
+		// without the store entry this read is outside the workspace and would prompt.
+		CHECK( engine.decide( allowed ) == perm::permission_decision::allow );
+		CHECK( setup.approval.asks( ) == 0 );
+
+		auto denied = perm::permission_request{ };
+		denied.tool_name = "read";
+		denied.klass = tool_class::read;
+		denied.resource = secrets;
+
+		CHECK( engine.decide( denied ) == perm::permission_decision::deny );
+		CHECK( setup.approval.asks( ) == 0 );
 	}
 
 	TEST_CASE( "headless fails closed and the model is told why", "[perm][headless]" ) {
@@ -187,12 +222,36 @@ namespace permission_test {
 		CHECK( setup.exec( "terraform destroy" ) == perm::permission_decision::deny );
 		CHECK( setup.approval.asks( ) == 1 );
 
-		const auto layer = setup.store.load( );
-		REQUIRE( layer.has_value( ) );
+		// the deny is session-scoped, so nothing reached the store file.
+		CHECK_FALSE( std::filesystem::exists( setup.store.file( ) ) );
+	}
 
-		if ( layer->has_value( ) ) {
-			CHECK( ( **layer ).exec.find( "terraform destroy" ) == ( **layer ).exec.end( ) );
-		}
+	TEST_CASE( "an engine with no approval source fails closed", "[perm][headless]" ) {
+		auto setup = rig{ };
+
+		// a fresh engine over the same space, with no source wired at all.
+		auto engine = perm::permission_engine{ setup.space, &setup.store };
+
+		auto request = perm::permission_request{ };
+		request.tool_name = "bash";
+		request.klass = tool_class::exec;
+		request.resource = "git status";
+
+		CHECK( engine.decide( request ) == perm::permission_decision::deny );
+		CHECK( engine.last_verdict( ).reason.find( "headless" ) != std::string::npos );
+	}
+
+	TEST_CASE( "an approval source that cannot answer fails closed", "[perm][prompt]" ) {
+		auto setup = rig{ };
+
+		// the scripted source returns `refused` once its queue is empty.
+		CHECK( setup.exec( "git status" ) == perm::permission_decision::deny );
+		CHECK( setup.approval.asks( ) == 1 );
+		CHECK( setup.engine.last_verdict( ).reason.find( "failing closed" ) != std::string::npos );
+
+		setup.approval.queue( perm::approval_outcome::detail );
+		CHECK( setup.exec( "git status" ) == perm::permission_decision::deny );
+		CHECK( setup.engine.last_verdict( ).reason.find( "failing closed" ) != std::string::npos );
 	}
 
 	TEST_CASE( "exit-5 plumbing: the loop's flag clears on a later success",

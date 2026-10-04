@@ -83,8 +83,7 @@ namespace mcode::ext {
 			std::function< result< fork_result >( std::uint64_t, const std::string& ) >*
 				session_forker = nullptr;
 
-			// an empty list permits nothing: fail-closed rather than absent.
-			std::vector< std::string > net_hosts = { };
+			// the declared hosts and credentials come from the manifest, not from here.
 			mcode::net::http_client* http_client = nullptr;
 			const std::function< search_result( const std::string& ) >* web_searcher
 				= nullptr;
@@ -165,9 +164,8 @@ namespace mcode::ext {
 			return timers_.get( );
 		}
 
-		[[nodiscard]] auto net_hosts( ) const noexcept -> const std::vector< std::string >& {
-			return net_hosts_;
-		}
+		// fires every due timer of this extension; the host drives it once per loop step.
+		auto pump_timers( ) -> void;
 
 		[[nodiscard]] auto notifier( ) const noexcept
 			-> const std::function< void( const std::string&, const std::string&,
@@ -228,8 +226,6 @@ namespace mcode::ext {
 
 		std::unique_ptr< timer_registry > timers_;
 
-		std::vector< std::string > net_hosts_;
-
 		mcode::net::http_client* http_client_ = nullptr;
 		std::unique_ptr< std::function< search_result( const std::string& ) > >
 			web_searcher_;
@@ -242,7 +238,8 @@ namespace mcode::ext {
 		std::unique_ptr< std::function< result< std::uint64_t >( const mcode::skills::skill_entry&,
 			std::string_view ) > > skill_sink_;
 
-		auto pump_timers_once( ) -> void;
+		auto fire_timer( int function_reference ) -> void;
+		auto release_timer( int function_reference ) -> void;
 
 		std::unique_ptr< tools::tool_context > file_context_;
 

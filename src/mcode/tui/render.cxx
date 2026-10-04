@@ -169,6 +169,7 @@ namespace mcode::tui {
 
 	auto render_coordinator::invalidate( ) -> void {
 		previous_.clear( );
+		repaint_all_ = true;
 	}
 
 	auto render_coordinator::reserve( ) const -> std::string {
@@ -407,7 +408,8 @@ namespace mcode::tui {
 
 		auto emitter = ansi_emitter{ caps_ };
 		out += scroll;
-		out += emitter.emit( previous_, current_ );
+		out += emitter.emit( previous_, current_, repaint_all_ );
+		repaint_all_ = false;
 
 		// The caret belongs under the typed text, not where the last run ended.
 		// While scrolled the bottom row is the history indicator rather than
@@ -451,7 +453,7 @@ namespace mcode::tui {
 			rows += state.palette.matches.size( );
 		}
 
-		rows += state.thinking_rows.size( );
+		rows += std::min( state.thinking_rows.size( ), LIVE_THOUGHT_MAX_ROWS );
 		rows += state.streaming_rows.size( );
 
 		rows += state.tools.size( );
@@ -494,10 +496,7 @@ namespace mcode::tui {
 
 		// Bottom-up: prompt, palette, status line, then live content.
 		{
-			// The completion's remainder is spliced in at the caret as dim
-			// ghost text: no second row, no caret move. It tracks the
-			// highlighted row, and only when that row's name extends the query
-			// the user has typed.
+			// the completion's remainder is ghost text, spliced only at the end of the line
 			auto ghost = std::string{ };
 
 			if ( state.palette.open && !state.palette.query.empty( ) &&
@@ -517,7 +516,7 @@ namespace mcode::tui {
 			line.push_back( { std::string{ PROMPT_PREFIX }, token::accent } );
 			line.push_back( { state.input_line.substr( 0, split ), token::text } );
 
-			if ( !ghost.empty( ) ) {
+			if ( !ghost.empty( ) && split == state.input_line.size( ) ) {
 				line.push_back( { ghost, token::muted, token::none, false, false, true } );
 			}
 
@@ -581,17 +580,19 @@ namespace mcode::tui {
 			}
 		}
 
-		// Newest row first, so a block taller than the region loses its earliest
-		// rows and keeps the text the user is watching.
+		// newest row first, capped at `max_rows`: the reasoning cannot push the answer out
 		const auto write_block = [ & ]( const std::vector< styled_line >& rows,
-			const std::string_view gutter, const token color ) {
-			for ( auto index = rows.size( ); index > 0; --index ) {
+			const std::size_t max_rows, const std::string_view gutter, const token color ) {
+			const auto first = rows.size( ) - std::min( rows.size( ), max_rows );
+
+			for ( auto index = rows.size( ); index > first; --index ) {
 				write_up( transcript::prefix_row( rows[ index - 1 ], gutter, color ) );
 			}
 		};
 
-		write_block( state.thinking_rows, GUTTER_THOUGHT, token::thinking );
-		write_block( state.streaming_rows, GUTTER_OUTPUT, token::muted );
+		write_block( state.thinking_rows, LIVE_THOUGHT_MAX_ROWS, GUTTER_THOUGHT, token::thinking );
+		write_block( state.streaming_rows, state.streaming_rows.size( ), GUTTER_OUTPUT,
+			token::muted );
 
 		return buffer;
 	}

@@ -146,8 +146,10 @@ namespace mcode::tools {
 			const auto window_start = first_difference > DIFF_CONTEXT_LINES
 				? first_difference - DIFF_CONTEXT_LINES
 				: std::size_t{ 0 };
-			const auto window_end_old = std::min( old_tail + DIFF_CONTEXT_LINES, old_lines.lines.size( ) );
-			const auto window_end_new = std::min( new_tail + DIFF_CONTEXT_LINES, new_lines.lines.size( ) );
+			const auto window_end_old = std::min( old_tail + DIFF_CONTEXT_LINES,
+				old_lines.lines.size( ) );
+			const auto window_end_new = std::min( new_tail + DIFF_CONTEXT_LINES,
+				new_lines.lines.size( ) );
 
 			diff += "@@ -" + std::to_string( window_start + 1 ) + "," +
 				std::to_string( window_end_old - window_start ) + " +" +
@@ -176,7 +178,8 @@ namespace mcode::tools {
 
 		if ( !path || path->empty( ) ) {
 			return error_result( "missing required argument: path",
-				"pass the file to edit, relative to the workspace root; it must have been read this session",
+				"pass the file to edit, relative to the workspace root; "
+				"it must have been read this session",
 				false );
 		}
 
@@ -184,13 +187,15 @@ namespace mcode::tools {
 
 		if ( !old_string ) {
 			return error_result( "missing required argument: old_string",
-				"pass the exact text to replace; an empty old_string is a create, not an edit -- use write for that",
+				"pass the exact text to replace; an empty old_string is a create, "
+				"not an edit -- use write for that",
 				false );
 		}
 
 		if ( old_string->empty( ) ) {
 			return error_result( "old_string is empty",
-				"an empty anchor would replace nothing; to create a file use write, to insert use a non-empty anchor around the insertion point",
+				"an empty anchor would replace nothing; to create a file use write, "
+				"to insert use a non-empty anchor around the insertion point",
 				false );
 		}
 
@@ -247,26 +252,38 @@ namespace mcode::tools {
 		const auto anchor = normalise( *old_string );
 		const auto replacement = normalise( *new_string );
 
-		auto occurrences = std::size_t{ 0 };
+		// an anchor of only line endings normalises to nothing, which would scan forever
+		if ( anchor.empty( ) ) {
+			return error_result( "old_string is empty once line endings are normalised",
+				"pass a non-empty anchor; to create a file use write, "
+				"to insert use a non-empty anchor",
+				false );
+		}
+
 		auto positions = std::vector< std::size_t >{ };
 		auto search = std::size_t{ 0 };
 
+		// advancing by the anchor keeps the matches disjoint, so a
+		// self-overlapping anchor counts once
 		while ( ( search = normalised.find( anchor, search ) ) != std::string::npos ) {
-			++occurrences;
 			positions.push_back( search );
-			++search;
+			search += anchor.size( );
 		}
+
+		const auto occurrences = positions.size( );
 
 		if ( occurrences == 0 ) {
 			return error_result( "old_string not found in " + *path,
-				"the file may have changed since you read it -- re-read it; otherwise check the anchor matches exactly, including whitespace",
+				"the file may have changed since you read it -- re-read it; "
+				"otherwise check the anchor matches exactly, including whitespace",
 				false );
 		}
 
 		if ( occurrences > 1 && !replace_all ) {
 			return error_result( "old_string appears " + std::to_string( occurrences ) +
 					" times in " + *path,
-				"include more surrounding context in old_string to disambiguate, or set replace_all to replace every occurrence",
+				"include more surrounding context in old_string to disambiguate, "
+				"or set replace_all to replace every occurrence",
 				false );
 		}
 
@@ -294,6 +311,15 @@ namespace mcode::tools {
 		if ( !written ) {
 			return error_result( "edit failed to write: " + written.error( ).msg,
 				"the replacement was computed but the write failed; the file is unchanged", false );
+		}
+
+		// read the file back: the hash must describe the disk bytes, not the buffer
+		// handed to the writer
+		const auto persisted = raw_content_hash( *resolved );
+
+		if ( !persisted || *persisted != written->content_hash ) {
+			return error_result( "edit wrote " + *path + " but it did not read back as written",
+				"re-read the file and retry; the write and the read disagree", false );
 		}
 
 		// so a second edit in the same turn does not read as stale

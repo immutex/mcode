@@ -47,16 +47,13 @@ namespace mcode::mcp {
 		// fails closed: a server that cannot start is an error, not a silent absence
 		auto start( ) -> result< std::vector< server_tool > >;
 
-		// false when the restart budget is exhausted: the server stays down and on_gone fires
-		auto handle_eof( ) -> bool;
-
-		// close stdin, wait <=5s, terminate, wait <=2s, kill; the destructor runs this too
-		auto shutdown( ) -> void;
-
-		// drives handle_eof and the restart attempt
+		// the transport's EOF callback: records a due restart, never resets the transport inline
 		auto on_transport_eof( ) -> void;
 
-		// the supervisor's own drain for background reads; the call path pumps through the client
+		// close stdin, wait, terminate, finalize; the destructor runs this too
+		auto shutdown( ) -> void;
+
+		// services a due restart, then drains; the call path pumps through the client
 		auto pump( std::chrono::milliseconds window ) -> void;
 
 		[[nodiscard]] auto config( ) const noexcept -> const server_config& { return config_; }
@@ -82,6 +79,7 @@ namespace mcode::mcp {
 	private:
 		auto connect( ) -> result< std::vector< server_tool > >;
 		auto backoff_delay( ) const -> std::chrono::milliseconds;
+		auto attempt_restart( ) -> void;
 
 		server_config config_;
 		handlers handlers_;
@@ -94,6 +92,9 @@ namespace mcode::mcp {
 		std::string last_error_;
 		std::string pinned_hash_;
 		std::vector< server_tool > tools_;
+
+		bool restart_pending_ = false;
+		std::chrono::steady_clock::time_point next_attempt_{ };
 	};
 
 }

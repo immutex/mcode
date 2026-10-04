@@ -43,7 +43,8 @@ namespace mcode {
 		platform_name_( deps.platform_name ),
 		permissions_( deps.permissions ),
 		instruction_chain_( deps.instruction_chain ),
-		skill_index_( deps.skill_index ) {
+		skill_index_( deps.skill_index ),
+		pump_timers_( std::move( deps.pump_timers ) ) {
 		if ( registry_ == nullptr ) {
 			registry_ = &owned_registry_;
 		}
@@ -150,7 +151,7 @@ namespace mcode {
 		}
 
 		cost = compute_cost( caps_, folded );
-		budget_.charge( static_cast< std::uint64_t >( folded.total_tokens( ) ), cost );
+		budget_.charge( static_cast< std::uint64_t >( total_tokens( caps_, folded ) ), cost );
 
 		auto assistant = model::message{ };
 		assistant.speaker = model::role::assistant;
@@ -207,20 +208,21 @@ namespace mcode {
 	auto agent_loop::finish_run( const loop_state terminal, const std::string_view reason )
 		-> void {
 		state_ = terminal;
+		end_reason_ = std::string{ reason };
 
 		auto summary = std::string{ "{\"goal\":\"" };
 		json::append_escaped( summary, user_task_ );
 		summary += "\",\"actions\":";
-		summary += std::to_string( budget_.steps_used );
+		summary += std::to_string( budget_.steps_used.load( ) );
 		summary += ",\"last_failure\":\"";
 		json::append_escaped( summary, last_failure_ );
 		summary += "\",\"remaining_steps\":";
-		summary += std::to_string( budget_.max_steps > budget_.steps_used
-				? budget_.max_steps - budget_.steps_used
+		summary += std::to_string( budget_.max_steps > budget_.steps_used.load( )
+				? budget_.max_steps - budget_.steps_used.load( )
 				: 0 );
 		summary += ",\"remaining_usd\":";
-		summary += std::to_string( budget_.max_usd > budget_.usd_used
-				? budget_.max_usd - budget_.usd_used
+		summary += std::to_string( budget_.max_usd > budget_.usd_used.load( )
+				? budget_.max_usd - budget_.usd_used.load( )
 				: 0.0 );
 		summary += ",\"state\":\"";
 		summary += to_string( terminal );
@@ -247,6 +249,7 @@ namespace mcode {
 		reflection_counts_.clear( );
 		total_reflections_ = 0;
 		last_failure_.clear( );
+		end_reason_.clear( );
 		replan_count_ = 0;
 		last_failure_repeats_ = 0;
 
@@ -281,11 +284,16 @@ namespace mcode {
 			publish( events::kind::step_start, std::string{ "{\"state\":\"" }
 				+ std::string{ to_string( state_ ) } + "\"}" );
 
+			// timers fire on this thread, once per step, never inside a hook's dispatch.
+			if ( pump_timers_ ) {
+				pump_timers_( );
+			}
+
 			visited_.push_back( state_ );
 
 			switch ( state_ ) {
 				case loop_state::plan: {
-					if ( budget_.steps_used >= budget_.max_steps ) {
+					if ( budget_.steps_used.load( ) >= budget_.max_steps ) {
 						state_ = loop_state::failed;
 
 						break;
@@ -302,9 +310,7 @@ namespace mcode {
 						return outcome;
 					}
 
-					// A plan response with no tool call IS the turn's answer, so Act reuses it
-					// instead of paying for a second full-prefix request that would restate it.
-					// A plan that does carry calls leaves them pending for Act to dispatch.
+					// no tool call means this response is the answer, so Act must not re-request it.
 					plan_answered_ = !*planned;
 					state_ = loop_state::act;
 
@@ -312,8 +318,7 @@ namespace mcode {
 				}
 
 				case loop_state::act: {
-					// The plan's calls run before the budget check: a request that spends the
-					// last step must still execute what the model asked for.
+					// dispatch before the budget check, so a spent step still answers its calls.
 					if ( !pending_calls_.empty( ) ) {
 						dispatch_pending( );
 						state_ = loop_state::observe;
@@ -486,7 +491,9 @@ namespace mcode {
 						++last_failure_repeats_;
 
 						if ( last_failure_repeats_ >= REFLECT_REPEAT_LIMIT ) {
-							state_ = loop_state::replan;
+							// these calls still run: a tool_call with no result is rejected.
+							dispatch_pending( );
+							state_ = loop_state::observe;
 
 							break;
 						}
@@ -525,7 +532,8 @@ namespace mcode {
 				case loop_state::done: {
 					outcome.final_state = state_;
 					outcome.visited = visited_;
-					outcome.model_calls = budget_.steps_used;
+					outcome.steps = budget_.steps_used.load( );
+					outcome.summary_json = end_reason_;
 
 					return outcome;
 				}

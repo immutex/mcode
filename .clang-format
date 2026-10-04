@@ -1,7 +1,7 @@
 ---
 Language: Cpp
 BasedOnStyle: LLVM
-Standard: c++23
+Standard: Latest
 
 ColumnLimit: 100
 
@@ -19,8 +19,6 @@ SpaceBeforeParens: ControlStatements
 SpacesInSquareBrackets: false
 
 BreakBeforeBraces: Attach
-SplitEmptyFunction: false
-SplitEmptyRecord: false
 
 AllowShortFunctionsOnASingleLine: None
 AllowShortIfStatementsOnASingleLine: Never

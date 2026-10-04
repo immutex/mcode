@@ -4,6 +4,7 @@
 #include <fstream>
 #include <optional>
 #include <string>
+#include <utility>
 
 #include "mcode/core/registry.hxx"
 #include "mcode/fs/workspace.hxx"
@@ -81,6 +82,54 @@ TEST_CASE( "read honours offset and limit and reports the next offset", "[tools]
 	CHECK( out.find( "2\tbeta" ) != std::string::npos );
 	CHECK( out.find( "1\talpha" ) == std::string::npos );
 	CHECK( out.find( "\"next_offset\":3" ) != std::string::npos );
+}
+
+TEST_CASE( "read rejects out-of-range offsets and clamps the maximum window", "[tools][read]" ) {
+	auto setup = fixture{ };
+
+	const auto cases = std::vector< std::pair< const char*, const char* > >{
+		{ R"({"path":"notes.txt","offset":0})", "offset must be 1-based" },
+		{ R"({"path":"notes.txt","offset":-3})", "offset must be 1-based" },
+		{ R"({"path":"notes.txt","offset":99})", "past the end" },
+		{ R"({"path":"notes.txt","limit":0})", "limit must be positive" },
+		{ R"({"path":"notes.txt","limit":-1})", "limit must be positive" },
+	};
+
+	for ( const auto& [ request, message ] : cases ) {
+		const auto out = run_tool( handle_read, request, setup );
+		CHECK( is_error_json( out ) );
+		CHECK( out.find( message ) != std::string::npos );
+	}
+
+	auto many = std::string{ };
+
+	for ( auto index = 1; index <= 1200; ++index ) {
+		many += "line " + std::to_string( index ) + "\n";
+	}
+
+	setup.write_raw( "many.txt", many );
+
+	const auto clamped = run_tool( handle_read, R"({"path":"many.txt","limit":5000})", setup );
+	auto tabs = std::size_t{ 0 };
+
+	for ( const auto character : clamped ) {
+		if ( character == '\t' ) {
+			++tabs;
+		}
+	}
+
+	CHECK( tabs == 1000 );
+	CHECK( clamped.find( "\"next_offset\":1001" ) != std::string::npos );
+}
+
+TEST_CASE( "read serves a partial window from a file above the window bound", "[tools][read]" ) {
+	auto setup = fixture{ };
+	const auto huge = std::string( static_cast< std::size_t >( 16u * 1024u * 1024u ) + 1, 'x' );
+	setup.write_raw( "huge.txt", huge );
+
+	const auto out = run_tool( handle_read, R"({"path":"huge.txt","limit":1})", setup );
+	CHECK_FALSE( is_error_json( out ) );
+	CHECK( out.find( "\"partial_read\":true" ) != std::string::npos );
 }
 
 TEST_CASE( "read refuses binary with a stub, never emitting bytes", "[tools][read]" ) {
@@ -172,6 +221,19 @@ TEST_CASE( "write refuses protected and escaping paths", "[tools][write]" ) {
 	CHECK( is_error_json( outside ) );
 }
 
+TEST_CASE( "write enforces the size cap outside the workspace", "[tools][write]" ) {
+	auto setup = fixture{ true };
+	const auto oversized = std::string(
+		static_cast< std::size_t >( MAX_WRITE_FILE_BYTES ) + 1, 'x' );
+
+	const auto out = run_tool( handle_write,
+		std::string{ R"({"path":"../oversized.txt","content":")" } + oversized + R"("})",
+		setup );
+	CHECK( is_error_json( out ) );
+	CHECK( out.find( "write cap" ) != std::string::npos );
+	CHECK_FALSE( std::filesystem::exists( setup.path.parent_path( ) / "oversized.txt" ) );
+}
+
 TEST_CASE( "edit replaces a unique anchor and returns a diff", "[tools][edit]" ) {
 	auto setup = fixture{ };
 
@@ -207,6 +269,23 @@ TEST_CASE( "edit distinguishes zero from multiple matches", "[tools][edit]" ) {
 	const auto all = run_tool( handle_edit,
 		R"({"path":"dup.txt","old_string":"same","new_string":"x","replace_all":true})", setup );
 	CHECK( all.find( "\"replacements\":2" ) != std::string::npos );
+}
+
+TEST_CASE( "edit counts a self-overlapping anchor as disjoint matches", "[tools][edit]" ) {
+	auto setup = fixture{ };
+	setup.write_raw( "overlap.txt", "aaaa\n" );
+	CHECK( run_tool( handle_read, R"({"path":"overlap.txt"})", setup ).find( "aaaa" ) !=
+		std::string::npos );
+
+	const auto guarded = run_tool( handle_edit,
+		R"({"path":"overlap.txt","old_string":"aa","new_string":"b"})", setup );
+	CHECK( is_error_json( guarded ) );
+	CHECK( guarded.find( "appears 2 times" ) != std::string::npos );
+
+	const auto all = run_tool( handle_edit,
+		R"({"path":"overlap.txt","old_string":"aa","new_string":"b","replace_all":true})", setup );
+	CHECK( all.find( "\"replacements\":2" ) != std::string::npos );
+	CHECK( setup.read_raw( "overlap.txt" ) == "bb\n" );
 }
 
 TEST_CASE( "edit preserves CRLF and refuses an empty anchor", "[tools][edit]" ) {
@@ -295,6 +374,21 @@ TEST_CASE( "grep reports a bad regex actionably", "[tools][grep]" ) {
 	const auto out = run_tool( handle_grep, R"({"pattern":"([unclosed"})", setup );
 	CHECK( is_error_json( out ) );
 	CHECK( out.find( "invalid regex" ) != std::string::npos );
+}
+
+TEST_CASE( "grep stops at the final line and fails closed on a bad path", "[tools][grep]" ) {
+	auto setup = fixture{ };
+
+	const auto anchors = run_tool( handle_grep, R"({"pattern":"^","path":"notes.txt"})", setup );
+	CHECK( anchors.find( "\"count\":3" ) != std::string::npos );
+	CHECK( anchors.find( "\"line\":4" ) == std::string::npos );
+
+	const auto missing = run_tool( handle_grep, R"({"pattern":"alpha","path":"nope.txt"})", setup );
+	CHECK( is_error_json( missing ) );
+	CHECK( missing.find( "not found" ) != std::string::npos );
+
+	const auto outside = run_tool( handle_grep, R"({"pattern":"alpha","path":"../escape"})", setup );
+	CHECK( is_error_json( outside ) );
 }
 
 TEST_CASE( "ask_user fails clearly when headless", "[tools][ask_user]" ) {

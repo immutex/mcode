@@ -86,7 +86,7 @@ namespace mcode::ext {
 
 		const auto identifier = static_cast< std::uint64_t >( number );
 
-		self->hooks_->unsubscribe( identifier );
+		self->hooks_->unsubscribe( identifier, self->manifest_.name );
 
 		return 0;
 	}

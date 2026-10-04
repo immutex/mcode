@@ -36,7 +36,8 @@ namespace mcode::tools {
 
 		// the workspace walk is ignore-blind; these would burn the whole result budget on artifacts
 		[[nodiscard]] auto always_skipped( const std::string_view name ) noexcept -> bool {
-			return name == ".git" || name == ".mcode" || name == "build" || name == "node_modules" ||
+			return name == ".git" || name == ".mcode" ||
+				name == "build" || name == "node_modules" ||
 				name == ".vs" || name == ".vscode" || name == "out";
 		}
 
@@ -215,7 +216,8 @@ namespace mcode::tools {
 
 		if ( context.permissions == nullptr ) {
 			return error_result( "the permission engine is not attached",
-				"construct the engine and assign tool_context::permissions before registering tools",
+				"construct the engine and assign tool_context::permissions "
+				"before registering tools",
 				false );
 		}
 
@@ -292,7 +294,8 @@ namespace mcode::tools {
 			compiled = std::regex{ std::string{ *pattern }, std::regex::ECMAScript };
 		} catch ( const std::regex_error& error ) {
 			return error_result( "invalid regex: " + std::string{ error.what( ) },
-				"fix the pattern; the regex dialect is ECMAScript, and unbalanced groups or an unknown escape are the usual causes",
+				"fix the pattern; the regex dialect is ECMAScript, and unbalanced groups "
+				"or an unknown escape are the usual causes",
 				false );
 		}
 
@@ -300,7 +303,8 @@ namespace mcode::tools {
 
 		if ( context.permissions == nullptr ) {
 			return error_result( "the permission engine is not attached",
-				"construct the engine and assign tool_context::permissions before registering tools",
+				"construct the engine and assign tool_context::permissions "
+				"before registering tools",
 				false );
 		}
 
@@ -309,13 +313,32 @@ namespace mcode::tools {
 
 		auto scope = std::string{ "." };
 
-		if ( const auto requested = args.string_field( "path" ); requested && !requested->empty( ) ) {
-			scope = *requested;
+		if ( const auto requested = args.string_field( "path" );
+			requested && !requested->empty( ) ) {
+			auto resolved = space.resolve( *requested );
+
+			if ( !resolved ) {
+				return error_result( "cannot search " + *requested,
+					"grep searches inside the workspace root; "
+					"pass a path that stays within it", false );
+			}
+
+			auto error_code = std::error_code{ };
+
+			if ( !std::filesystem::exists( platform::to_extended_path( *resolved ), error_code ) ||
+				error_code ) {
+				return error_result( "path not found: " + *requested,
+					"check the path; grep searches a file or directory "
+					"inside the workspace root", false );
+			}
+
+			scope = space.display_path( *resolved );
 		}
 
 		auto name_filter = std::optional< std::string >{ };
 
-		if ( const auto requested = args.string_field( "glob" ); requested && !requested->empty( ) ) {
+		if ( const auto requested = args.string_field( "glob" );
+			requested && !requested->empty( ) ) {
 			name_filter = *requested;
 		}
 
@@ -397,7 +420,7 @@ namespace mcode::tools {
 			auto line_number = std::size_t{ 0 };
 			auto start = std::size_t{ 0 };
 
-			while ( start <= safe.size( ) && count < max_matches ) {
+			while ( start < safe.size( ) && count < max_matches ) {
 				const auto newline = safe.find( '\n', start );
 				const auto end = ( newline == std::string::npos ) ? safe.size( ) : newline;
 				const auto line = safe.substr( start, end - start );
@@ -434,7 +457,8 @@ namespace mcode::tools {
 
 		if ( reached_cap ) {
 			out += ",\"hint\":\"cap of " + std::to_string( max_matches ) +
-				" matches reached; narrow the pattern, set path to a subdirectory, or raise max_matches (max " +
+				" matches reached; narrow the pattern, set path to a subdirectory, "
+				"or raise max_matches (max " +
 				std::to_string( MAX_GREP_MATCHES ) + ") to see more\"";
 		}
 
@@ -447,7 +471,8 @@ namespace mcode::tools {
 		if ( partial_coverage ) {
 			out += ",\"partial_coverage\":true,\"hint\":\"the workspace has more than " +
 				std::to_string( DEFAULT_GLOB_LIMIT ) +
-				" candidate files and the scan stopped there; a zero count above is NOT proof of absence -- narrow with path or glob and search again\"";
+				" candidate files and the scan stopped there; a zero count above is "
+				"NOT proof of absence -- narrow with path or glob and search again\"";
 		}
 
 		out += "}";

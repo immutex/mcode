@@ -151,7 +151,8 @@ namespace mcode::model {
 		}
 
 		auto reject_unknown_keys( const json::document& document ) -> status {
-			const auto levels = std::array< std::pair< const char*, std::span< const std::string_view > >, 7 >{ {
+			const auto levels =
+				std::array< std::pair< const char*, std::span< const std::string_view > >, 7 >{ {
 				{ "", ALLOWED_TOP_LEVEL },
 				{ "/auth", ALLOWED_AUTH },
 				{ "/stream", ALLOWED_STREAM },

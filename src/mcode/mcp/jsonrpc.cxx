@@ -2,50 +2,53 @@
 
 #include "mcode/support/json.hxx"
 
+#include <utility>
+
 namespace mcode::mcp::jsonrpc {
 
 	namespace {
 
-		// a hostile or broken server can send one enormous line; this keeps the parse bounded
-		inline constexpr std::size_t MAX_FRAME_BYTES = 8u * 1024u * 1024u;
-
-		[[nodiscard]] auto id_from( const json::document& doc ) -> std::optional< std::uint64_t > {
-			// a numeric or string id both carry; a non-numeric string must not correlate as zero
-			if ( doc.has_pointer( "/id" ) ) {
-				if ( const auto number = doc.pointer_int( "/id" ) ) {
-					if ( *number >= 0 ) {
-						return static_cast< std::uint64_t >( *number );
-					}
-
-					return std::nullopt;
-				}
-
-				if ( const auto text = doc.pointer_string( "/id" ) ) {
-					auto number = std::uint64_t{ 0 };
-					auto digits = true;
-
-					for ( const auto character : *text ) {
-						if ( character < '0' || character > '9' ) {
-							digits = false;
-
-							break;
-						}
-
-						number = number * 10u +
-							static_cast< std::uint64_t >( character - '0' );
-					}
-
-					if ( digits && !text->empty( ) ) {
-						return number;
-					}
+		// only an integer or string id can be echoed back; a null, bool or fractional id cannot
+		[[nodiscard]] auto id_from( const json::document& doc ) -> std::optional< request_id > {
+			if ( const auto number = doc.pointer_int( "/id" ) ) {
+				if ( *number >= 0 ) {
+					return request_id::numeric( static_cast< std::uint64_t >( *number ) );
 				}
 
 				return std::nullopt;
 			}
 
+			if ( const auto text = doc.pointer_string( "/id" ) ) {
+				return request_id::string( *text );
+			}
+
 			return std::nullopt;
 		}
 
+		// a reply echoes the request's id verbatim: a string stays a string
+		auto set_id( json::document& doc, const request_id& id ) -> status {
+			if ( id.is_string ) {
+				return doc.set_string( "id", id.text );
+			}
+
+			return doc.set_int( "id", static_cast< std::int64_t >( id.number ) );
+		}
+
+	}
+
+	auto request_id::numeric( const std::uint64_t value ) -> request_id {
+		auto out = request_id{ };
+		out.number = value;
+
+		return out;
+	}
+
+	auto request_id::string( std::string value ) -> request_id {
+		auto out = request_id{ };
+		out.is_string = true;
+		out.text = std::move( value );
+
+		return out;
 	}
 
 	auto stamp_meta( const std::string_view params_json ) -> result< std::string > {
@@ -168,7 +171,7 @@ namespace mcode::mcp::jsonrpc {
 		return *dumped;
 	}
 
-	auto render_response( const std::uint64_t id, const std::string_view result_json )
+	auto render_response( const request_id& id, const std::string_view result_json )
 		-> result< std::string > {
 		auto doc = json::document::make_object( );
 
@@ -176,7 +179,7 @@ namespace mcode::mcp::jsonrpc {
 			return std::unexpected( set.error( ) );
 		}
 
-		if ( const auto set = doc.set_int( "id", static_cast< std::int64_t >( id ) ); !set ) {
+		if ( const auto set = set_id( doc, id ); !set ) {
 			return std::unexpected( set.error( ) );
 		}
 
@@ -185,6 +188,35 @@ namespace mcode::mcp::jsonrpc {
 				return std::unexpected( set.error( ) );
 			}
 		} else if ( const auto set = doc.set_json( "result", "null" ); !set ) {
+			return std::unexpected( set.error( ) );
+		}
+
+		auto dumped = doc.dump( false );
+
+		if ( !dumped ) {
+			return std::unexpected( dumped.error( ) );
+		}
+
+		return *dumped;
+	}
+
+	auto render_error_response( const request_id& id, const int code,
+		const std::string_view reason ) -> result< std::string > {
+		auto doc = json::document::make_object( );
+
+		if ( const auto set = doc.set_string( "jsonrpc", "2.0" ); !set ) {
+			return std::unexpected( set.error( ) );
+		}
+
+		if ( const auto set = set_id( doc, id ); !set ) {
+			return std::unexpected( set.error( ) );
+		}
+
+		auto body = json::node::make_object( );
+		body.members[ "code" ] = json::node::make_integer( code );
+		body.members[ "message" ] = json::node::make_string( reason );
+
+		if ( const auto set = doc.set_node( "error", std::move( body ) ); !set ) {
 			return std::unexpected( set.error( ) );
 		}
 
@@ -223,7 +255,13 @@ namespace mcode::mcp::jsonrpc {
 
 			frame.method = *method;
 
-			if ( const auto id = id_from( *parsed ) ) {
+			if ( parsed->has_pointer( "/id" ) ) {
+				const auto id = id_from( *parsed );
+
+				if ( !id ) {
+					return std::optional< message >{ };
+				}
+
 				frame.kind = message_kind::request;
 				frame.id = *id;
 			} else {

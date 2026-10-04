@@ -109,7 +109,7 @@ TEST_CASE( "two turns in one process keep the history and a follow-up sees the "
 	deps.registry = &registry;
 	deps.log = &log;
 	deps.model_name = "test-model";
-	deps.caps.context_window = 200'000;
+	deps.caps.context_window = TEST_CONTEXT_WINDOW;
 
 	auto loop = agent_loop{ deps };
 	loop.register_handler( "echo", []( std::string_view args ) -> result< std::string > {
@@ -170,17 +170,23 @@ TEST_CASE( "the loop's run() resets per-run state, not the history", "[tui][repl
 	deps.registry = &registry;
 	deps.log = &log;
 	deps.model_name = "test-model";
-	deps.caps.context_window = 200'000;
+	deps.caps.context_window = TEST_CONTEXT_WINDOW;
 
 	auto loop = agent_loop{ deps };
 
 	client.queue( text_response( "one" ) );
-	std::ignore = loop.run( "first" );
+	const auto first = loop.run( "first" );
+	REQUIRE( first.has_value( ) );
 
 	const auto after_first = loop.history( ).size( );
 
 	client.queue( text_response( "two" ) );
-	std::ignore = loop.run( "second" );
+	const auto second = loop.run( "second" );
+	REQUIRE( second.has_value( ) );
+
+	// the reset makes the second run walk the whole path again, from plan
+	CHECK( second->visited == first->visited );
+	CHECK( second->visited.front( ) == loop_state::plan );
 
 	CHECK( loop.history( ).size( ) > after_first );
 	CHECK( loop.history( ).front( ).text( ) == "first" );
@@ -197,7 +203,7 @@ TEST_CASE( "the session exit code is the last turn's code", "[tui][repl]" ) {
 	deps.registry = &registry;
 	deps.log = &log;
 	deps.model_name = "test-model";
-	deps.caps.context_window = 200'000;
+	deps.caps.context_window = TEST_CONTEXT_WINDOW;
 	deps.budget.max_steps = 1;
 
 	auto loop = agent_loop{ deps };
@@ -321,4 +327,42 @@ TEST_CASE( "an allow_remember answer survives into the next turn without "
 
 	CHECK( engine.decide( request ) == perm::permission_decision::allow );
 	CHECK( source.asks( ) == 1 );
+}
+
+TEST_CASE( "a turn that hands off on a failed model call is not a success",
+	"[tui][repl]" ) {
+	auto client = multi_turn_client{ };
+	auto registry = tool_registry{ };
+	auto log = event_log{ };
+
+	auto definition = tool_def{ };
+	definition.name = "echo";
+	definition.description = "echoes its argument";
+	definition.schema_json = R"({"type":"object"})";
+
+	std::ignore = registry.add( definition );
+
+	auto deps = agent_loop::dependencies{ };
+	deps.client = &client;
+	deps.registry = &registry;
+	deps.log = &log;
+	deps.model_name = "test-model";
+	deps.caps.context_window = TEST_CONTEXT_WINDOW;
+
+	auto loop = agent_loop{ deps };
+	loop.register_handler( "echo", []( std::string_view args ) -> result< std::string > {
+		return std::string{ args };
+	} );
+
+	auto turn = cli::session{ loop };
+
+	// The plan asks for a tool; the request that follows the tool result finds the script
+	// exhausted, so the loop hands off with a reason rather than finishing the turn.
+	client.queue( call_response( "echo", R"({"note":"only one call"})" ) );
+
+	const auto code = turn.run_turn( "do something" );
+
+	CHECK( code == cli::exit_code::provider_error );
+	CHECK_FALSE( loop.budget( ).exhausted( ) );
+	CHECK_FALSE( loop.permission_denied( ) );
 }

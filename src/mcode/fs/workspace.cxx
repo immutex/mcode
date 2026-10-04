@@ -31,7 +31,8 @@ namespace mcode {
 
 		constexpr std::size_t HASH_HEX_BUFFER = 17;
 
-		[[nodiscard]] auto segment_matches( const std::string_view pattern, const std::string_view name ) -> bool {
+		[[nodiscard]] auto segment_matches( const std::string_view pattern,
+			const std::string_view name ) -> bool {
 			auto pattern_index = std::size_t{ 0 };
 			auto name_index = std::size_t{ 0 };
 			auto star_pattern = std::string_view::npos;
@@ -39,7 +40,8 @@ namespace mcode {
 
 			while ( name_index < name.size( ) ) {
 				if ( pattern_index < pattern.size( ) &&
-					( pattern[ pattern_index ] == '?' || pattern[ pattern_index ] == name[ name_index ] ) ) {
+					( pattern[ pattern_index ] == '?' ||
+						pattern[ pattern_index ] == name[ name_index ] ) ) {
 					++pattern_index;
 					++name_index;
 				} else if ( pattern_index < pattern.size( ) && pattern[ pattern_index ] == '*' ) {
@@ -60,7 +62,8 @@ namespace mcode {
 			return pattern_index == pattern.size( );
 		}
 
-		[[nodiscard]] auto split_pattern( const std::string_view pattern ) -> std::vector< std::string > {
+		[[nodiscard]] auto split_pattern( const std::string_view pattern )
+			-> std::vector< std::string > {
 			auto parts = std::vector< std::string >{ };
 			auto start = std::size_t{ 0 };
 
@@ -136,8 +139,9 @@ namespace mcode {
 
 				auto error_code = std::error_code{ };
 
-				for ( const auto& entry : std::filesystem::directory_iterator( platform::to_extended_path( base ),
-						 std::filesystem::directory_options::skip_permission_denied, error_code ) ) {
+				for ( const auto& entry : std::filesystem::directory_iterator(
+					platform::to_extended_path( base ),
+					std::filesystem::directory_options::skip_permission_denied, error_code ) ) {
 					if ( error_code ) {
 						break;
 					}
@@ -160,8 +164,9 @@ namespace mcode {
 
 			auto error_code = std::error_code{ };
 
-			for ( const auto& entry : std::filesystem::directory_iterator( platform::to_extended_path( base ),
-					 std::filesystem::directory_options::skip_permission_denied, error_code ) ) {
+			for ( const auto& entry : std::filesystem::directory_iterator(
+				platform::to_extended_path( base ),
+				std::filesystem::directory_options::skip_permission_denied, error_code ) ) {
 				if ( error_code ) {
 					break;
 				}
@@ -216,7 +221,8 @@ namespace mcode {
 		}
 
 		auto buffer = std::array< char, HASH_HEX_BUFFER >{ };
-		std::snprintf( buffer.data( ), buffer.size( ), "%016llx", static_cast< unsigned long long >( hash ) );
+		std::snprintf( buffer.data( ), buffer.size( ), "%016llx",
+			static_cast< unsigned long long >( hash ) );
 
 		return std::string{ buffer.data( ) };
 	}
@@ -225,11 +231,13 @@ namespace mcode {
 		auto error_code = std::error_code{ };
 
 		if ( !std::filesystem::exists( root, error_code ) || error_code ) {
-			return std::unexpected( fail( errc::io, "workspace root does not exist: " + root.string( ) ) );
+			return std::unexpected(
+				fail( errc::io, "workspace root does not exist: " + root.string( ) ) );
 		}
 
 		if ( !std::filesystem::is_directory( root, error_code ) || error_code ) {
-			return std::unexpected( fail( errc::io, "workspace root is not a directory: " + root.string( ) ) );
+			return std::unexpected(
+				fail( errc::io, "workspace root is not a directory: " + root.string( ) ) );
 		}
 
 		auto opened = workspace{ };
@@ -243,7 +251,8 @@ namespace mcode {
 		return opened;
 	}
 
-	auto workspace::resolve( const std::string_view path ) const -> result< std::filesystem::path > {
+	auto workspace::resolve( const std::string_view path ) const
+		-> result< std::filesystem::path > {
 		if ( path.empty( ) ) {
 			return std::unexpected( fail( errc::io, "empty path" ) );
 		}
@@ -258,7 +267,8 @@ namespace mcode {
 		auto canonical = platform::canonicalize( candidate );
 
 		if ( !canonical ) {
-			return std::unexpected( fail( errc::io, "cannot resolve path: " + canonical.error( ).msg ) );
+			return std::unexpected(
+				fail( errc::io, "cannot resolve path: " + canonical.error( ).msg ) );
 		}
 
 		if ( !contains( *canonical ) ) {
@@ -319,7 +329,8 @@ namespace mcode {
 		return matches;
 	}
 
-	auto workspace::read_file( const std::string_view relative_path ) const -> result< std::string > {
+	auto workspace::read_file( const std::string_view relative_path ) const
+		-> result< std::string > {
 		auto resolved = resolve( relative_path );
 
 		if ( !resolved ) {
@@ -332,12 +343,14 @@ namespace mcode {
 
 		if ( error_code ) {
 			return std::unexpected(
-				fail( errc::io, "cannot stat " + resolved->string( ) + ": " + error_code.message( ) ) );
+				fail( errc::io,
+					"cannot stat " + resolved->string( ) + ": " + error_code.message( ) ) );
 		}
 
 		if ( size > MAX_TEXT_FILE_BYTES ) {
 			return std::unexpected( fail( errc::io, "file exceeds the " +
-				std::to_string( MAX_TEXT_FILE_BYTES ) + "-byte read cap: " + resolved->string( ) ) );
+				std::to_string( MAX_TEXT_FILE_BYTES ) + "-byte read cap: " +
+					resolved->string( ) ) );
 		}
 
 		// The \\?\ prefix only at the syscall: without it a deep path fails on a stock Windows.
@@ -356,7 +369,8 @@ namespace mcode {
 
 		if ( content.size( ) > MAX_TEXT_FILE_BYTES ) {
 			return std::unexpected( fail( errc::io, "file exceeds the " +
-				std::to_string( MAX_TEXT_FILE_BYTES ) + "-byte read cap: " + resolved->string( ) ) );
+				std::to_string( MAX_TEXT_FILE_BYTES ) + "-byte read cap: " +
+					resolved->string( ) ) );
 		}
 
 		if ( looks_binary( content ) ) {
@@ -367,7 +381,8 @@ namespace mcode {
 		return content;
 	}
 
-	auto workspace::content_hash( const std::string_view relative_path ) const -> result< std::string > {
+	auto workspace::content_hash( const std::string_view relative_path ) const
+		-> result< std::string > {
 		auto content = read_file( relative_path );
 
 		if ( !content ) {

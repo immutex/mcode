@@ -26,6 +26,8 @@ namespace mcode::mcp {
 
 		auto close_input( ) -> status override;
 
+		auto wait_exit( std::chrono::milliseconds timeout ) -> void override;
+
 		auto stop( ) -> void override;
 
 		auto alive( ) -> bool override;
@@ -36,6 +38,13 @@ namespace mcode::mcp {
 
 	private:
 		auto dispatch_lines( std::string_view chunk ) -> void;
+
+		auto emit_line( std::string line ) -> void;
+
+		// a residual frame without a trailing newline is still a frame
+		auto flush_pending( ) -> void;
+
+		auto fail_oversized( ) -> void;
 
 		proc::session child_;
 		std::string pending_;

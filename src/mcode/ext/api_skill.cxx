@@ -152,7 +152,7 @@ namespace mcode::ext {
 			return 2;
 		}
 
-		const auto body = std::string_view{ entry.file.string( ) };
+		const auto body = entry.file.string( );
 
 		if ( const auto registered = ( *self->skill_sink( ) )( entry, body ); !registered ) {
 			lua_pushnil( state );

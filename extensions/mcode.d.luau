@@ -36,10 +36,18 @@ declare mcode: {
 		--
 		-- `run` receives the raw argument table and a context table, and returns
 		-- a string, or `nil, err` for an environmental failure.
+		--
+		-- `permission` is the tool's class in the permission engine, exactly as
+		-- a built-in declares one. It decides what the call is checked against:
+		-- `read`/`write` key on the `path` argument, `exec` on `command`, and
+		-- `net`/`spawn` always prompt. Omitting it is not "read": an undeclared
+		-- tool prompts on every call, because the read default would otherwise
+		-- auto-approve it inside the workspace.
 		register: (definition: {
 			name: string,
 			description: string,
 			schema: { [string]: any },
+			permission: ("read" | "write" | "exec" | "net" | "spawn")?,
 			run: (args: { [string]: any }, context: {
 				session: string,
 				seq: number,

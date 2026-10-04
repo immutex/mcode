@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <fstream>
+#include <optional>
 #include <sstream>
 
 #include "mcode/support/toml.hxx"
@@ -18,6 +19,64 @@ namespace mcode::ext {
 		const auto ALLOWED_KEYS = std::vector< std::string_view >{
 			"name", "version", "api_version", "description", "permissions",
 		};
+
+		// declarations, not permissions: `net:<host>` and `credential:<NAME>` widen nothing.
+		inline constexpr auto NET_PREFIX = std::string_view{ "net:" };
+		inline constexpr auto CREDENTIAL_PREFIX = std::string_view{ "credential:" };
+
+		// a prefixed entry must name a bare host or an env var, or the declaration is a lie.
+		[[nodiscard]] auto declaration_problem( const std::string_view entry,
+			const bool declares_net ) -> std::optional< std::string > {
+			const auto quoted = std::string{ entry };
+
+			if ( entry.starts_with( NET_PREFIX ) ) {
+				const auto host = entry.substr( NET_PREFIX.size( ) );
+
+				if ( host.empty( ) ) {
+					return "permission '" + quoted + "' names an empty host";
+				}
+
+				for ( const auto character : host ) {
+					const auto allowed = ( character >= 'A' && character <= 'Z' ) ||
+						( character >= 'a' && character <= 'z' ) ||
+						( character >= '0' && character <= '9' ) || character == '.' ||
+						character == '-';
+
+					if ( !allowed ) {
+						return "permission '" + quoted +
+							"' must name a bare host, not a URL or a wildcard";
+					}
+				}
+
+				if ( !declares_net ) {
+					return "permission '" + quoted +
+						"' requires the bare 'net' permission in the same manifest";
+				}
+
+				return std::nullopt;
+			}
+
+			const auto name = entry.substr( CREDENTIAL_PREFIX.size( ) );
+			const auto first = name.empty( ) ? '\0' : name.front( );
+			const auto starts = ( first >= 'A' && first <= 'Z' ) ||
+				( first >= 'a' && first <= 'z' ) || first == '_';
+
+			if ( !starts ) {
+				return "permission '" + quoted + "' must name an environment variable";
+			}
+
+			for ( const auto character : name ) {
+				const auto allowed = ( character >= 'A' && character <= 'Z' ) ||
+					( character >= 'a' && character <= 'z' ) ||
+					( character >= '0' && character <= '9' ) || character == '_';
+
+				if ( !allowed ) {
+					return "permission '" + quoted + "' must name an environment variable";
+				}
+			}
+
+			return std::nullopt;
+		}
 
 		auto read_text( const std::filesystem::path& path ) -> result< std::string > {
 			auto stream = std::ifstream{ path, std::ios::binary };
@@ -154,7 +213,38 @@ namespace mcode::ext {
 	}
 
 	auto manifest::has_permission( const std::string_view permission ) const noexcept -> bool {
+		// a declaration narrows a permission, so it never answers one.
+		if ( permission.starts_with( NET_PREFIX ) ||
+			permission.starts_with( CREDENTIAL_PREFIX ) ) {
+			return false;
+		}
+
 		return std::find( permissions.begin( ), permissions.end( ), permission ) != permissions.end( );
+	}
+
+	auto manifest::net_hosts( ) const -> std::vector< std::string_view > {
+		auto hosts = std::vector< std::string_view >{ };
+
+		for ( const auto& permission : permissions ) {
+			if ( permission.starts_with( NET_PREFIX ) ) {
+				hosts.push_back( std::string_view{ permission }.substr( NET_PREFIX.size( ) ) );
+			}
+		}
+
+		return hosts;
+	}
+
+	auto manifest::credential_names( ) const -> std::vector< std::string_view > {
+		auto names = std::vector< std::string_view >{ };
+
+		for ( const auto& permission : permissions ) {
+			if ( permission.starts_with( CREDENTIAL_PREFIX ) ) {
+				names.push_back(
+					std::string_view{ permission }.substr( CREDENTIAL_PREFIX.size( ) ) );
+			}
+		}
+
+		return names;
 	}
 
 	auto load_manifest( const std::filesystem::path& directory ) -> result< manifest > {
@@ -262,13 +352,38 @@ namespace mcode::ext {
 					path.string( ) + ": 'permissions' must be an array of strings" ) );
 			}
 
+			const auto declares_net = std::find( permissions->begin( ), permissions->end( ),
+				std::string_view{ "net" } ) != permissions->end( );
+
+			auto seen = std::vector< std::string >{ };
+			seen.reserve( permissions->size( ) );
+
 			for ( const auto& permission : *permissions ) {
+				if ( std::find( seen.begin( ), seen.end( ), permission ) != seen.end( ) ) {
+					return std::unexpected( fail( errc::config,
+						path.string( ) + ": duplicate permission '" + permission + "'" ) );
+				}
+
+				seen.push_back( permission );
+
 				const auto known = std::find( KNOWN_PERMISSIONS.begin( ), KNOWN_PERMISSIONS.end( ),
 					permission );
 
-				if ( known == KNOWN_PERMISSIONS.end( ) ) {
+				if ( known != KNOWN_PERMISSIONS.end( ) ) {
+					manifest_value.permissions.push_back( permission );
+
+					continue;
+				}
+
+				if ( !permission.starts_with( NET_PREFIX ) &&
+					!permission.starts_with( CREDENTIAL_PREFIX ) ) {
 					return std::unexpected( fail( errc::config,
 						path.string( ) + ": unknown permission '" + permission + "'" ) );
+				}
+
+				if ( auto problem = declaration_problem( permission, declares_net ); problem ) {
+					return std::unexpected( fail( errc::config,
+						path.string( ) + ": " + *problem ) );
 				}
 
 				manifest_value.permissions.push_back( permission );

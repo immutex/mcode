@@ -21,6 +21,9 @@ namespace mcode::platform {
 	inline constexpr wchar_t LOW_IL_SDDL[] = L"S:(ML;;NW;;;LW)";
 	inline constexpr wchar_t MEDIUM_IL_SDDL[] = L"S:(ML;;NW;;;ME)";
 
+	// the pipe server always holds the child's end, and CreateNamedPipeW fixes its direction.
+	enum class sandbox_pipe_direction { child_reads, child_writes };
+
 	[[nodiscard]] auto last_error_message( const DWORD error ) -> std::string {
 		auto* buffer = LPWSTR{ nullptr };
 
@@ -61,7 +64,57 @@ namespace mcode::platform {
 				what + " failed: " + last_error_message( error ) );
 		}
 
-	} 
+		// CRT rule: space or tab delimits, and backslashes before a quote double.
+		[[nodiscard]] auto quote_command_line_argument( const std::wstring& value )
+			-> std::wstring {
+			if ( !value.empty( ) && value.find_first_of( L" \t\"" ) == std::wstring::npos ) {
+				return value;
+			}
+
+			auto quoted = std::wstring{ };
+			quoted.reserve( value.size( ) + 2 );
+			quoted += L'"';
+
+			auto backslashes = std::size_t{ 0 };
+
+			for ( const auto character : value ) {
+				if ( character == L'\\' ) {
+					++backslashes;
+
+					continue;
+				}
+
+				if ( character == L'"' ) {
+					// 2n+1 so the last one escapes the quote instead of closing the argument.
+					quoted.append( backslashes * 2 + 1, L'\\' );
+					backslashes = 0;
+					quoted += L'"';
+
+					continue;
+				}
+
+				quoted.append( backslashes, L'\\' );
+				backslashes = 0;
+				quoted += character;
+			}
+
+			quoted.append( backslashes * 2, L'\\' );
+			quoted += L'"';
+
+			return quoted;
+		}
+
+		[[nodiscard]] auto to_wide_string( const std::string& narrow ) -> std::wstring {
+			const auto bytes = ::MultiByteToWideChar( CP_UTF8, 0, narrow.c_str( ),
+				static_cast< int >( narrow.size( ) ), nullptr, 0 );
+			auto wide = std::wstring( static_cast< std::size_t >( bytes ), L'\0' );
+			::MultiByteToWideChar( CP_UTF8, 0, narrow.c_str( ),
+				static_cast< int >( narrow.size( ) ), wide.data( ), bytes );
+
+			return wide;
+		}
+
+	}
 
 #endif
 
@@ -184,8 +237,9 @@ namespace mcode::platform {
 
 			if ( !::ConvertStringSecurityDescriptorToSecurityDescriptorW( sddl,
 				SDDL_REVISION_1, &descriptor, nullptr ) ) {
-				return std::unexpected( fail_win( "ConvertStringSecurityDescriptorToSecurityDescriptor",
-					::GetLastError( ) ) );
+				return std::unexpected(
+					fail_win( "ConvertStringSecurityDescriptorToSecurityDescriptor",
+						::GetLastError( ) ) );
 			}
 
 			auto guard = unique_job_windows{ descriptor };
@@ -253,6 +307,20 @@ namespace mcode::platform {
 #endif
 	}
 
+#if defined( _WIN32 )
+
+	auto sandbox_windows_close_pipes( sandbox_raw_pipes& pipes ) -> void {
+		for ( auto* handle : { &pipes.child_stdin, &pipes.child_stdout, &pipes.child_stderr,
+				 &pipes.parent_stdin, &pipes.parent_stdout, &pipes.parent_stderr } ) {
+			if ( *handle != nullptr ) {
+				::CloseHandle( static_cast< HANDLE >( *handle ) );
+				*handle = nullptr;
+			}
+		}
+	}
+
+#endif
+
 	auto sandbox_windows_make_pipes( ) -> result< sandbox_raw_pipes > {
 #if defined( _WIN32 )
 		auto security = SECURITY_ATTRIBUTES{ };
@@ -273,14 +341,17 @@ namespace mcode::platform {
 				+ std::to_wstring( sequence ) + suffix;
 		};
 
-		auto make_pair = [ & ]( const bool child_end_inheritable,
+		auto make_pair = [ & ]( const sandbox_pipe_direction direction,
 			const std::wstring& name ) -> result< std::pair< HANDLE, HANDLE > > {
-			const auto direction = static_cast< DWORD >( child_end_inheritable
+			const auto child_reads = ( direction == sandbox_pipe_direction::child_reads );
+
+			// INBOUND grants the server GENERIC_READ, OUTBOUND grants it GENERIC_WRITE.
+			const auto server_access = static_cast< DWORD >( child_reads
 				? PIPE_ACCESS_INBOUND
 				: PIPE_ACCESS_OUTBOUND );
 
 			auto server = ::CreateNamedPipeW( name.c_str( ),
-				direction | FILE_FLAG_OVERLAPPED,
+				server_access | FILE_FLAG_OVERLAPPED,
 				PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
 				DWORD{ 1 }, PIPE_BUFFER_BYTES, PIPE_BUFFER_BYTES, DWORD{ 0 },
 				&security );
@@ -290,11 +361,10 @@ namespace mcode::platform {
 					::GetLastError( ) ) );
 			}
 
-			const auto access = child_end_inheritable
-				? GENERIC_WRITE
-				: GENERIC_READ;
+			// the client takes the opposite access, so it must be the parent's end.
+			const auto client_access = child_reads ? GENERIC_WRITE : GENERIC_READ;
 
-			auto client = ::CreateFileW( name.c_str( ), access, 0, &security,
+			auto client = ::CreateFileW( name.c_str( ), client_access, 0, &security,
 				OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr );
 
 			if ( client == INVALID_HANDLE_VALUE ) {
@@ -303,27 +373,21 @@ namespace mcode::platform {
 				return std::unexpected( fail_win( "CreateFileW(pipe)", error ) );
 			}
 
-			// only the child's end is inheritable, so the child cannot wait on itself.
-			const auto child_end = child_end_inheritable ? server : client;
-			const auto parent_end = child_end_inheritable ? client : server;
-
-			if ( !::SetHandleInformation( child_end, HANDLE_FLAG_INHERIT,
-				HANDLE_FLAG_INHERIT ) ) {
-				return std::unexpected( fail_win( "SetHandleInformation",
-					::GetLastError( ) ) );
+			// only the child's end is inheritable; an inherited parent end would outlive its close.
+			if ( !::SetHandleInformation( server, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT ) ||
+				!::SetHandleInformation( client, HANDLE_FLAG_INHERIT, 0 ) ) {
+				const auto error = ::GetLastError( );
+				::CloseHandle( server );
+				::CloseHandle( client );
+				return std::unexpected( fail_win( "SetHandleInformation", error ) );
 			}
 
-			if ( !::SetHandleInformation( parent_end, HANDLE_FLAG_INHERIT, 0 ) ) {
-				return std::unexpected( fail_win( "SetHandleInformation",
-					::GetLastError( ) ) );
-			}
-
-			return std::pair< HANDLE, HANDLE >{ child_end, parent_end };
+			return std::pair< HANDLE, HANDLE >{ server, client };
 		};
 
 		auto pipes = sandbox_raw_pipes{ };
 
-		auto stdin_pair = make_pair( true, pipe_name( L"-stdin" ) );
+		auto stdin_pair = make_pair( sandbox_pipe_direction::child_reads, pipe_name( L"-stdin" ) );
 
 		if ( !stdin_pair ) {
 			return std::unexpected( stdin_pair.error( ) );
@@ -332,18 +396,24 @@ namespace mcode::platform {
 		pipes.child_stdin = stdin_pair->first;
 		pipes.parent_stdin = stdin_pair->second;
 
-		auto stdout_pair = make_pair( false, pipe_name( L"-stdout" ) );
+		auto stdout_pair = make_pair( sandbox_pipe_direction::child_writes,
+			pipe_name( L"-stdout" ) );
 
 		if ( !stdout_pair ) {
+			sandbox_windows_close_pipes( pipes );
+
 			return std::unexpected( stdout_pair.error( ) );
 		}
 
 		pipes.child_stdout = stdout_pair->first;
 		pipes.parent_stdout = stdout_pair->second;
 
-		auto stderr_pair = make_pair( false, pipe_name( L"-stderr" ) );
+		auto stderr_pair = make_pair( sandbox_pipe_direction::child_writes,
+			pipe_name( L"-stderr" ) );
 
 		if ( !stderr_pair ) {
+			sandbox_windows_close_pipes( pipes );
+
 			return std::unexpected( stderr_pair.error( ) );
 		}
 
@@ -377,22 +447,49 @@ namespace mcode::platform {
 
 #if defined( _WIN32 )
 		// an IOCP association may have altered the caller's handles, so the child gets copies.
-		auto duplicate_inheritable = []( const void* source ) -> HANDLE {
+		auto duplicate_inheritable = []( const void* source ) -> result< HANDLE > {
 			auto duplicate = HANDLE{ nullptr };
 
-			if ( ::DuplicateHandle( ::GetCurrentProcess( ),
+			if ( !::DuplicateHandle( ::GetCurrentProcess( ),
 				static_cast< HANDLE >( const_cast< void* >( source ) ),
 				::GetCurrentProcess( ), &duplicate, 0, TRUE,
 				DUPLICATE_SAME_ACCESS ) ) {
-				return duplicate;
+				return std::unexpected( fail_win( "DuplicateHandle", ::GetLastError( ) ) );
 			}
 
-			return static_cast< HANDLE >( const_cast< void* >( source ) );
+			return duplicate;
 		};
 
 		auto child_stdin = duplicate_inheritable( stdin_read );
+
+		if ( !child_stdin ) {
+			return std::unexpected( child_stdin.error( ) );
+		}
+
 		auto child_stdout = duplicate_inheritable( stdout_write );
+
+		if ( !child_stdout ) {
+			::CloseHandle( *child_stdin );
+
+			return std::unexpected( child_stdout.error( ) );
+		}
+
 		auto child_stderr = duplicate_inheritable( stderr_write );
+
+		if ( !child_stderr ) {
+			::CloseHandle( *child_stdin );
+			::CloseHandle( *child_stdout );
+
+			return std::unexpected( child_stderr.error( ) );
+		}
+
+		// every exit below has to release the three duplicates and the attribute list.
+		auto close_children = [ & ]( ) {
+			::CloseHandle( *child_stdin );
+			::CloseHandle( *child_stdout );
+			::CloseHandle( *child_stderr );
+		};
+
 		// CreateProcessAsUserW does not search PATH the way CreateProcessW does.
 		auto resolved = executable;
 
@@ -409,50 +506,16 @@ namespace mcode::platform {
 		}
 
 		// quote only when needed: cmd.exe /c strips the first and last quote it is given.
-		auto quote = []( const std::wstring& value ) -> std::wstring {
-			if ( value.find_first_of( L" \"" ) == std::wstring::npos ) {
-				return value;
-			}
-
-			auto out = std::wstring{ L"\"" };
-			for ( const auto character : value ) {
-				if ( character == L'"' ) {
-					out += L"\\\"";
-				} else {
-					out += character;
-				}
-			}
-
-			out += L"\"";
-			return out;
-		};
-
-		auto command_line = quote( resolved.wstring( ) );
+		auto command_line = quote_command_line_argument( resolved.wstring( ) );
 
 		for ( const auto& argument : arguments ) {
-			auto wide = std::wstring{ };
-			const auto bytes = ::MultiByteToWideChar( CP_UTF8, 0, argument.c_str( ),
-				static_cast< int >( argument.size( ) ), nullptr, 0 );
-			wide.resize( static_cast< std::size_t >( bytes ) );
-			::MultiByteToWideChar( CP_UTF8, 0, argument.c_str( ),
-				static_cast< int >( argument.size( ) ), wide.data( ), bytes );
-
 			command_line += L" ";
-			command_line += quote( wide );
+			command_line += quote_command_line_argument( to_wide_string( argument ) );
 		}
 
 		auto sorted = std::map< std::wstring, std::wstring, std::less<> >{ };
 		for ( const auto& [ key, value ] : environment ) {
-			auto to_wide = []( const std::string& narrow ) -> std::wstring {
-				const auto bytes = ::MultiByteToWideChar( CP_UTF8, 0, narrow.c_str( ),
-					static_cast< int >( narrow.size( ) ), nullptr, 0 );
-				auto wide = std::wstring( static_cast< std::size_t >( bytes ), L'\0' );
-				::MultiByteToWideChar( CP_UTF8, 0, narrow.c_str( ),
-					static_cast< int >( narrow.size( ) ), wide.data( ), bytes );
-				return wide;
-			};
-
-			sorted.emplace( to_wide( key ), to_wide( value ) );
+			sorted.emplace( to_wide_string( key ), to_wide_string( value ) );
 		}
 
 		auto env_block = std::wstring{ };
@@ -468,9 +531,9 @@ namespace mcode::platform {
 		STARTUPINFOEXW startup_info{ };
 		startup_info.StartupInfo.cb = sizeof( startup_info );
 		startup_info.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-		startup_info.StartupInfo.hStdInput = child_stdin;
-		startup_info.StartupInfo.hStdOutput = child_stdout;
-		startup_info.StartupInfo.hStdError = child_stderr;
+		startup_info.StartupInfo.hStdInput = *child_stdin;
+		startup_info.StartupInfo.hStdOutput = *child_stdout;
+		startup_info.StartupInfo.hStdError = *child_stderr;
 
 		auto size = SIZE_T{ 0 };
 		(void)::InitializeProcThreadAttributeList( nullptr, 1, 0, &size );
@@ -480,15 +543,21 @@ namespace mcode::platform {
 			storage.data( ) );
 
 		if ( !::InitializeProcThreadAttributeList( startup_info.lpAttributeList, 1, 0, &size ) ) {
-			return std::unexpected( fail_win( "InitializeProcThreadAttributeList",
-				::GetLastError( ) ) );
+			const auto error = ::GetLastError( );
+			close_children( );
+
+			return std::unexpected( fail_win( "InitializeProcThreadAttributeList", error ) );
 		}
 
 		if ( !::UpdateProcThreadAttribute( startup_info.lpAttributeList, 0,
 			static_cast< DWORD_PTR >( PROC_THREAD_ATTRIBUTE_JOB_LIST_NUMBER ) |
 				static_cast< DWORD_PTR >( PROC_THREAD_ATTRIBUTE_INPUT_FLAG ),
 			&job, sizeof( job ), nullptr, nullptr ) ) {
-			return std::unexpected( fail_win( "UpdateProcThreadAttribute", ::GetLastError( ) ) );
+			const auto error = ::GetLastError( );
+			::DeleteProcThreadAttributeList( startup_info.lpAttributeList );
+			close_children( );
+
+			return std::unexpected( fail_win( "UpdateProcThreadAttribute", error ) );
 		}
 
 		auto process_information = PROCESS_INFORMATION{ };
@@ -507,9 +576,7 @@ namespace mcode::platform {
 
 		::DeleteProcThreadAttributeList( startup_info.lpAttributeList );
 
-		::CloseHandle( child_stdin );
-		::CloseHandle( child_stdout );
-		::CloseHandle( child_stderr );
+		close_children( );
 
 		if ( created == 0 ) {
 			return std::unexpected( fail_win( "CreateProcessAsUserW", ::GetLastError( ) ) );

@@ -5,6 +5,7 @@
 #include <string_view>
 #include <vector>
 
+#include "mcode/agent/loop.hxx"
 #include "mcode/core/error.hxx"
 #include "mcode/events/bus.hxx"
 
@@ -26,6 +27,11 @@ namespace mcode::cli {
 	// deliberately total: an unmapped error is a bug, not a fallthrough to 1.
 	[[nodiscard]] auto exit_code_for( errc code ) -> exit_code;
 	[[nodiscard]] auto to_int( exit_code code ) noexcept -> int;
+
+	// The exit code a finished run contributes, from its terminal state and the two
+	// run-level flags. Shared by exec and the interactive session so the two cannot drift.
+	[[nodiscard]] auto exit_code_for_run( const mcode::turn_outcome& outcome, bool budget_exhausted,
+		bool permission_denied ) -> exit_code;
 
 	struct exec_options {
 		std::string prompt;

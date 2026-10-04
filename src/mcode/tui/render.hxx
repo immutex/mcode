@@ -22,6 +22,9 @@ namespace mcode::tui {
 	// Ceiling, so a runaway list cannot push the transcript off the screen.
 	inline constexpr std::size_t LIVE_REGION_MAX_ROWS = 16;
 
+	// the live region keeps only the newest reasoning rows, or they push the answer out
+	inline constexpr std::size_t LIVE_THOUGHT_MAX_ROWS = 6;
+
 	// Committed rows the in-app viewport retains for scrolling. The terminal's
 	// own scrollback keeps the whole session; this is the window the app can
 	// re-lay on demand, bounded so the copy cannot grow without limit.
@@ -59,9 +62,7 @@ namespace mcode::tui {
 
 		std::vector< active_tool > tools;
 
-		// The model's reasoning, streamed before its answer. Rendered in its
-		// own colour and committed as a collapsed block. `rows` is the whole
-		// block: the region shows all of it, bounded, not just the last line.
+		// the model's reasoning; the live region keeps its newest rows, the commit a collapsed tail
 		//
 		// A delta only appends to `text` and marks `rows` stale: re-rendering
 		// the whole buffer per delta is quadratic in the answer's length. The
@@ -282,6 +283,9 @@ namespace mcode::tui {
 		// must erase the region at its old height before the new frame is
 		// diffed, or a row the region no longer covers survives.
 		bool resize_pending_ = false;
+
+		// set by invalidate, cleared by the repainting flush: the screen is not the tracked frame
+		bool repaint_all_ = false;
 	};
 
 	// Braille, one frame per SPINNER_INTERVAL_MS. Every glyph is single-width.

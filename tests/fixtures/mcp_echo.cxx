@@ -472,6 +472,78 @@ namespace {
 		return 0;
 	}
 
+	// answers initialize; returns the tools/list line, or empty on EOF
+	auto read_until_tools_list( ) -> std::string {
+		auto line = std::string{ };
+		while ( read_line( line ) ) {
+			const auto method = extract_method( line );
+
+			if ( method == "initialize" ) {
+				respond( extract_id( line ),
+					R"({"protocolVersion":"2025-06-18",)"
+					R"("capabilities":{"tools":{}},)"
+					R"("serverInfo":{"name":"mcp-echo","version":"1.0.0"}})" );
+
+				continue;
+			}
+
+			if ( method == "tools/list" ) {
+				return line;
+			}
+		}
+
+		return { };
+	}
+
+	// a request the client must answer; a string id exposes the request/notification confusion
+	auto run_server_request( ) -> int {
+		const auto list = read_until_tools_list( );
+		if ( list.empty( ) ) {
+			return 0;
+		}
+
+		respond( extract_id( list ), tools_list_body( false ) );
+		std::cout << R"({"jsonrpc":"2.0","id":"srv-1","method":"roots/list"})" << "\n"
+			<< std::flush;
+
+		auto line = std::string{ };
+		while ( read_line( line ) ) {
+			if ( line.find( "\"id\":\"srv-1\"" ) == std::string::npos ) {
+				continue;
+			}
+
+			const auto error_only = line.find( "\"error\"" ) != std::string::npos &&
+				line.find( "\"result\"" ) == std::string::npos;
+
+			std::cerr << ( error_only ? "reply-error" : "reply-result" ) << std::endl;
+		}
+
+		return 0;
+	}
+
+	// the response has no trailing newline, so only an EOF flush can deliver it
+	auto run_unterminated( ) -> int {
+		const auto list = read_until_tools_list( );
+		if ( list.empty( ) ) {
+			return 0;
+		}
+
+		std::cout << R"({"jsonrpc":"2.0","id":)" << extract_id( list )
+			<< R"(,"result":)" << tools_list_body( false ) << "}" << std::flush;
+		return 0;
+	}
+
+	// one unterminated line past the frame bound: the transport must fail, not grow
+	auto run_oversized( ) -> int {
+		const auto list = read_until_tools_list( );
+		if ( list.empty( ) ) {
+			return 0;
+		}
+
+		std::cout << std::string( 9u * 1024u * 1024u, 'x' ) << std::flush;
+		return 0;
+	}
+
 }
 
 auto main( const int argc, const char** argv ) -> int {
@@ -509,6 +581,18 @@ auto main( const int argc, const char** argv ) -> int {
 
 	if ( mode == "echo-notify" ) {
 		return run_echo_notify( );
+	}
+
+	if ( mode == "server-request" ) {
+		return run_server_request( );
+	}
+
+	if ( mode == "unterminated" ) {
+		return run_unterminated( );
+	}
+
+	if ( mode == "oversized" ) {
+		return run_oversized( );
 	}
 
 	return run_normal( );

@@ -35,13 +35,7 @@ namespace mcode::tui {
 		[[nodiscard]] auto prefix_row( const styled_line& row, std::string_view gutter,
 			token color ) -> styled_line;
 
-		// Splits one committed row to the caller's column budget. The split
-		// lands on the last space that fits, so a word is never cut in half
-		// unless it alone is wider than the budget, and then it is cut on a
-		// cluster boundary. Every continuation row repeats the row's own
-		// leading indent, so wrapped text hangs under its content rather than
-		// falling back to column 0. Fenced code is verbatim by contract and is
-		// returned untouched; its only signal is the code background token.
+		// splits one row to the budget, keeping its indent; fenced code is returned untouched
 		[[nodiscard]] auto wrap_row( const styled_line& row, std::size_t columns,
 			std::size_t ambiguous_width ) -> std::vector< styled_line >;
 

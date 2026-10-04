@@ -221,4 +221,55 @@ TEST_CASE( "the history accessor exposes what was submitted, oldest first",
 	CHECK( editor.history( )[ 1 ] == "second" );
 }
 
+TEST_CASE( "the backslash gesture follows the caret, not the line end", "[tui][editor]" ) {
+	auto editor = input_editor{ };
+
+	// the caret sits between the two backslashes of `a\\b`, so the run before it
+	// is one long: enter continues the line there rather than submitting it
+	std::ignore = editor.handle( character( "a\\\\b" ) );
+	std::ignore = editor.handle( key( input_editor::key::left ) );
+	std::ignore = editor.handle( key( input_editor::key::left ) );
+
+	const auto submitted = editor.handle( key( input_editor::key::enter ) );
+
+	CHECK_FALSE( submitted.has_value( ) );
+	CHECK( editor.row_count( ) == 2 );
+	CHECK( editor.text( ) == "a \\b" );
+}
+
+TEST_CASE( "caret movement and erasing follow whole glyphs", "[tui][editor]" ) {
+	auto editor = input_editor{ };
+
+	// U+00E9 is two bytes in UTF-8, so a byte-wise caret splits it
+	std::ignore = editor.handle( character( "\u00e9" ) );
+	std::ignore = editor.handle( character( "x" ) );
+
+	REQUIRE( editor.text( ) == "\u00e9x" );
+
+	std::ignore = editor.handle( key( input_editor::key::backspace ) );
+
+	CHECK( editor.text( ) == "\u00e9" );
+
+	// the second backspace removes the whole glyph, not one of its bytes.
+	std::ignore = editor.handle( key( input_editor::key::backspace ) );
+
+	CHECK( editor.text( ).empty( ) );
+	CHECK( editor.flattened_cursor( ) == 0 );
+
+	std::ignore = editor.handle( character( "\u00e9" ) );
+	std::ignore = editor.handle( key( input_editor::key::left ) );
+
+	CHECK( editor.flattened_cursor( ) == 0 );
+
+	std::ignore = editor.handle( key( input_editor::key::right ) );
+
+	CHECK( editor.flattened_cursor( ) == 2 );
+
+	// forward delete removes the whole glyph too.
+	std::ignore = editor.handle( key( input_editor::key::home ) );
+	std::ignore = editor.handle( key( input_editor::key::delete_key ) );
+
+	CHECK( editor.text( ).empty( ) );
+}
+
 

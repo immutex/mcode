@@ -27,11 +27,9 @@ namespace mcode::tui {
 	public:
 		explicit ansi_emitter( const capabilities& caps );
 
-		// Renders one frame's changed cells. The cursor is assumed PARKED on
-		// the region's last row; every movement is relative to it, so the
-		// region sits wherever the cursor is.
-		[[nodiscard]] auto emit( const cell_buffer& previous, const cell_buffer& current )
-			-> std::string;
+		// renders changed cells from the parked row; `full` emits every column of every row
+		[[nodiscard]] auto emit( const cell_buffer& previous, const cell_buffer& current,
+			bool full = false ) -> std::string;
 
 		[[nodiscard]] auto synchronized( const std::string& frame ) const -> std::string;
 

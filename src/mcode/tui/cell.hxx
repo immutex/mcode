@@ -78,11 +78,11 @@ namespace mcode::tui {
 		auto resize( std::size_t row_count, std::size_t column_count ) -> void;
 		auto clear( ) -> void;
 
+		// unchecked: `row` and `column` must be inside the buffer, multiply included
 		[[nodiscard]] auto at( std::size_t row, std::size_t column ) const -> const cell&;
 		[[nodiscard]] auto at( std::size_t row, std::size_t column ) -> cell&;
 
-		// Writes one pre-measured cluster. Returns the column past it; a
-		// cluster that does not fit is refused, never split.
+		// writes one cluster, returning the column past it; anything out of range is refused
 		auto set_cluster( std::size_t row, std::size_t column, std::string_view cluster_text,
 			std::size_t cluster_width, const style& value ) -> std::size_t;
 
@@ -100,6 +100,17 @@ namespace mcode::tui {
 		std::size_t ambiguous_width_ = 1;
 		std::vector< cell > cells_;
 	};
+
+	// one decoded sequence: its code point and byte length; invalid input is U+FFFD, one byte
+	struct utf8_decoded {
+		char32_t codepoint = 0xFFFD;
+		std::size_t length = 1;
+	};
+
+	[[nodiscard]] auto decode_utf8( std::string_view text ) noexcept -> utf8_decoded;
+
+	// the byte length a sequence lead starts: 0 when it cannot start one; continuations unchecked
+	[[nodiscard]] auto utf8_lead_length( char lead ) noexcept -> std::size_t;
 
 	// Display width of one code point. East Asian ambiguous characters count
 	// as one column or two, per the session's probed

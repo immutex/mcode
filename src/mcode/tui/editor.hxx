@@ -43,10 +43,7 @@ namespace mcode::tui {
 		// Applies one key. Returns the completed submission when Enter closed
 		// a non-empty buffer.
 		//
-		// Enter is also the multi-line gesture: a line ending in an odd run of
-		// backslashes continues onto a new row with one backslash consumed, so
-		// `line\` + Enter opens a second row. An even run is literal, so
-		// `path\\` + Enter submits `path\`.
+		// enter continues the row on an odd backslash run before the caret, otherwise submits
 		auto handle( const key_event& event ) -> std::optional< std::string >;
 
 		// Clears the buffer for the next submission.

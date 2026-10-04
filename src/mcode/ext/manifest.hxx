@@ -21,6 +21,10 @@ namespace mcode::ext {
 
 
 		[[nodiscard]] auto has_permission( std::string_view permission ) const noexcept -> bool;
+
+		// derived from permissions; only the `net:`/`credential:` prefixed entries, unfolded.
+		[[nodiscard]] auto net_hosts( ) const -> std::vector< std::string_view >;
+		[[nodiscard]] auto credential_names( ) const -> std::vector< std::string_view >;
 	};
 
 	// unknown keys are rejected: a typo that disables a capability beats a load error.

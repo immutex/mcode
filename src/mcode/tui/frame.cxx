@@ -120,9 +120,19 @@ namespace mcode::tui {
 		return out;
 	}
 
-	auto ansi_emitter::emit( const cell_buffer& previous, const cell_buffer& current )
-		-> std::string {
-		const auto runs = diff_rows( previous, current );
+	auto ansi_emitter::emit( const cell_buffer& previous, const cell_buffer& current,
+		const bool full ) -> std::string {
+		auto runs = std::vector< cell_run >{ };
+
+		if ( !full ) {
+			runs = diff_rows( previous, current );
+		} else if ( current.columns( ) > 0 ) {
+			runs.reserve( current.rows( ) );
+
+			for ( auto row = std::size_t{ 0 }; row < current.rows( ); ++row ) {
+				runs.push_back( cell_run{ row, 0, current.columns( ) } );
+			}
+		}
 
 		if ( runs.empty( ) ) {
 			return { };

@@ -17,7 +17,8 @@ namespace mcode {
 		using is_transparent = void;
 		using is_avalanching = void;
 
-		[[nodiscard]] auto operator( )( const std::string_view text ) const noexcept -> std::uint64_t {
+		[[nodiscard]] auto operator( )( const std::string_view text ) const noexcept
+			-> std::uint64_t {
 			return ankerl::unordered_dense::hash< std::string_view >{}( text );
 		}
 	};
@@ -55,7 +56,8 @@ namespace mcode {
 
 		[[nodiscard]] auto all( ) const -> std::vector< const tool_def* >;
 
-		[[nodiscard]] auto owned_by( const std::string_view owner ) const -> std::vector< const tool_def* >;
+		[[nodiscard]] auto owned_by( const std::string_view owner ) const
+			-> std::vector< const tool_def* >;
 
 		// False when absent: unregistering something already gone is a race, not a bug.
 		auto remove( std::string_view name ) -> bool;
@@ -68,7 +70,8 @@ namespace mcode {
 		auto clear( ) noexcept -> void { tools_.clear( ); }
 
 	private:
-		using tool_map = ankerl::unordered_dense::map< std::string, tool_def, string_hash, std::equal_to<> >;
+		using tool_map = ankerl::unordered_dense::map< std::string, tool_def, string_hash,
+			std::equal_to<> >;
 
 		tool_map tools_;
 	};

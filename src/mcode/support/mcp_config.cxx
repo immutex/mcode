@@ -67,6 +67,7 @@ namespace mcode::mcp {
 			const std::map< std::string, toml::value, std::less<> >& keys )
 			-> result< std::vector< server_config > > {
 			auto out = std::vector< server_config >{ };
+			auto declared_command = std::map< std::string, bool, std::less<> >{ };
 
 			for ( const auto& full_key : keys ) {
 				const auto& key = full_key.first;
@@ -126,6 +127,8 @@ namespace mcode::mcp {
 					}
 
 					// the map iterates sorted, so args arrives first; command PREPENDS the program.
+					declared_command[ std::string{ server_name } ] = true;
+
 					server.command.insert( server.command.begin( ),
 						std::make_move_iterator( argv->begin( ) ),
 						std::make_move_iterator( argv->end( ) ) );
@@ -175,6 +178,12 @@ namespace mcode::mcp {
 			}
 
 			for ( const auto& server : out ) {
+				// args alone would become argv[0], so the args would be executed as the program
+				if ( !declared_command[ server.name ] && !server.command.empty( ) ) {
+					return std::unexpected( server_error( server.name,
+						"'args' requires 'command' to name the executable" ) );
+				}
+
 				if ( const auto validated = validate_server( server ); !validated ) {
 					return std::unexpected( validated.error( ) );
 				}

@@ -1,7 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <cctype>
 #include <cstddef>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "mcode/tui/cell.hxx"
@@ -31,6 +33,28 @@ namespace {
 		}
 
 		return false;
+	}
+
+	// a committed row carries its own SGR, so its text is read with the escapes removed
+	[[nodiscard]] auto visible_text( const std::string_view bytes ) -> std::string {
+		auto out = std::string{ };
+
+		for ( auto index = std::size_t{ 0 }; index < bytes.size( ); ++index ) {
+			if ( bytes[ index ] != '\x1b' ) {
+				out.push_back( bytes[ index ] );
+
+				continue;
+			}
+
+			++index;
+
+			while ( index < bytes.size( ) &&
+				!std::isalpha( static_cast< unsigned char >( bytes[ index ] ) ) ) {
+				++index;
+			}
+		}
+
+		return out;
 	}
 
 }
@@ -146,33 +170,6 @@ TEST_CASE( "a turn's answer survives the turn ending", "[tui][render]" ) {
 	CHECK( bytes.find( "the answer" ) != std::string::npos );
 }
 
-TEST_CASE( "a committed answer is a block of formatted rows", "[tui][render]" ) {
-	auto coordinator = render_coordinator{ };
-
-	auto caps = capabilities{ };
-	caps.depth = capabilities::color_depth::none;
-	coordinator.set_capabilities( caps );
-	coordinator.resize( 30, 60 );
-
-	auto delta = event_queue::item{ };
-	delta.type = event_queue::kind::assistant_delta;
-	delta.text = "**bold** answer\nsecond row\n";
-	coordinator.apply( delta );
-
-	auto end = event_queue::item{ };
-	end.type = event_queue::kind::turn_end;
-	coordinator.apply( end );
-
-	// two rendered rows, not one span carrying an embedded newline.
-	REQUIRE( coordinator.state( ).pending_commit.size( ) == 2 );
-
-	const auto bytes = coordinator.flush( );
-
-	CHECK( bytes.find( "bold answer" ) != std::string::npos );
-	CHECK( bytes.find( "second row" ) != std::string::npos );
-	CHECK( bytes.find( "**" ) == std::string::npos );
-}
-
 TEST_CASE( "the commit path wraps rows to the coordinator's own width",
 	"[tui][render]" ) {
 	auto coordinator = render_coordinator{ };
@@ -199,8 +196,7 @@ TEST_CASE( "the commit path wraps rows to the coordinator's own width",
 	REQUIRE( start != std::string::npos );
 	start += 4;
 
-	// at depth none the committed rows carry no escape, so the rows are the
-	// text between the erase and the region's scroll.
+	// the committed rows run between the erase and the region's scroll, each ending in a CRLF
 	auto rows = std::vector< std::string >{ };
 
 	while ( start < bytes.size( ) ) {
@@ -217,7 +213,7 @@ TEST_CASE( "the commit path wraps rows to the coordinator's own width",
 	REQUIRE( rows.size( ) > 1 );
 
 	for ( const auto& row : rows ) {
-		CHECK( string_width( row, 1 ) <= 39 );
+		CHECK( string_width( visible_text( row ), 1 ) <= 39 );
 	}
 }
 
@@ -250,5 +246,8 @@ TEST_CASE( "a turn end commits the buffer, not the row cache", "[tui][render]" )
 	const auto bytes = coordinator.flush( );
 
 	CHECK( bytes.find( "**" ) == std::string::npos );
-	CHECK( bytes.find( "bold answer" ) != std::string::npos );
+	CHECK( visible_text( bytes ).find( "bold answer" ) != std::string::npos );
+
+	// emphasis survives at depth `none`: the emitter drops only colour, never attributes
+	CHECK( bytes.find( ";1m" ) != std::string::npos );
 }

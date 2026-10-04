@@ -148,3 +148,34 @@ TEST_CASE( "wrapping respects the ambiguous width", "[tui][width]" ) {
 	CHECK( rejoined.find( std::string{ BOX_VERTICAL } ) != std::string::npos );
 	CHECK( rejoined.ends_with( "end" ) );
 }
+
+TEST_CASE( "a cluster write outside the buffer is refused", "[tui][width]" ) {
+	auto buffer = cell_buffer{ 1, 4, 1 };
+
+	// a row past the last must not write through a wrapped index
+	CHECK( buffer.set_cluster( 1, 0, "x", 1, style{ } ) == 0 );
+	CHECK( buffer.set_cluster( 4, 0, "x", 1, style{ } ) == 0 );
+
+	// the in-range write still lands.
+	CHECK( buffer.set_cluster( 0, 0, "x", 1, style{ } ) == 1 );
+	CHECK( buffer.at( 0, 0 ).text == "x" );
+}
+
+TEST_CASE( "a marker wider than the row keeps its own row", "[tui][width]" ) {
+	// two columns hold the bullet or the content, never both, so the bullet takes its own row
+	const auto source = transcript::render_block( "- item", token::text );
+	REQUIRE( source.size( ) == 1 );
+
+	const auto wrapped = transcript::wrap_rows( source, 2, 1 );
+
+	REQUIRE( wrapped.size( ) > 1 );
+	CHECK( row_text( wrapped.front( ) ) == "• " );
+
+	auto rejoined = std::string{ };
+
+	for ( const auto& row : wrapped ) {
+		rejoined += row_text( row );
+	}
+
+	CHECK( rejoined == "• item" );
+}

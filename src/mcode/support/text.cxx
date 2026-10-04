@@ -10,7 +10,8 @@ namespace mcode::text {
 
 		constexpr char32_t REPLACEMENT = 0xFFFD;
 
-		[[nodiscard]] auto encode_utf8( const char32_t codepoint, char* out ) noexcept -> std::size_t {
+		[[nodiscard]] auto encode_utf8( const char32_t codepoint, char* out ) noexcept
+			-> std::size_t {
 			if ( codepoint > 0x10FFFF || ( codepoint >= 0xD800 && codepoint <= 0xDFFF ) ) {
 				return 0;
 			}
@@ -68,7 +69,8 @@ namespace mcode::text {
 		return simdutf::count_utf8( input.data( ), input.size( ) );
 	}
 
-	auto truncate_offset( const std::string_view input, const std::size_t max_bytes ) noexcept -> std::size_t {
+	auto truncate_offset( const std::string_view input, const std::size_t max_bytes ) noexcept
+		-> std::size_t {
 		if ( max_bytes >= input.size( ) ) {
 			return input.size( );
 		}
@@ -136,8 +138,10 @@ namespace mcode::text {
 			auto valid = ( length > 0 ) && ( index + length <= input.size( ) );
 
 			if ( valid && length > 1 ) {
-				for ( auto continuation = std::size_t{ 1 }; continuation < length; ++continuation ) {
-					if ( ( static_cast< unsigned char >( input[ index + continuation ] ) & 0xC0 ) != 0x80 ) {
+				for ( auto continuation = std::size_t{ 1 }; continuation < length;
+					++continuation ) {
+					if ( ( static_cast< unsigned char >(
+						input[ index + continuation ] ) & 0xC0 ) != 0x80 ) {
 						valid = false;
 						break;
 					}
@@ -187,7 +191,8 @@ namespace mcode::text {
 
 		const auto bytes = simdutf::utf8_length_from_utf16le( input.data( ), input.size( ) );
 		auto out = std::string( bytes, '\0' );
-		const auto written = simdutf::convert_utf16le_to_utf8( input.data( ), input.size( ), out.data( ) );
+		const auto written = simdutf::convert_utf16le_to_utf8(
+			input.data( ), input.size( ), out.data( ) );
 
 		out.resize( written );
 

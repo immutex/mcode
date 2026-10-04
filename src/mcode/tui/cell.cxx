@@ -8,64 +8,6 @@ namespace mcode::tui {
 
 	namespace {
 
-		// Decodes one UTF-8 sequence. Returns the code point and its length;
-		// an invalid lead byte yields one byte and U+FFFD.
-		struct decoded {
-			char32_t codepoint = 0xFFFD;
-			std::size_t length = 1;
-		};
-
-		[[nodiscard]] auto decode_utf8( const std::string_view text ) noexcept -> decoded {
-			if ( text.empty( ) ) {
-				return { };
-			}
-
-			const auto lead = static_cast< unsigned char >( text.front( ) );
-
-			if ( lead < 0x80 ) {
-				return { lead, 1 };
-			}
-
-			std::size_t expected = 0;
-			char32_t value = 0;
-
-			if ( ( lead & 0xE0 ) == 0xC0 ) {
-				expected = 2;
-				value = lead & 0x1F;
-			} else if ( ( lead & 0xF0 ) == 0xE0 ) {
-				expected = 3;
-				value = lead & 0x0F;
-			} else if ( ( lead & 0xF8 ) == 0xF0 ) {
-				expected = 4;
-				value = lead & 0x07;
-			} else {
-				return { 0xFFFD, 1 };
-			}
-
-			if ( text.size( ) < expected ) {
-				return { 0xFFFD, 1 };
-			}
-
-			for ( auto index = std::size_t{ 1 }; index < expected; ++index ) {
-				const auto byte = static_cast< unsigned char >( text[ index ] );
-
-				if ( ( byte & 0xC0 ) != 0x80 ) {
-					return { 0xFFFD, 1 };
-				}
-
-				value = ( value << 6 ) | ( byte & 0x3F );
-			}
-
-			// Overlong encodings and surrogates are invalid UTF-8.
-			if ( ( expected == 2 && value < 0x80 ) || ( expected == 3 && value < 0x800 ) ||
-				( expected == 4 && value < 0x10000 ) ||
-				( value >= 0xD800 && value <= 0xDFFF ) || value > 0x10FFFF ) {
-				return { 0xFFFD, 1 };
-			}
-
-			return { value, expected };
-		}
-
 		// East-Asian Wide and Fullwidth ranges. The table is the Unicode 15
 		// EAW=W/F set, compressed to the ranges that matter for a terminal;
 		// pinned to Unicode 15 so every component agrees.
@@ -159,6 +101,80 @@ namespace mcode::tui {
 			return value == 0x20E3;
 		}
 
+	}
+
+	auto decode_utf8( const std::string_view text ) noexcept -> utf8_decoded {
+		if ( text.empty( ) ) {
+			return { };
+		}
+
+		const auto lead = static_cast< unsigned char >( text.front( ) );
+
+		if ( lead < 0x80 ) {
+			return { lead, 1 };
+		}
+
+		const auto expected = utf8_lead_length( text.front( ) );
+
+		if ( expected == 0 ) {
+			return { 0xFFFD, 1 };
+		}
+
+		if ( text.size( ) < expected ) {
+			return { 0xFFFD, 1 };
+		}
+
+		char32_t value = 0;
+
+		if ( expected == 2 ) {
+			value = lead & 0x1F;
+		} else if ( expected == 3 ) {
+			value = lead & 0x0F;
+		} else {
+			value = lead & 0x07;
+		}
+
+		for ( auto index = std::size_t{ 1 }; index < expected; ++index ) {
+			const auto byte = static_cast< unsigned char >( text[ index ] );
+
+			if ( ( byte & 0xC0 ) != 0x80 ) {
+				return { 0xFFFD, 1 };
+			}
+
+			value = ( value << 6 ) | ( byte & 0x3F );
+		}
+
+		// Overlong encodings and surrogates are invalid UTF-8.
+		if ( ( expected == 2 && value < 0x80 ) || ( expected == 3 && value < 0x800 ) ||
+			( expected == 4 && value < 0x10000 ) ||
+			( value >= 0xD800 && value <= 0xDFFF ) || value > 0x10FFFF ) {
+			return { 0xFFFD, 1 };
+		}
+
+		return { value, expected };
+	}
+
+	auto utf8_lead_length( const char lead ) noexcept -> std::size_t {
+		const auto value = static_cast< unsigned char >( lead );
+
+		if ( value < 0x80 ) {
+			return 1;
+		}
+
+		// excludes the overlong leads 0xC0/0xC1 and the out-of-range 0xF5-0xFF
+		if ( value >= 0xC2 && value <= 0xDF ) {
+			return 2;
+		}
+
+		if ( value >= 0xE0 && value <= 0xEF ) {
+			return 3;
+		}
+
+		if ( value >= 0xF0 && value <= 0xF4 ) {
+			return 4;
+		}
+
+		return 0;
 	}
 
 	auto span_style( const styled_span& value ) noexcept -> style {
@@ -388,7 +404,8 @@ namespace mcode::tui {
 	auto cell_buffer::set_cluster( const std::size_t row, const std::size_t column,
 		const std::string_view cluster_text, const std::size_t cluster_width,
 		const style& value ) -> std::size_t {
-		if ( column >= columns_ || cluster_width > columns_ - column || cluster_width == 0 ) {
+		if ( row >= rows_ || column >= columns_ || cluster_width == 0 ||
+			cluster_width > columns_ - column ) {
 			return column;
 		}
 

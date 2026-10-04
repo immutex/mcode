@@ -39,19 +39,24 @@ namespace mcode {
 	public:
 		[[nodiscard]] static auto open( const std::filesystem::path& root ) -> result< workspace >;
 
-		[[nodiscard]] auto root( ) const noexcept -> const std::filesystem::path& { return canonical_root_; }
+		[[nodiscard]] auto root( ) const noexcept
+			-> const std::filesystem::path& { return canonical_root_; }
 
-		[[nodiscard]] auto resolve( std::string_view path ) const -> result< std::filesystem::path >;
+		[[nodiscard]] auto resolve( std::string_view path ) const
+			-> result< std::filesystem::path >;
 		[[nodiscard]] auto contains( const std::filesystem::path& absolute ) const -> bool;
 
 		[[nodiscard]] auto glob( std::string_view pattern,
-			std::size_t max_results = DEFAULT_GLOB_LIMIT ) const -> result< std::vector< std::filesystem::path > >;
+			std::size_t max_results = DEFAULT_GLOB_LIMIT ) const
+			-> result< std::vector< std::filesystem::path > >;
 
 		[[nodiscard]] auto read_viewport( std::string_view relative_path, std::size_t offset = 1,
 			std::size_t limit = DEFAULT_READ_LINES ) const -> result< read_result >;
 
-		[[nodiscard]] auto read_file( std::string_view relative_path ) const -> result< std::string >;
-		[[nodiscard]] auto content_hash( std::string_view relative_path ) const -> result< std::string >;
+		[[nodiscard]] auto read_file( std::string_view relative_path ) const
+			-> result< std::string >;
+		[[nodiscard]] auto content_hash( std::string_view relative_path ) const
+			-> result< std::string >;
 
 		// A sibling temp file renamed over the target, so a crash leaves the original intact.
 		[[nodiscard]] auto write_file( std::string_view relative_path, std::string_view content,

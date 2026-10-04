@@ -174,7 +174,8 @@ namespace mcode::proc {
 
 		auto* state_pointer = owned.state_.get( );
 
-		state_pointer->drainer = std::thread( [ state_pointer, pipe = std::move( stderr_pipe ) ]( ) mutable {
+		state_pointer->drainer = std::thread(
+			[ state_pointer, pipe = std::move( stderr_pipe ) ]( ) mutable {
 			auto buffer = std::array< char, SESSION_CHUNK_BYTES >{ };
 
 			while ( true ) {

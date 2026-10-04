@@ -40,10 +40,12 @@ namespace mcode {
 
 		if ( !definition.is_core( ) && definition.owner.empty( ) ) {
 			return std::unexpected(
-				fail( errc::config, "non-core tool '" + definition.name + "' must name its owner" ) );
+				fail( errc::config,
+					"non-core tool '" + definition.name + "' must name its owner" ) );
 		}
 
-		const auto [ entry, inserted ] = tools_.try_emplace( definition.name, std::move( definition ) );
+		const auto [ entry, inserted ] = tools_.try_emplace( definition.name,
+			std::move( definition ) );
 
 		if ( !inserted ) {
 			return std::unexpected( fail( errc::config,
@@ -70,12 +72,14 @@ namespace mcode {
 		}
 
 		std::sort( out.begin( ), out.end( ),
-			[]( const tool_def* left, const tool_def* right ) { return left->name < right->name; } );
+			[]( const tool_def* left,
+				const tool_def* right ) { return left->name < right->name; } );
 
 		return out;
 	}
 
-	auto tool_registry::owned_by( const std::string_view owner ) const -> std::vector< const tool_def* > {
+	auto tool_registry::owned_by( const std::string_view owner ) const
+		-> std::vector< const tool_def* > {
 		auto out = std::vector< const tool_def* >{ };
 
 		for ( const auto& [ name, definition ] : tools_ ) {
@@ -85,7 +89,8 @@ namespace mcode {
 		}
 
 		std::sort( out.begin( ), out.end( ),
-			[]( const tool_def* left, const tool_def* right ) { return left->name < right->name; } );
+			[]( const tool_def* left,
+				const tool_def* right ) { return left->name < right->name; } );
 
 		return out;
 	}
@@ -103,7 +108,8 @@ namespace mcode {
 			return 0;
 		}
 
-		return std::erase_if( tools_, [owner]( const auto& entry ) { return entry.second.owner == owner; } );
+		return std::erase_if( tools_,
+			[owner]( const auto& entry ) { return entry.second.owner == owner; } );
 	}
 
 }

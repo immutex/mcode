@@ -109,7 +109,9 @@ namespace mcode::model {
 			auto out = std::string{ text };
 
 			std::transform( out.begin( ), out.end( ), out.begin( ),
-				[]( const unsigned char byte ) { return static_cast< char >( std::tolower( byte ) ); } );
+				[]( const unsigned char byte ) {
+					return static_cast< char >( std::tolower( byte ) );
+				} );
 
 			return out;
 		}
@@ -154,8 +156,8 @@ namespace mcode::model {
 
 					if ( !value ) {
 						return std::unexpected( fail( errc::config,
-							"provider '" + request.provider.name + "' has a non-string extra header '" +
-							key + "'" ) );
+							"provider '" + request.provider.name +
+							"' has a non-string extra header '" + key + "'" ) );
 					}
 
 					out.headers[ key ] = *value;
@@ -205,7 +207,8 @@ namespace mcode::model {
 		return failure_class::fatal;
 	}
 
-	auto backoff_delay( const unsigned attempt, std::mt19937_64& rng ) -> std::chrono::milliseconds {
+	auto backoff_delay( const unsigned attempt, std::mt19937_64& rng )
+		-> std::chrono::milliseconds {
 		const auto shift = std::min< unsigned >( attempt, MAX_BACKOFF_SHIFT );
 		const auto exponential = std::chrono::milliseconds{
 			BACKOFF_BASE * ( 1ull << shift ) };
@@ -313,8 +316,10 @@ namespace mcode::model {
 
 		usage_.input = std::max( usage_.input, applier.accumulated_usage( ).input );
 		usage_.output = std::max( usage_.output, applier.accumulated_usage( ).output );
-		usage_.cached_read = std::max( usage_.cached_read, applier.accumulated_usage( ).cached_read );
-		usage_.cache_write = std::max( usage_.cache_write, applier.accumulated_usage( ).cache_write );
+		usage_.cached_read =
+			std::max( usage_.cached_read, applier.accumulated_usage( ).cached_read );
+		usage_.cache_write =
+			std::max( usage_.cache_write, applier.accumulated_usage( ).cache_write );
 		usage_.reasoning = std::max( usage_.reasoning, applier.accumulated_usage( ).reasoning );
 
 		return { };
@@ -324,8 +329,8 @@ namespace mcode::model {
 		-> status {
 		if ( !is_renderable_shape( request.provider ) ) {
 			return std::unexpected( fail( errc::unsupported,
-				"provider '" + request.provider.name +
-				"' uses a request shape this build cannot render; only the chat-completions shape is supported" ) );
+				"provider '" + request.provider.name + "' uses a request shape this build "
+				"cannot render; only the chat-completions shape is supported" ) );
 		}
 
 		auto rng = std::mt19937_64{ options_.random ? options_.random( ) : 0u };

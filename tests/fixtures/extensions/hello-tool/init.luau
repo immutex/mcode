@@ -7,6 +7,8 @@ local mcode = mcode
 mcode.tool.register({
 	name = "hello",
 	description = "Greet the named file's owner",
+	-- A read: the tool touches no file, and the manifest's fs_read is what gates the API.
+	permission = "read",
 	schema = { type = "object", properties = { name = { type = "string" } } },
 	run = function(args, ctx)
 		-- The tool's whole point is the round trip: the model's arguments arrive

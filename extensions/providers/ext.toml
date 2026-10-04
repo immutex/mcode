@@ -2,4 +2,14 @@ name = "providers"
 version = "0.1.0"
 api_version = 1
 description = "Reference model providers, shipped as an extension rather than compiled in"
-permissions = ["net"]
+
+# Each `net:` entry is one host a descriptor's endpoint may address, and each
+# `credential:` entry one environment variable a descriptor's auth may name.
+# Nothing else is reachable, and an undeclared host or name is a load-time refusal.
+permissions = [
+	"net",
+	"net:api.openai.com",
+	"net:api.anthropic.com",
+	"credential:OPENAI_API_KEY",
+	"credential:ANTHROPIC_API_KEY",
+]

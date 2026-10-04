@@ -20,6 +20,15 @@ namespace mcode::tui {
 			}
 		};
 
+		// emphasis needs a non-space inside each delimiter, so `2 * 3 * 4` stays arithmetic
+		const auto flanked = [ &text ]( const std::size_t first, const std::size_t last ) {
+			const auto is_space = [ ]( const char value ) {
+				return value == ' ' || value == '\t';
+			};
+
+			return first <= last && !is_space( text[ first ] ) && !is_space( text[ last ] );
+		};
+
 		while ( index < text.size( ) ) {
 			const auto character = text[ index ];
 
@@ -42,7 +51,8 @@ namespace mcode::tui {
 			if ( character == '*' && index + 1 < text.size( ) && text[ index + 1 ] == '*' ) {
 				const auto close = text.find( "**", index + 2 );
 
-				if ( close != std::string_view::npos && close > index + 2 ) {
+				if ( close != std::string_view::npos && close > index + 2 &&
+					flanked( index + 2, close - 1 ) ) {
 					flush_plain( );
 
 					auto bold_text = std::string{ text.substr( index + 2, close - index - 2 ) };
@@ -57,7 +67,8 @@ namespace mcode::tui {
 			if ( character == '*' ) {
 				const auto close = text.find( '*', index + 1 );
 
-				if ( close != std::string_view::npos && close > index + 1 ) {
+				if ( close != std::string_view::npos && close > index + 1 &&
+					flanked( index + 1, close - 1 ) ) {
 					flush_plain( );
 
 					auto italic_text = std::string{ text.substr( index + 1, close - index - 1 ) };

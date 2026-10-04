@@ -1,5 +1,6 @@
 #include "mcode/mcp/transport_stdio.hxx"
 
+#include "mcode/mcp/jsonrpc.hxx"
 #include "mcode/proc/process.hxx"
 
 #include <utility>
@@ -61,6 +62,20 @@ namespace mcode::mcp {
 		return child_.write( line );
 	}
 
+	auto stdio_transport::emit_line( std::string line ) -> void {
+		if ( !line.empty( ) && line.back( ) == '\r' ) {
+			line.pop_back( );
+		}
+
+		auto item = inbound{ };
+		item.skipped = false;
+		item.line_json = std::move( line );
+
+		if ( on_message ) {
+			on_message( std::move( item ) );
+		}
+	}
+
 	auto stdio_transport::dispatch_lines( const std::string_view chunk ) -> void {
 		pending_.append( chunk );
 
@@ -72,20 +87,42 @@ namespace mcode::mcp {
 			}
 
 			auto line = std::string{ pending_.substr( 0, newline ) };
-
-			if ( !line.empty( ) && line.back( ) == '\r' ) {
-				line.pop_back( );
-			}
-
 			pending_.erase( 0, newline + 1 );
 
-			auto item = inbound{ };
-			item.skipped = false;
-			item.line_json = std::move( line );
+			emit_line( std::move( line ) );
+		}
 
-			if ( on_message ) {
-				on_message( std::move( item ) );
-			}
+		// one unterminated line cannot grow past a frame, or a hostile server exhausts memory
+		if ( pending_.size( ) > jsonrpc::MAX_FRAME_BYTES ) {
+			fail_oversized( );
+		}
+	}
+
+	auto stdio_transport::flush_pending( ) -> void {
+		if ( pending_.empty( ) ) {
+			return;
+		}
+
+		auto line = std::move( pending_ );
+		pending_.clear( );
+
+		emit_line( std::move( line ) );
+	}
+
+	auto stdio_transport::fail_oversized( ) -> void {
+		pending_.clear( );
+		eof_seen_ = true;
+
+		auto item = inbound{ };
+		item.skipped = true;
+		item.line_json = "transport: a frame exceeded the size bound";
+
+		if ( on_message ) {
+			on_message( std::move( item ) );
+		}
+
+		if ( on_eof ) {
+			on_eof( );
 		}
 	}
 
@@ -105,6 +142,10 @@ namespace mcode::mcp {
 				case proc::read_kind::data: {
 					dispatch_lines( chunk->data );
 
+					if ( eof_seen_ ) {
+						return { };
+					}
+
 					break;
 				}
 
@@ -114,6 +155,7 @@ namespace mcode::mcp {
 
 				case proc::read_kind::eof: {
 					eof_seen_ = true;
+					flush_pending( );
 
 					if ( !chunk->detail.empty( ) ) {
 						auto tail = inbound{ };
@@ -135,6 +177,7 @@ namespace mcode::mcp {
 
 			if ( !child_.running( ) ) {
 				eof_seen_ = true;
+				flush_pending( );
 
 				if ( on_eof ) {
 					on_eof( );
@@ -157,6 +200,7 @@ namespace mcode::mcp {
 
 			if ( !chunk ) {
 				eof_seen_ = true;
+				flush_pending( );
 
 				if ( on_eof ) {
 					on_eof( );
@@ -169,6 +213,10 @@ namespace mcode::mcp {
 				case proc::read_kind::data: {
 					dispatch_lines( chunk->data );
 
+					if ( eof_seen_ ) {
+						return;
+					}
+
 					break;
 				}
 
@@ -178,6 +226,7 @@ namespace mcode::mcp {
 
 				case proc::read_kind::eof: {
 					eof_seen_ = true;
+					flush_pending( );
 
 					if ( on_eof ) {
 						on_eof( );
@@ -189,6 +238,7 @@ namespace mcode::mcp {
 
 			if ( !child_.running( ) ) {
 				eof_seen_ = true;
+				flush_pending( );
 
 				if ( on_eof ) {
 					on_eof( );
@@ -201,6 +251,10 @@ namespace mcode::mcp {
 
 	auto stdio_transport::close_input( ) -> status {
 		return child_.close_stdin( );
+	}
+
+	auto stdio_transport::wait_exit( const std::chrono::milliseconds timeout ) -> void {
+		child_.wait_exit( timeout );
 	}
 
 	auto stdio_transport::stop( ) -> void {

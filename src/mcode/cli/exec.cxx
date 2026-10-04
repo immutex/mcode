@@ -6,38 +6,13 @@
 #include <cstdlib>
 #include <string>
 
+#include "mcode/agent/loop.hxx"
 #include "mcode/support/json.hxx"
 #include "mcode/support/parse.hxx"
 
 namespace mcode::cli {
 
 	namespace {
-
-		auto escape_for_json( const std::string_view text ) -> std::string {
-			auto out = std::string{ };
-			out.reserve( text.size( ) + 8 );
-
-			for ( const auto character : text ) {
-				switch ( character ) {
-					case '"': out += "\\\""; break;
-					case '\\': out += "\\\\"; break;
-					case '\n': out += "\\n"; break;
-					case '\r': out += "\\r"; break;
-					case '\t': out += "\\t"; break;
-					default:
-						if ( static_cast< unsigned char >( character ) < 0x20 ) {
-							char buffer[ 8 ]{ };
-							std::snprintf( buffer, sizeof( buffer ), "\\u%04x",
-								static_cast< unsigned char >( character ) );
-							out += buffer;
-						} else {
-							out.push_back( character );
-						}
-				}
-			}
-
-			return out;
-		}
 
 		auto write_line( const std::string_view text ) -> void {
 			std::fwrite( text.data( ), 1, text.size( ), stdout );
@@ -69,7 +44,37 @@ namespace mcode::cli {
 		return exit_code::verification_failed;
 	}
 
-	auto parse_exec_options( const std::vector< std::string >& arguments ) -> result< exec_options > {
+	auto exit_code_for_run( const mcode::turn_outcome& outcome, const bool budget_exhausted,
+		const bool permission_denied ) -> exit_code {
+		if ( outcome.final_state == mcode::loop_state::failed ) {
+			return exit_code::provider_error;
+		}
+
+		if ( outcome.final_state != mcode::loop_state::handoff ) {
+			return exit_code::success;
+		}
+
+		// Budget before denial: a run that ran out of steps and was denied is a budget exit.
+		if ( budget_exhausted ) {
+			return exit_code::budget_exhausted;
+		}
+
+		if ( permission_denied ) {
+			return exit_code::permission_denied;
+		}
+
+		// A handoff is also how a run ends when no verification command is configured, and
+		// that is a completion. The loop records a reason only when it gave up -- a failed
+		// model call or a guard trip -- which is not a success.
+		if ( !outcome.summary_json.empty( ) ) {
+			return exit_code::provider_error;
+		}
+
+		return exit_code::success;
+	}
+
+	auto parse_exec_options( const std::vector< std::string >& arguments )
+		-> result< exec_options > {
 		auto options = exec_options{ };
 		auto index = std::size_t{ 0 };
 
@@ -161,10 +166,10 @@ namespace mcode::cli {
 					return std::unexpected( fail( errc::config,
 						"--max-budget-usd needs a number, got '" + *value + "'" ) );
 				}
-			} else if ( argument.starts_with( "--" ) ) {
+			} else if ( argument.starts_with( '-' ) ) {
 				// Unknown flags are collected, never ignored. Silently dropping
 				// `--max-step` (a typo) would run with the default budget and the user
-				// would never know.
+				// would never know. A single-dash typo (`-x`) is just as invisible.
 				options.unknown_arguments.push_back( argument );
 			} else if ( options.prompt.empty( ) ) {
 				options.prompt = argument;
@@ -190,7 +195,7 @@ namespace mcode::cli {
 		}
 
 		auto line = std::string{ "{\"v\":1,\"kind\":\"run.start\",\"prompt\":\"" };
-		line += escape_for_json( prompt );
+		mcode::json::append_escaped( line, prompt );
 		line += "\"}";
 
 		write_line( line );
@@ -209,7 +214,9 @@ namespace mcode::cli {
 		line += std::to_string( value.sequence );
 		line += ",\"ts\":";
 		line += std::to_string( value.timestamp_ms );
-		line += ",\"kind\":\"" + escape_for_json( events::to_string( value.type ) ) + "\"";
+		line += ",\"kind\":\"";
+		mcode::json::append_escaped( line, events::to_string( value.type ) );
+		line += "\"";
 		line += ",\"payload\":";
 		line += value.payload_json.empty( ) ? "{}" : value.payload_json;
 		line += "}";
@@ -236,7 +243,9 @@ namespace mcode::cli {
 
 		auto line = std::string{ "{\"v\":1,\"kind\":\"run.end\",\"exit_code\":" };
 		line += std::to_string( to_int( code ) );
-		line += ",\"summary\":\"" + escape_for_json( summary ) + "\"}";
+		line += ",\"summary\":\"";
+		mcode::json::append_escaped( line, summary );
+		line += "\"}";
 
 		write_line( line );
 		++lines_;

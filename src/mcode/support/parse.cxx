@@ -11,6 +11,10 @@ namespace mcode::support {
 
 		constexpr auto MAX_DECIMAL_EXPONENT = 400;
 
+		// 10^308 is the largest power of ten below DBL_MAX; beyond it the scale is applied twice
+		constexpr auto MAX_POW10_EXPONENT = 308;
+		constexpr auto MAX_POW10 = 1e308;
+
 		auto is_digit( const char character ) -> bool {
 			return character >= '0' && character <= '9';
 		}
@@ -98,15 +102,24 @@ namespace mcode::support {
 			return false;
 		}
 
-		auto value = static_cast< double >( significand );
+		if ( significand == 0 ) {
+			out = negative ? -0.0 : 0.0;
 
-		// one multiplication per decade, each a single rounding.
-		for ( auto step = 0; step < exponent; ++step ) {
-			value *= 10.0;
+			return true;
 		}
 
-		for ( auto step = 0; step > exponent; --step ) {
-			value /= 10.0;
+		// one power of ten and one final rounding; a multiply per decade accumulates several ULP
+		const auto magnitude = static_cast< double >( significand );
+		auto value = 0.0;
+
+		if ( exponent > 0 ) {
+			value = magnitude * std::pow( 10.0, static_cast< double >( exponent ) );
+		} else if ( exponent >= -MAX_POW10_EXPONENT ) {
+			value = magnitude / std::pow( 10.0, static_cast< double >( -exponent ) );
+		} else {
+			// a single power underflows below DBL_MIN, so the scale is applied in two steps
+			value = magnitude / MAX_POW10 /
+				std::pow( 10.0, static_cast< double >( -exponent - MAX_POW10_EXPONENT ) );
 		}
 
 		// overflow became infinity and underflow became zero.
@@ -114,7 +127,7 @@ namespace mcode::support {
 			return false;
 		}
 
-		if ( value == 0.0 && significand != 0 ) {
+		if ( value == 0.0 ) {
 			return false;
 		}
 

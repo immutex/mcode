@@ -58,11 +58,12 @@ namespace mcode::platform {
 	auto pty_session::spawn( const std::filesystem::path&, const std::vector< std::string >& )
 		-> result< pty_session > {
 		return std::unexpected( fail( errc::unsupported,
-			"pty_session::spawn is not implemented in M0 (docs/16 M1)" ) );
+			"pty_session::spawn is not implemented" ) );
 	}
 
 	auto pty_session::write( const std::string_view ) -> status {
-		return std::unexpected( fail( errc::unsupported, "pty_session::write is not implemented" ) );
+		return std::unexpected( fail( errc::unsupported,
+			"pty_session::write is not implemented" ) );
 	}
 
 	auto pty_session::read( ) -> result< std::string > {
@@ -70,7 +71,8 @@ namespace mcode::platform {
 	}
 
 	auto pty_session::resize( const int, const int ) -> status {
-		return std::unexpected( fail( errc::unsupported, "pty_session::resize is not implemented" ) );
+		return std::unexpected( fail( errc::unsupported,
+			"pty_session::resize is not implemented" ) );
 	}
 
 	auto pty_session::exit_code( ) const noexcept -> std::optional< int > {
@@ -112,7 +114,8 @@ namespace mcode::platform {
 
 	auto sandbox_mechanism( ) noexcept -> std::string_view {
 	#if defined( _WIN32 )
-		return "Low IL token via CreateProcessAsUserW on the exec path; MCP server children get the Job Object only; network deny best-effort (WFP needs admin)";
+		return "Low IL token via CreateProcessAsUserW on the exec path; MCP server children get "
+			"the Job Object only; network deny best-effort (WFP needs admin)";
 	#elif defined( __APPLE__ )
 		return "Seatbelt via sandbox_init_with_parameters, deny-default";
 	#elif defined( __linux__ )
@@ -343,7 +346,8 @@ namespace mcode::platform {
 			auto out = std::filesystem::path{ home } / "Library" / "Application Support" / name;
 
 			switch ( kind ) {
-				case data_kind::cache: return std::filesystem::path{ home } / "Library" / "Caches" / name;
+				case data_kind::cache:
+					return std::filesystem::path{ home } / "Library" / "Caches" / name;
 				case data_kind::log: return out / "Logs";
 				case data_kind::state: return out / "State";
 				default: return out;

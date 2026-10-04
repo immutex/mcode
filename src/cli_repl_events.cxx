@@ -11,10 +11,9 @@
 #include "mcode/tui/render.hxx"
 #include "mcode/tui/tty.hxx"
 
-auto subscribe_event_feed( mcode::events::bus& bus, mcode::tui::event_queue& queue,
-	const std::atomic< bool >& interrupted )
-	-> std::vector< mcode::events::bus::subscription_id > {
-	const auto display_text = []( const mcode::events::kind type,
+namespace {
+
+	[[nodiscard]] auto display_text( const mcode::events::kind type,
 		const std::string& payload_json ) -> std::string {
 		auto payload = mcode::json::document::parse( payload_json );
 
@@ -38,9 +37,9 @@ auto subscribe_event_feed( mcode::events::bus& bus, mcode::tui::event_queue& que
 			default:
 				return { };
 		}
-	};
+	}
 
-	const auto tool_target = []( const std::string& payload_json ) -> std::string {
+	[[nodiscard]] auto tool_target( const std::string& payload_json ) -> std::string {
 		auto payload = mcode::json::document::parse( payload_json );
 
 		if ( !payload ) {
@@ -54,11 +53,16 @@ auto subscribe_event_feed( mcode::events::bus& bus, mcode::tui::event_queue& que
 		}
 
 		return { };
-	};
+	}
 
-	const auto feed = [ &queue, &display_text, &tool_target, &interrupted ](
-		mcode::tui::event_queue::kind target, const mcode::events::kind source ) {
-		return [ &queue, &display_text, &tool_target, &interrupted, target, source ](
+}
+
+auto subscribe_event_feed( mcode::events::bus& bus, mcode::tui::event_queue& queue,
+	const std::atomic< bool >& interrupted )
+	-> std::vector< mcode::events::bus::subscription_id > {
+	const auto feed = [ &queue, &interrupted ]( const mcode::tui::event_queue::kind target,
+		const mcode::events::kind source ) {
+		return [ &queue, &interrupted, target, source ](
 			const mcode::events::event& value ) {
 			// An interrupt stops consuming the stream: whatever arrived is
 			// already in the transcript, and the remainder would only append

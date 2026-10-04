@@ -23,14 +23,17 @@ add_executable(mcode_tests
     test_mcp_config.cxx
     test_event_log.cxx
     test_loop.cxx
+    test_loop_history.cxx
     test_loop_events.cxx
     test_loop_e2e.cxx
     test_events.cxx
     test_eval.cxx
     test_loader.cxx
     test_loader_failures.cxx
+    test_lua_host.cxx
     test_manifest.cxx
     test_hooks.cxx
+    test_hooks_safety.cxx
     test_api_surface.cxx
     test_skills.cxx
     test_instruct_chain.cxx
@@ -41,6 +44,7 @@ add_executable(mcode_tests
     test_tui_editor.cxx
     test_tui_repl.cxx
     test_tui_render.cxx
+    test_tui_stream.cxx
     test_tui_commit.cxx
     test_tui_scroll.cxx
     test_tui_status.cxx

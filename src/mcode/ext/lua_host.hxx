@@ -36,6 +36,9 @@ namespace mcode {
 
 	}
 
+	// every dispatch entry point arms this unless a caller overrides it; zero is unlimited.
+	inline constexpr auto DEFAULT_TIME_LIMIT = std::chrono::milliseconds{ 50 };
+
 	using host_function = std::function< result< std::string >( std::string_view args_json ) >;
 
 	using module_loader_function =
@@ -48,7 +51,7 @@ namespace mcode {
 		std::uint64_t memory_limit_bytes = 0;
 
 		// zero means unlimited; the interrupt only fires at loop back edges and calls.
-		std::chrono::milliseconds time_limit{ 0 };
+		std::chrono::milliseconds time_limit = DEFAULT_TIME_LIMIT;
 
 		// an empty optional is a load error; never falls back to the filesystem at large.
 		module_loader_function module_loader;
@@ -85,9 +88,6 @@ namespace mcode {
 
 		[[nodiscard]] auto call_global( std::string_view name, std::string_view argument )
 			-> result< std::string >;
-
-		// the extension's own globals survive, so the caller must also drop what it registered.
-		auto reset( ) -> status;
 
 		// disarms on exit: a stale deadline would fire at the next unrelated safepoint.
 		class budget_scope {
@@ -128,7 +128,7 @@ namespace mcode {
 		lua_State* state_ = nullptr;
 		lua_State* thread_ = nullptr;
 		bool sealed_ = false;
-		std::chrono::milliseconds time_limit_{ 0 };
+		std::chrono::milliseconds time_limit_ = DEFAULT_TIME_LIMIT;
 		std::string extension_name_;
 
 		std::unique_ptr< detail::allocator_state > allocator_;

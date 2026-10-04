@@ -38,6 +38,7 @@ namespace mcode::net {
 		std::string buffer_;
 		sse_event current_;
 		bool saw_data_ = false;
+		bool pending_cr_terminator_ = false;
 		std::size_t events_parsed_ = 0;
 	};
 

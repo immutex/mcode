@@ -57,6 +57,30 @@ auto smoke_cli_and_extensions( ) -> void {
 		auto missing = mcode::cli::parse_exec_options( { "--model" } );
 		check( !missing, "a flag without a value is refused" );
 
+		// A single-dash typo is as invisible as a double-dash one: it must be collected,
+		// not sent to the model as the prompt.
+		auto short_flag = mcode::cli::parse_exec_options( { "-x" } );
+
+		check( static_cast< bool >( short_flag ), "parsed with an unknown short flag present" );
+
+		if ( short_flag ) {
+			check( short_flag->prompt.empty( ), "the short flag did not become the prompt" );
+			check( short_flag->unknown_arguments.size( ) == 1,
+				"the unknown short flag was collected" );
+			check( short_flag->unknown_arguments.front( ) == "-x",
+				"the collected argument is the short flag itself" );
+		}
+
+		auto short_with_prompt = mcode::cli::parse_exec_options( { "-x", "do it" } );
+
+		check( static_cast< bool >( short_with_prompt ), "parsed the short flag and a prompt" );
+
+		if ( short_with_prompt ) {
+			check( short_with_prompt->prompt == "do it", "the prompt still landed" );
+			check( short_with_prompt->unknown_arguments.size( ) == 1,
+				"only the short flag was collected" );
+		}
+
 		auto bad_number = mcode::cli::parse_exec_options( { "--max-steps", "lots" } );
 		check( !bad_number, "a non-numeric flag value is refused" );
 
@@ -74,7 +98,7 @@ auto smoke_cli_and_extensions( ) -> void {
 		check( stream.run_end_emitted( ), "run.end was emitted" );
 		check( stream.lines_emitted( ) == 3, "run.start, one event, and exactly one run.end" );
 	}
-	section( "extension loader (docs/26 E8)" );
+	section( "extension loader" );
 
 	{
 		auto registry = mcode::tool_registry{ };

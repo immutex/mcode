@@ -15,7 +15,7 @@ struct yyjson_mut_doc;
 
 namespace mcode::json {
 
-	// appends `text` escaped as a JSON string body, escaping every control character.
+	// appends `text` escaped as a JSON string body; invalid UTF-8 becomes U+FFFD
 	auto append_escaped( std::string& out, std::string_view text ) -> void;
 
 	// object members serialize in sorted key order, because the prompt cache hashes the prefix.

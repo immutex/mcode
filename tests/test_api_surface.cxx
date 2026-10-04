@@ -1,6 +1,7 @@
 // neither side is hand-copied: mcode.d.luau is parsed, the live mcode table is probed.
 
 #include "ext_test_helpers.hxx"
+#include "permission_test_helpers.hxx"
 
 #include <algorithm>
 #include <array>
@@ -274,6 +275,114 @@ mcode.tool.register({
 		INFO( "deliberately absent: " << name );
 		REQUIRE_FALSE( contains( present, name ) );
 	}
+
+	std::filesystem::remove_all( root );
+}
+
+TEST_CASE( "an extension tool's declared class decides its approval", "[surface]" ) {
+	const auto root = scratch_root( );
+	const auto directory = root / "tool-classes";
+
+	write( directory / "ext.toml",
+		"name = \"tool-classes\"\nversion = \"0.1.0\"\napi_version = 1\npermissions = []\n" );
+
+	write( directory / "init.luau", R"LUASRC(mcode.tool.register({
+	name = "peeker",
+	description = "declares read",
+	permission = "read",
+	schema = { type = "object", properties = {} },
+	run = function(_args, _context) return "peeked", nil end,
+})
+
+mcode.tool.register({
+	name = "runner",
+	description = "declares exec",
+	permission = "exec",
+	schema = { type = "object", properties = {} },
+	run = function(_args, _context) return "ran", nil end,
+})
+
+mcode.tool.register({
+	name = "scribbler",
+	description = "declares write",
+	permission = "write",
+	schema = { type = "object", properties = {} },
+	run = function(_args, _context) return "wrote", nil end,
+})
+
+mcode.tool.register({
+	name = "mystery",
+	description = "declares nothing",
+	schema = { type = "object", properties = {} },
+	run = function(_args, _context) return "?", nil end,
+})
+)LUASRC" );
+
+	auto registry = tool_registry{ };
+	g_registry = &registry;
+
+	auto providers = model::provider_registry{ };
+	auto bus = events::bus{ };
+	auto hooks = ext::hook_registry{ bus };
+
+	auto options = ext::loader_options{ };
+	options.register_api = register_api;
+
+	auto loaded = ext::load_extensions( { root }, providers, hooks, options );
+
+	INFO( describe( loaded.report ) );
+	REQUIRE( loaded.report.loaded.size( ) == 1 );
+
+	const auto* peeker = registry.find( "peeker" );
+	const auto* runner = registry.find( "runner" );
+	const auto* scribbler = registry.find( "scribbler" );
+	const auto* mystery = registry.find( "mystery" );
+
+	REQUIRE( peeker != nullptr );
+	REQUIRE( runner != nullptr );
+	REQUIRE( scribbler != nullptr );
+	REQUIRE( mystery != nullptr );
+
+	REQUIRE( peeker->klass == tool_class::read );
+	REQUIRE( runner->klass == tool_class::exec );
+	REQUIRE( scribbler->klass == tool_class::write );
+
+	// an undeclared class must not inherit the read default, which allows inside the workspace
+	REQUIRE( mystery->klass == tool_class::exec );
+
+	auto setup = permission_test::rig{ };
+
+	auto peek = perm::permission_request{ };
+	peek.tool_name = peeker->name;
+	peek.klass = peeker->klass;
+	peek.resource = "notes.txt";
+
+	REQUIRE( setup.engine.decide( peek ) == perm::permission_decision::allow );
+	REQUIRE( setup.approval.asks( ) == 0 );
+
+	// the workspace root itself is inside the boundary, so the write class is what matters
+	auto scribble = perm::permission_request{ };
+	scribble.tool_name = scribbler->name;
+	scribble.klass = scribbler->klass;
+	scribble.resource = setup.path.string( ) + "/notes.txt";
+
+	REQUIRE( setup.engine.decide( scribble ) == perm::permission_decision::allow );
+	REQUIRE( setup.approval.asks( ) == 0 );
+
+	// an extension tool's arguments carry no `command`, so the resource is empty
+	auto run = perm::permission_request{ };
+	run.tool_name = runner->name;
+	run.klass = runner->klass;
+
+	REQUIRE( setup.engine.decide( run ) != perm::permission_decision::allow );
+	REQUIRE( setup.approval.asks( ) == 1 );
+
+	auto undeclared = perm::permission_request{ };
+	undeclared.tool_name = mystery->name;
+	undeclared.klass = mystery->klass;
+
+	REQUIRE( setup.engine.decide( undeclared ) != perm::permission_decision::allow );
+	REQUIRE( setup.approval.asks( ) == 2 );
 
 	std::filesystem::remove_all( root );
 }

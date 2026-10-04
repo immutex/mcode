@@ -167,6 +167,90 @@ TEST_CASE( "a string value with an embedded NUL survives round-tripping", "[json
 	CHECK( *back == value );
 }
 
+TEST_CASE( "quotes, backslashes and control characters round-trip", "[json]" ) {
+	auto doc = document::make_object( );
+	const auto value = std::string{ "quote\" backslash\\ newline\n tab\t bell\x07" };
+	REQUIRE( doc.set_string( "k", value ) );
+
+	auto text = doc.dump( );
+	REQUIRE( static_cast< bool >( text ) );
+
+	auto reparsed = document::parse( *text );
+	REQUIRE( static_cast< bool >( reparsed ) );
+
+	auto back = reparsed->get_string( "k" );
+	REQUIRE( static_cast< bool >( back ) );
+	CHECK( *back == value );
+}
+
+TEST_CASE( "a unicode escape round-trips as UTF-8", "[json]" ) {
+	auto doc = document::parse( R"({"k":"\u00e9\u0041"})" );
+	REQUIRE( static_cast< bool >( doc ) );
+
+	auto value = doc->get_string( "k" );
+	REQUIRE( static_cast< bool >( value ) );
+	CHECK( *value == "\xc3\xa9" "A" );
+
+	auto rendered = document::make_object( );
+	REQUIRE( rendered.set_string( "k", *value ) );
+
+	auto text = rendered.dump( );
+	REQUIRE( static_cast< bool >( text ) );
+
+	auto reparsed = document::parse( *text );
+	REQUIRE( static_cast< bool >( reparsed ) );
+
+	auto back = reparsed->get_string( "k" );
+	REQUIRE( static_cast< bool >( back ) );
+	CHECK( *back == *value );
+}
+
+TEST_CASE( "append_escaped builds a JSON string body", "[json]" ) {
+	auto out = std::string{ };
+	mcode::json::append_escaped( out, "a\"b\\c\nd\te" );
+	CHECK( out == "a\\\"b\\\\c\\nd\\te" );
+
+	auto control = std::string{ };
+	mcode::json::append_escaped( control, std::string{ "\x01" } );
+	CHECK( control == "\\u0001" );
+
+	auto valid = std::string{ };
+	mcode::json::append_escaped( valid, "\xc3\xa9" );
+	CHECK( valid == "\xc3\xa9" );
+}
+
+TEST_CASE( "invalid UTF-8 is replaced, never emitted raw", "[json]" ) {
+	const auto replacement = std::string{ "\xEF\xBF\xBD" };
+
+	auto invalid = std::string{ };
+	mcode::json::append_escaped( invalid, std::string{ "\xff\xfe" } );
+	CHECK( invalid == replacement + replacement );
+
+	// an overlong encoding and a lone continuation byte are both replaced
+	auto overlong = std::string{ };
+	mcode::json::append_escaped( overlong, std::string{ "\xc0\xaf" } );
+	CHECK( overlong == replacement + replacement );
+
+	// a truncated sequence is replaced rather than passed through
+	auto truncated = std::string{ };
+	mcode::json::append_escaped( truncated, std::string{ "\xe2\x82" } );
+	CHECK( truncated == replacement + replacement );
+}
+
+TEST_CASE( "JSON nesting past the depth bound is refused", "[json]" ) {
+	auto shallow = document::parse( R"({"a":{"b":{"c":1}}})" );
+	REQUIRE( static_cast< bool >( shallow ) );
+	CHECK( static_cast< bool >( shallow->root_node( ) ) );
+
+	const auto deep = std::string( 300, '[' ) + std::string( 300, ']' );
+
+	auto parsed = document::parse( deep );
+	REQUIRE( static_cast< bool >( parsed ) );
+
+	auto node = parsed->root_node( );
+	CHECK_FALSE( static_cast< bool >( node ) );
+}
+
 TEST_CASE( "documents are movable but not copyable", "[json]" ) {
 	STATIC_REQUIRE( std::is_move_constructible_v< document > );
 	STATIC_REQUIRE_FALSE( std::is_copy_constructible_v< document > );

@@ -21,7 +21,64 @@ namespace mcode {
 			return position == std::string_view::npos ? path : path.substr( position + 1 );
 		}
 
-		auto luau_allocator( void* userdata, void* pointer, std::size_t old_size, std::size_t new_size )
+		struct setup_request {
+			::mcode::detail::watchdog_state* watchdog = nullptr;
+			module_loader_function* loader = nullptr;
+		};
+
+		struct seal_request {
+			lua_State* state = nullptr;
+			lua_State* thread = nullptr;
+		};
+
+		// both run under lua_cpcall: Luau throws on out-of-memory, and neither may escape.
+		auto initialize_state( lua_State* state ) -> int {
+			auto* request = static_cast< setup_request* >( lua_touserdata( state, 1 ) );
+
+			lua_pushlightuserdata( state, &ext::detail::g_watchdog_key );
+			lua_pushlightuserdata( state, request->watchdog );
+			lua_rawset( state, LUA_REGISTRYINDEX );
+
+			lua_pushlightuserdata( state, &ext::detail::g_module_loader_key );
+			lua_pushlightuserdata( state, request->loader );
+			lua_rawset( state, LUA_REGISTRYINDEX );
+
+			lua_callbacks( state )->interrupt = ext::detail::interrupt;
+
+			luaL_openlibs( state );
+
+			lua_newtable( state );
+			lua_setglobal( state, "mcode" );
+
+			lua_newtable( state );
+			lua_setfield( state, LUA_REGISTRYINDEX, "mcode.modules" );
+
+			lua_pushcfunction( state, ext::detail::module_require, "require" );
+			lua_setglobal( state, "require" );
+
+			return 0;
+		}
+
+		auto seal_thread( lua_State* state ) -> int {
+			auto* request = static_cast< seal_request* >( lua_touserdata( state, 1 ) );
+
+			luaL_sandbox( request->state );
+
+			request->thread = lua_newthread( request->state );
+
+			// lua_newthread leaves the thread collectable unless it is referenced.
+			lua_pushvalue( request->state, -1 );
+			lua_ref( request->state, -1 );
+
+			luaL_sandboxthread( request->thread );
+
+			lua_pop( request->state, 1 );
+
+			return 0;
+		}
+
+		auto luau_allocator( void* userdata, void* pointer, std::size_t old_size,
+			std::size_t new_size )
 			-> void* {
 			auto* counters = static_cast< ::mcode::detail::allocator_state* >( userdata );
 
@@ -78,7 +135,8 @@ namespace mcode {
 	}
 
 	auto ext::detail::watchdog_from( lua_State* state ) -> ::mcode::detail::watchdog_state* {
-		return static_cast< ::mcode::detail::watchdog_state* >( ext::detail::registry_pointer( state, &ext::detail::g_watchdog_key ) );
+		return static_cast< ::mcode::detail::watchdog_state* >(
+			ext::detail::registry_pointer( state, &ext::detail::g_watchdog_key ) );
 	}
 
 	auto ext::detail::loader_from( lua_State* state ) -> ::mcode::module_loader_function* {
@@ -183,8 +241,10 @@ namespace mcode {
 		host.time_limit_ = options.time_limit;
 		host.allocator_ = std::make_unique< ::mcode::detail::allocator_state >( );
 		host.watchdog_ = std::make_unique< ::mcode::detail::watchdog_state >( );
-		host.host_functions_ = std::make_unique< std::map< std::string, host_function, std::less<> > >( );
-		host.module_loader_ = std::make_unique< module_loader_function >( std::move( options.module_loader ) );
+		host.host_functions_ =
+			std::make_unique< std::map< std::string, host_function, std::less<> > >( );
+		host.module_loader_ =
+			std::make_unique< module_loader_function >( std::move( options.module_loader ) );
 
 		host.allocator_->limit = options.memory_limit_bytes;
 
@@ -196,31 +256,20 @@ namespace mcode {
 
 		host.state_ = state;
 
-		lua_pushlightuserdata( state, &ext::detail::g_watchdog_key );
-		lua_pushlightuserdata( state, host.watchdog_.get( ) );
-		lua_rawset( state, LUA_REGISTRYINDEX );
+		auto request = setup_request{ .watchdog = host.watchdog_.get( ),
+			.loader = host.module_loader_.get( ) };
 
-		lua_pushlightuserdata( state, &ext::detail::g_module_loader_key );
-		lua_pushlightuserdata( state, host.module_loader_.get( ) );
-		lua_rawset( state, LUA_REGISTRYINDEX );
-
-		lua_callbacks( state )->interrupt = ext::detail::interrupt;
-
-		luaL_openlibs( state );
-
-		lua_newtable( state );
-		lua_setglobal( state, "mcode" );
-
-		lua_newtable( state );
-		lua_setfield( state, LUA_REGISTRYINDEX, "mcode.modules" );
-
-		lua_pushcfunction( state, ext::detail::module_require, "require" );
-		lua_setglobal( state, "require" );
+		if ( lua_cpcall( state, initialize_state, &request ) != 0 ) {
+			// the host's destructor closes the state; the failure is reported, not fatal.
+			return std::unexpected( fail( errc::lua_error,
+				"VM setup failed: " + ext::detail::pop_error( state ) ) );
+		}
 
 		return host;
 	}
 
-	auto lua_host::register_host_function( const std::string_view path, host_function function ) -> status {
+	auto lua_host::register_host_function( const std::string_view path,
+		host_function function ) -> status {
 		if ( state_ == nullptr ) {
 			return std::unexpected( fail( errc::lua_error, "host has no lua_State" ) );
 		}
@@ -329,14 +378,16 @@ namespace mcode {
 		return { };
 	}
 
-	auto lua_host::set_global_string( const std::string_view name, const std::string_view text ) -> status {
+	auto lua_host::set_global_string( const std::string_view name,
+		const std::string_view text ) -> status {
 		if ( state_ == nullptr ) {
 			return std::unexpected( fail( errc::lua_error, "host has no lua_State" ) );
 		}
 
 		if ( sealed_ ) {
 			return std::unexpected( fail( errc::config,
-				"cannot set global '" + std::string{ name } + "' after the API surface is sealed" ) );
+				"cannot set global '" + std::string{ name } +
+					"' after the API surface is sealed" ) );
 		}
 
 		if ( auto placed = push_namespace( name ); !placed ) {
@@ -357,7 +408,8 @@ namespace mcode {
 
 		if ( sealed_ ) {
 			return std::unexpected( fail( errc::config,
-				"cannot set global '" + std::string{ path } + "' after the API surface is sealed" ) );
+				"cannot set global '" + std::string{ path } +
+					"' after the API surface is sealed" ) );
 		}
 
 		if ( auto placed = push_namespace( path ); !placed ) {
@@ -380,23 +432,14 @@ namespace mcode {
 			return std::unexpected( fail( errc::lua_error, "host has no lua_State" ) );
 		}
 
-		luaL_sandbox( state_ );
+		auto request = seal_request{ .state = state_ };
 
-		lua_State* thread = lua_newthread( state_ );
-
-		if ( thread == nullptr ) {
-			return std::unexpected( fail( errc::lua_error, "lua_newthread failed" ) );
+		if ( lua_cpcall( state_, seal_thread, &request ) != 0 ) {
+			return std::unexpected( fail( errc::lua_error,
+				"VM seal failed: " + ext::detail::pop_error( state_ ) ) );
 		}
 
-		// lua_newthread leaves the thread collectable unless it is referenced.
-		lua_pushvalue( state_, -1 );
-		lua_ref( state_, -1 );
-
-		luaL_sandboxthread( thread );
-
-		lua_pop( state_, 1 );
-
-		thread_ = thread;
+		thread_ = request.thread;
 		sealed_ = true;
 
 		return { };
@@ -439,20 +482,6 @@ namespace mcode {
 
 		// a deadline left in the past would fire at the next safepoint of an unrelated call.
 		watchdog_->armed = false;
-	}
-
-	auto lua_host::reset( ) -> status {
-		if ( thread_ == nullptr ) {
-			return std::unexpected( fail( errc::lua_error, "host has no thread" ) );
-		}
-
-		if ( !sealed_ ) {
-			return std::unexpected( fail( errc::config, "host is not sealed" ) );
-		}
-
-		lua_resetthread( thread_ );
-
-		return { };
 	}
 
 }

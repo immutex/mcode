@@ -2,15 +2,51 @@
 
 #include <algorithm>
 
+#include "mcode/tui/cell.hxx"
+
 namespace mcode::tui {
 
 	namespace {
 
-		// The length of the backslash run at the end of `text`.
-		[[nodiscard]] auto trailing_backslashes( const std::string& text ) -> std::size_t {
+		// the editor reads only cluster boundaries, never the display width
+		inline constexpr std::size_t ANY_AMBIGUOUS_WIDTH = 1;
+
+		// the boundary at or before `offset`, so the caret never lands inside a glyph
+		[[nodiscard]] auto cluster_start( const std::string_view text,
+			const std::size_t offset ) -> std::size_t {
+			const auto limit = std::min( offset, text.size( ) );
+			auto start = std::size_t{ 0 };
+			auto position = std::size_t{ 0 };
+
+			while ( position < limit ) {
+				const auto cluster = next_cluster( text.substr( position ),
+					ANY_AMBIGUOUS_WIDTH ).first;
+
+				if ( cluster.empty( ) ) {
+					break;
+				}
+
+				start = position;
+				position += cluster.size( );
+			}
+
+			return start;
+		}
+
+		// the offset past the cluster starting at `offset`
+		[[nodiscard]] auto cluster_end( const std::string_view text, const std::size_t offset )
+			-> std::size_t {
+			const auto cluster = next_cluster( text.substr( offset ), ANY_AMBIGUOUS_WIDTH ).first;
+
+			return offset + cluster.size( );
+		}
+
+		// the backslash run ending at `cursor`
+		[[nodiscard]] auto trailing_backslashes( const std::string& text, const std::size_t cursor )
+			-> std::size_t {
 			auto count = std::size_t{ 0 };
 
-			while ( count < text.size( ) && text[ text.size( ) - 1 - count ] == '\\' ) {
+			while ( count < cursor && text[ cursor - 1 - count ] == '\\' ) {
 				++count;
 			}
 
@@ -43,25 +79,20 @@ namespace mcode::tui {
 			}
 
 			case key::enter: {
-				// A trailing backslash run is the multi-line gesture: an odd
-				// count continues the line with one backslash consumed, an
-				// even count submits with one backslash left literal, so
-				// `line\` opens a row and `path\\` submits `path\`. Shift+Enter
-				// cannot be told apart without the Kitty protocol, which
-				// ConPTY does not reliably carry, so this is the gesture.
-				const auto trailing = trailing_backslashes( line.text );
+				// an odd backslash run before the caret continues the line; an even one is literal
+				const auto trailing = trailing_backslashes( line.text, line.cursor );
 
 				if ( trailing % 2 == 1 ) {
-					line.text.pop_back( );
-					line.cursor = line.text.size( );
+					line.text.erase( line.cursor - 1, 1 );
+					--line.cursor;
 					open_row( );
 
 					return std::nullopt;
 				}
 
 				if ( trailing > 0 ) {
-					line.text.pop_back( );
-					line.cursor = line.text.size( );
+					line.text.erase( line.cursor - 1, 1 );
+					--line.cursor;
 				}
 
 				auto submission = std::string{ };
@@ -91,8 +122,10 @@ namespace mcode::tui {
 
 			case key::backspace: {
 				if ( line.cursor > 0 ) {
-					--line.cursor;
-					line.text.erase( line.cursor, 1 );
+					const auto start = cluster_start( line.text, line.cursor );
+
+					line.text.erase( start, line.cursor - start );
+					line.cursor = start;
 
 					return std::nullopt;
 				}
@@ -111,7 +144,8 @@ namespace mcode::tui {
 
 			case key::delete_key: {
 				if ( line.cursor < line.text.size( ) ) {
-					line.text.erase( line.cursor, 1 );
+					line.text.erase( line.cursor,
+						cluster_end( line.text, line.cursor ) - line.cursor );
 				} else if ( cursor_row_ + 1 < lines_.size( ) ) {
 					line.text += lines_[ cursor_row_ + 1 ].text;
 					lines_.erase( lines_.begin( ) +
@@ -123,7 +157,7 @@ namespace mcode::tui {
 
 			case key::left: {
 				if ( line.cursor > 0 ) {
-					--line.cursor;
+					line.cursor = cluster_start( line.text, line.cursor );
 				} else if ( cursor_row_ > 0 ) {
 					--cursor_row_;
 					lines_[ cursor_row_ ].cursor = lines_[ cursor_row_ ].text.size( );
@@ -134,7 +168,7 @@ namespace mcode::tui {
 
 			case key::right: {
 				if ( line.cursor < line.text.size( ) ) {
-					++line.cursor;
+					line.cursor = cluster_end( line.text, line.cursor );
 				} else if ( cursor_row_ + 1 < lines_.size( ) ) {
 					++cursor_row_;
 					lines_[ cursor_row_ ].cursor = 0;
@@ -146,8 +180,8 @@ namespace mcode::tui {
 			case key::up: {
 				if ( cursor_row_ > 0 ) {
 					--cursor_row_;
-					lines_[ cursor_row_ ].cursor =
-						std::min( lines_[ cursor_row_ ].cursor, lines_[ cursor_row_ ].text.size( ) );
+					lines_[ cursor_row_ ].cursor = cluster_start(
+						lines_[ cursor_row_ ].text, lines_[ cursor_row_ ].cursor );
 
 					return std::nullopt;
 				}
@@ -173,8 +207,8 @@ namespace mcode::tui {
 			case key::down: {
 				if ( cursor_row_ + 1 < lines_.size( ) ) {
 					++cursor_row_;
-					lines_[ cursor_row_ ].cursor =
-						std::min( lines_[ cursor_row_ ].cursor, lines_[ cursor_row_ ].text.size( ) );
+					lines_[ cursor_row_ ].cursor = cluster_start(
+						lines_[ cursor_row_ ].text, lines_[ cursor_row_ ].cursor );
 
 					return std::nullopt;
 				}

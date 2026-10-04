@@ -1,5 +1,6 @@
 #include "mcode/tui/transcript.hxx"
 
+#include <array>
 #include <string>
 #include <utility>
 #include <vector>
@@ -25,12 +26,16 @@ namespace mcode::tui {
 		// Glyphs that can make up a row's own indent: the list bullet, the
 		// quote and output gutters, the thought and done gutters, and a
 		// heading hash.
-		inline constexpr std::string_view INDENT_GLYPHS = "•│❯✻✓#";
+		constexpr auto INDENT_GLYPHS = std::array< std::string_view, 6 >{
+			"•", "│", "❯", "✻", "✓", "#",
+		};
 
 		// An ordered marker's number. It only reads as an indent when a whole
 		// span is the marker, so a paragraph that starts with a digit keeps
 		// its first word as content.
-		inline constexpr std::string_view ORDER_GLYPHS = "0123456789.)";
+		constexpr auto ORDER_GLYPHS = std::array< std::string_view, 12 >{
+			"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ".", ")",
+		};
 
 		// The one indent glyph a continuation row repeats: a quote and an
 		// output block keep their vertical line.
@@ -47,13 +52,25 @@ namespace mcode::tui {
 			return cluster == " " || cluster == "\t";
 		}
 
+		// a cluster is compared against each glyph, never matched as a substring
+		template< std::size_t GlyphCount >
+		[[nodiscard]] auto is_glyph( const std::string_view cluster,
+			const std::array< std::string_view, GlyphCount >& glyphs ) noexcept -> bool {
+			for ( const auto& glyph : glyphs ) {
+				if ( cluster == glyph ) {
+					return true;
+				}
+			}
+
+			return false;
+		}
+
 		[[nodiscard]] auto is_indent_cluster( const std::string_view cluster ) noexcept -> bool {
 			if ( is_space_cluster( cluster ) ) {
 				return true;
 			}
 
-			return INDENT_GLYPHS.find( cluster ) != std::string_view::npos ||
-				ORDER_GLYPHS.find( cluster ) != std::string_view::npos;
+			return is_glyph( cluster, INDENT_GLYPHS ) || is_glyph( cluster, ORDER_GLYPHS );
 		}
 
 		// A span is part of the indent when every cluster in it is whitespace
@@ -267,6 +284,13 @@ namespace mcode::tui {
 			}
 
 			auto rows = std::vector< styled_line >{ };
+
+			// an indent at least as wide as the row still keeps its marker, on its own row
+			if ( !hangs ) {
+				rows.push_back( styled_line{ row.begin( ),
+					row.begin( ) + static_cast< std::ptrdiff_t >( indent ) } );
+			}
+
 			auto start = std::size_t{ 0 };
 			auto first = true;
 
@@ -489,27 +513,20 @@ namespace mcode::tui {
 		out += emitter.region_top( painted_rows_ );
 		out += "\x1b[0J";
 
-		// At depth `none` token_color resolves empty, so every SGR would be a
-		// bare reset: the committed bytes carry no escape at all.
-		const auto coloured = caps_.depth != capabilities::color_depth::none;
-
 		for ( const auto& line : lines ) {
 			// A fresh emitter per line: the pen cache would skip the SGR of a
 			// line whose first span repeats the previous line's last style.
 			auto pen = ansi_emitter{ caps_ };
 
 			for ( const auto& span : line ) {
-				if ( coloured ) {
-					out += pen.sgr( span_style( span ) );
-				}
-
+				out += pen.sgr( span_style( span ) );
 				out += span.text;
 			}
 
 			// The session runs in raw mode, where a newline moves down without
 			// returning the carriage: without the CR a multi-row block
 			// stair-steps across the screen.
-			out += coloured ? "\x1b[0m\r\n" : "\r\n";
+			out += "\x1b[0m\r\n";
 		}
 
 		// Scroll the committed text clear of the region, whatever its length.

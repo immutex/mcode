@@ -72,7 +72,11 @@ namespace mcode::platform {
 				static_cast< DWORD_PTR >( PROC_THREAD_ATTRIBUTE_JOB_LIST_NUMBER ) |
 					static_cast< DWORD_PTR >( PROC_THREAD_ATTRIBUTE_INPUT_FLAG ),
 				&job, sizeof( job ), nullptr, nullptr ) ) {
-				return boost::system::error_code{ static_cast< int >( ::GetLastError( ) ),
+				const auto error = ::GetLastError( );
+				::DeleteProcThreadAttributeList( attribute_list );
+				attribute_list = nullptr;
+
+				return boost::system::error_code{ static_cast< int >( error ),
 					boost::system::system_category( ) };
 			}
 
@@ -111,7 +115,7 @@ namespace mcode::platform {
 		const std::vector< std::filesystem::path >& write_paths,
 		const std::vector< std::filesystem::path >& deny_paths ) -> status;
 
-	// null after handover.
+	// the parent must close child_* after the spawn or its read of stdout never sees EOF.
 	struct sandbox_raw_pipes {
 		void* child_stdin = nullptr;
 		void* child_stdout = nullptr;
@@ -120,6 +124,9 @@ namespace mcode::platform {
 		void* parent_stdout = nullptr;
 		void* parent_stderr = nullptr;
 	};
+
+	// closes every handle still set and nulls it, so a second call cannot double-close.
+	auto sandbox_windows_close_pipes( sandbox_raw_pipes& pipes ) -> void;
 
 	[[nodiscard]] auto sandbox_windows_make_pipes( ) -> result< sandbox_raw_pipes >;
 

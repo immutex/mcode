@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
+#include <utility>
 
 namespace mcode::config {
 
@@ -31,6 +32,29 @@ namespace mcode::config {
 			}
 
 			return std::filesystem::path{ value };
+		}
+
+		// only these two keys are read; a deeper permissions key would be silently dropped
+		auto validate_permission_key( const std::string_view key, const toml::value& entry )
+			-> status {
+			const auto under_permissions = key == "permissions" ||
+				key.starts_with( "permissions." );
+
+			if ( !under_permissions ) {
+				return { };
+			}
+
+			if ( key != "permissions.deny" && key != "permissions.ask" ) {
+				return std::unexpected( fail( errc::config, "unknown key '" + std::string{ key } +
+					"'; permission rules live at 'permissions.deny' and 'permissions.ask'" ) );
+			}
+
+			if ( entry.kind != toml::value_kind::array ) {
+				return std::unexpected( fail( errc::config, "'" + std::string{ key } +
+					"' must be a list of strings" ) );
+			}
+
+			return { };
 		}
 
 	}
@@ -72,6 +96,11 @@ namespace mcode::config {
 				return std::unexpected( fail( errc::config, path.string( ) + ": unknown key '" +
 					key + "'; no config section is named '" + std::string{ section } + "'" ) );
 			}
+
+			if ( const auto checked = validate_permission_key( key, entry ); !checked ) {
+				return std::unexpected( fail( errc::config,
+					path.string( ) + ": " + checked.error( ).msg ) );
+			}
 		}
 
 		// project scope may only add restrictions; anything else is rejected at load.
@@ -93,15 +122,9 @@ namespace mcode::config {
 						"'; it may only add 'permissions.deny' or 'permissions.ask'" ) );
 				}
 
-				// only a list may occupy a whole prefix; a scalar would collide in merge.
-				const auto exact_prefix = std::any_of( PROJECT_WRITABLE_PREFIXES.begin( ),
-					PROJECT_WRITABLE_PREFIXES.end( ),
-					[&]( const std::string_view prefix ) { return key == prefix; } );
-
-				if ( exact_prefix && entry.kind != toml::value_kind::array ) {
+				if ( const auto checked = validate_permission_key( key, entry ); !checked ) {
 					return std::unexpected( fail( errc::config,
-						path.string( ) + ": project scope may only add to '" + key +
-						"'; a list is required, not a single value" ) );
+						path.string( ) + ": " + checked.error( ).msg ) );
 				}
 			}
 		}
@@ -123,7 +146,8 @@ namespace mcode::config {
 			for ( auto& [ key, entry ] : source.values.keys( ) ) {
 				const auto existing = out.values_.find( key );
 
-				if ( existing != out.values_.end( ) && existing->second.kind == toml::value_kind::array ) {
+				if ( existing != out.values_.end( ) &&
+					existing->second.kind == toml::value_kind::array ) {
 					// A wholesale override would erase the user's entries.
 					if ( entry.kind != toml::value_kind::array ) {
 						return std::unexpected( fail( errc::config,
@@ -148,7 +172,8 @@ namespace mcode::config {
 		return out;
 	}
 
-	auto merged_config::get_string( const std::string_view key ) const -> std::optional< std::string > {
+	auto merged_config::get_string( const std::string_view key ) const
+		-> std::optional< std::string > {
 		const auto found = values_.find( std::string{ key } );
 
 		if ( found == values_.end( ) ) {
@@ -162,7 +187,8 @@ namespace mcode::config {
 		return std::nullopt;
 	}
 
-	auto merged_config::get_int( const std::string_view key ) const -> std::optional< std::int64_t > {
+	auto merged_config::get_int( const std::string_view key ) const
+		-> std::optional< std::int64_t > {
 		const auto found = values_.find( std::string{ key } );
 
 		if ( found == values_.end( ) ) {
@@ -205,18 +231,19 @@ namespace mcode::config {
 	}
 
 	auto merged_config::get_string_array( const std::string_view key ) const
-		-> std::vector< std::string > {
+		-> result< std::vector< std::string > > {
 		const auto found = values_.find( std::string{ key } );
 
 		if ( found == values_.end( ) ) {
-			return { };
+			return std::vector< std::string >{ };
 		}
 
 		if ( auto items = found->second.as_string_array( ) ) {
-			return *items;
+			return std::move( *items );
 		}
 
-		return { };
+		return std::unexpected( fail( errc::config,
+			"'" + std::string{ key } + "' must be a list of strings" ) );
 	}
 
 	auto merged_config::source_of( const std::string_view key ) const -> std::optional< scope > {

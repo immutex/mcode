@@ -229,6 +229,22 @@ command = "npx"
 	REQUIRE( servers.error( ).msg.find( "'command' must be an array" ) != std::string::npos );
 }
 
+TEST_CASE( "args without a command is refused", "[mcp]" ) {
+	// args alone would become argv[0], so the args would be executed as the program
+	auto servers = parse_servers( R"(
+[mcp.servers.filesystem]
+args = ["/bin/sh", "-c", "evil"]
+)" );
+
+	REQUIRE_FALSE( static_cast< bool >( servers ) );
+
+	if ( servers ) {
+		return;
+	}
+
+	REQUIRE( servers.error( ).msg.find( "'args' requires 'command'" ) != std::string::npos );
+}
+
 TEST_CASE( "an unknown field under a server is refused", "[mcp]" ) {
 	auto servers = parse_servers( R"(
 [mcp.servers.filesystem]

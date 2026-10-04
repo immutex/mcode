@@ -66,13 +66,16 @@ namespace mcode::config {
 		[[nodiscard]] auto get_int( std::string_view key ) const -> std::optional< std::int64_t >;
 		[[nodiscard]] auto get_double( std::string_view key ) const -> std::optional< double >;
 		[[nodiscard]] auto get_bool( std::string_view key ) const -> std::optional< bool >;
+
+		// absent is empty; a wrong type is an error, never an empty list
 		[[nodiscard]] auto get_string_array( std::string_view key ) const
-			-> std::vector< std::string >;
+			-> result< std::vector< std::string > >;
 
 		// which layer supplied a key, for `mcode config show`.
 		[[nodiscard]] auto source_of( std::string_view key ) const -> std::optional< scope >;
 
-		[[nodiscard]] auto keys( ) const noexcept -> const std::map< std::string, toml::value, std::less<> >& {
+		[[nodiscard]] auto keys( ) const noexcept
+			-> const std::map< std::string, toml::value, std::less<> >& {
 			return values_;
 		}
 
@@ -86,7 +89,8 @@ namespace mcode::config {
 		std::vector< scope > loaded_;
 	};
 
-	[[nodiscard]] auto default_layer_paths( ) -> std::vector< std::pair< scope, std::filesystem::path > >;
+	[[nodiscard]] auto default_layer_paths( )
+		-> std::vector< std::pair< scope, std::filesystem::path > >;
 
 	// A missing file is skipped; an unreadable or malformed one is an error.
 	[[nodiscard]] auto load( const std::filesystem::path& project_root = { } )

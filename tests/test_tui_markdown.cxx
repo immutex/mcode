@@ -177,3 +177,25 @@ TEST_CASE( "empty input yields no rows and a trailing newline adds none", "[tui]
 	REQUIRE( rows.size( ) == 1 );
 	CHECK( row_text( rows.front( ) ) == "a" );
 }
+
+TEST_CASE( "a spaced asterisk is arithmetic, not emphasis", "[tui][markdown]" ) {
+	// a delimiter needs a non-space inside it, or `2 * 3 * 4` loses both asterisks
+	const auto spans = render_inline( "2 * 3 * 4", token::text );
+
+	REQUIRE( spans.size( ) == 1 );
+	CHECK( spans.front( ).text == "2 * 3 * 4" );
+	CHECK_FALSE( spans.front( ).italic );
+
+	// flanking delimiters still emphasise.
+	const auto emphasised = render_inline( "2 *3* 4", token::text );
+
+	auto italic = std::string{ };
+
+	for ( const auto& span : emphasised ) {
+		if ( span.italic ) {
+			italic += span.text;
+		}
+	}
+
+	CHECK( italic == "3" );
+}

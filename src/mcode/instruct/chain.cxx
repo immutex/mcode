@@ -141,7 +141,8 @@ namespace mcode::instruct {
 		}
 
 		// Collected closest first, reversed before returning: broadest first, closest last.
-		auto walk_ancestors( const std::filesystem::path& start ) -> std::vector< std::filesystem::path > {
+		auto walk_ancestors( const std::filesystem::path& start ) ->
+			std::vector< std::filesystem::path > {
 			auto files = std::vector< std::filesystem::path >{ };
 			auto directory = std::filesystem::absolute( start ).lexically_normal( );
 			auto depth = std::size_t{ 0 };
@@ -204,7 +205,8 @@ namespace mcode::instruct {
 		// over-budget AGENTS.md is warned about and sent whole - only outer files are elided.
 		const auto byte_cut = enforce_chain_cap( chain, CHAIN_BYTE_CAP, false );
 		const auto budget_cut = enforce_chain_cap( chain,
-			static_cast< std::uintmax_t >( INSTRUCTION_CHAIN_TOKEN_BUDGET ) * CHARS_PER_TOKEN_ESTIMATE,
+			static_cast< std::uintmax_t >( INSTRUCTION_CHAIN_TOKEN_BUDGET ) *
+				CHARS_PER_TOKEN_ESTIMATE,
 			true );
 
 		join_chain( chain );

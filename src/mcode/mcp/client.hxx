@@ -58,6 +58,11 @@ namespace mcode::mcp {
 			on_notify_ = std::move( on_notify );
 		}
 
+		// fired once when the transport ends, after every pending call has been failed
+		auto set_end_handler( std::function< void( ) > on_end ) -> void {
+			on_end_ = std::move( on_end );
+		}
+
 		// initialize is not cancellable, so it gets the absolute maximum, not the list timeout
 		auto initialize( ) -> result< server_capabilities >;
 
@@ -110,8 +115,9 @@ namespace mcode::mcp {
 		bool eof_seen_ = false;
 
 		std::uint64_t next_id_ = 1;
-		std::map< std::uint64_t, pending_call > pending_;
+		std::map< jsonrpc::request_id, pending_call > pending_;
 		notify_callback on_notify_;
+		std::function< void( ) > on_end_;
 
 		client_failure failure_;
 		std::size_t ignored_responses_ = 0;

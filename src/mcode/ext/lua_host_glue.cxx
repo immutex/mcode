@@ -16,9 +16,9 @@ namespace mcode::ext::detail {
 			return;
 		}
 
-		static thread_local std::uint64_t safepoints = 0;
+		static thread_local std::uint64_t g_safepoints = 0;
 
-		if ( ++safepoints % ext::detail::INTERRUPT_GRANULARITY != 0 ) {
+		if ( ++g_safepoints % ext::detail::INTERRUPT_GRANULARITY != 0 ) {
 			return;
 		}
 
@@ -73,5 +73,6 @@ namespace mcode::ext::detail {
 		lua_pushnil( state );
 
 		return 2;
-}
+	}
+
 }

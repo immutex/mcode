@@ -24,6 +24,12 @@ namespace mcode::tools {
 				"pass the complete new file content; an empty file is content: \"\"", false );
 		}
 
+		if ( content->size( ) > MAX_WRITE_FILE_BYTES ) {
+			return error_result( "content exceeds the " + std::to_string( MAX_WRITE_FILE_BYTES ) +
+					"-byte write cap",
+				"write a smaller file, or split the content across several files", false );
+		}
+
 		auto& space = *context.space;
 		auto resolved = space.resolve( *path );
 

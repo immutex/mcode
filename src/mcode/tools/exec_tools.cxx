@@ -47,7 +47,8 @@ namespace mcode::tools {
 			auto current = std::string{ };
 
 			for ( const auto character : text ) {
-				if ( character == '_' || character == ' ' || character == '-' || character == '.' ) {
+				if ( character == '_' || character == ' ' || character == '-' ||
+					character == '.' ) {
 					if ( !current.empty( ) ) {
 						tokens.push_back( std::move( current ) );
 						current.clear( );
@@ -157,7 +158,8 @@ namespace mcode::tools {
 		if ( !tokens ) {
 			return error_result(
 				"refusing unparsable or compound command: " + *command,
-				"the approval gate matches single commands only; split compound commands (&& | ; $() backticks) into separate calls",
+				"the approval gate matches single commands only; "
+				"split compound commands (&& | ; $() backticks) into separate calls",
 				false );
 		}
 
@@ -190,7 +192,8 @@ namespace mcode::tools {
 
 		if ( !program_path ) {
 			return error_result( "cannot resolve " + tokens->front( ) + " on PATH",
-				"the program was approved but not found; check the spelling and that it is installed",
+				"the program was approved but not found; "
+				"check the spelling and that it is installed",
 				false );
 		}
 
@@ -226,7 +229,8 @@ namespace mcode::tools {
 				" ms timeout; re-run with a larger timeout_ms if the command needs longer\"";
 		} else if ( outcome->exit_code != 0 ) {
 			out += ",\"hint\":\"the command failed with exit code " +
-				std::to_string( outcome->exit_code ) + "; read stderr above before retrying -- exec calls are never auto-retried\"";
+				std::to_string( outcome->exit_code ) +
+				"; read stderr above before retrying -- exec calls are never auto-retried\"";
 		}
 
 		if ( outcome->output_truncated ) {
@@ -254,7 +258,8 @@ namespace mcode::tools {
 
 		if ( context.headless ) {
 			return error_result( "cannot ask the user in headless mode: " + *question,
-				"no terminal is attached; decide from available evidence, or re-run mcode interactively to answer this question",
+				"no terminal is attached; decide from available evidence, "
+				"or re-run mcode interactively to answer this question",
 				false );
 		}
 
@@ -262,7 +267,8 @@ namespace mcode::tools {
 
 		if ( answer.empty( ) ) {
 			return error_result( "no answer was given",
-				"the user closed or emptied the prompt; proceed without the answer or ask again with sharper options",
+				"the user closed or emptied the prompt; "
+				"proceed without the answer or ask again with sharper options",
 				false );
 		}
 
@@ -281,7 +287,8 @@ namespace mcode::tools {
 
 		if ( !query || query->empty( ) ) {
 			return error_result( "missing required argument: query",
-				"pass words to match against tool names and descriptions, e.g. \"git commit\"", false );
+				"pass words to match against tool names and descriptions, "
+				"e.g. \"git commit\"", false );
 		}
 
 		const auto expand = args.bool_field( "expand" ).value_or( false );

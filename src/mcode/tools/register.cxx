@@ -102,14 +102,22 @@ namespace mcode::tools {
 			tool_class klass;
 			std::string_view schema;
 		} CORE[] = {
-			{ "read", "Read a file window with line numbers; refuses binary with a stub", tool_class::read, READ_SCHEMA },
-			{ "edit", "Replace an exact string in a file and return a unified diff", tool_class::write, EDIT_SCHEMA },
-			{ "write", "Create or overwrite a file; overwrite requires a prior read", tool_class::write, WRITE_SCHEMA },
-			{ "glob", "Find files by pattern, ignoring .git and build output", tool_class::read, GLOB_SCHEMA },
-			{ "grep", "Search file contents by regex, capped and binary-skipping", tool_class::read, GREP_SCHEMA },
-			{ "bash", "Run a single shell command behind the approval policy", tool_class::exec, BASH_SCHEMA },
-			{ "ask_user", "Ask the user a question and return the answer", tool_class::read, ASK_USER_SCHEMA },
-			{ "tool_search", "Find tools by name or description; expand for full schemas", tool_class::read, TOOL_SEARCH_SCHEMA },
+			{ "read", "Read a file window with line numbers; refuses binary with a stub",
+				tool_class::read, READ_SCHEMA },
+			{ "edit", "Replace an exact string in a file and return a unified diff",
+				tool_class::write, EDIT_SCHEMA },
+			{ "write", "Create or overwrite a file; overwrite requires a prior read",
+				tool_class::write, WRITE_SCHEMA },
+			{ "glob", "Find files by pattern, ignoring .git and build output",
+				tool_class::read, GLOB_SCHEMA },
+			{ "grep", "Search file contents by regex, capped and binary-skipping",
+				tool_class::read, GREP_SCHEMA },
+			{ "bash", "Run a single shell command behind the approval policy",
+				tool_class::exec, BASH_SCHEMA },
+			{ "ask_user", "Ask the user a question and return the answer",
+				tool_class::read, ASK_USER_SCHEMA },
+			{ "tool_search", "Find tools by name or description; expand for full schemas",
+				tool_class::read, TOOL_SEARCH_SCHEMA },
 		};
 
 		for ( const auto& entry : CORE ) {

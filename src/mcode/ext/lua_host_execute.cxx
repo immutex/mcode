@@ -11,7 +11,8 @@
 
 namespace mcode {
 
-	auto lua_host::run( const std::string_view chunk, const std::string_view chunk_name ) -> status {
+	auto lua_host::run( const std::string_view chunk,
+		const std::string_view chunk_name ) -> status {
 		if ( auto ready = seal( ); !ready ) {
 			return ready;
 		}
@@ -24,10 +25,13 @@ namespace mcode {
 
 		auto budget = budget_scope{ this };
 
-		if ( lua_pcall( thread_, 0, LUA_MULTRET, 0 ) != 0 ) {
+		// a chunk's return values are discarded: leaving them would grow the stack per call.
+		if ( lua_pcall( thread_, 0, 0, 0 ) != 0 ) {
 			return std::unexpected( fail( errc::lua_error,
 				"runtime error: " + ext::detail::pop_error( thread_ ) ) );
 		}
+
+		lua_settop( thread_, 0 );
 
 		return { };
 	}
@@ -64,7 +68,8 @@ namespace mcode {
 		auto budget = budget_scope{ this };
 
 		if ( lua_pcall( thread_, 0, 1, 0 ) != 0 ) {
-			return std::unexpected( fail( errc::lua_error, "runtime error: " + ext::detail::pop_error( thread_ ) ) );
+			return std::unexpected( fail( errc::lua_error,
+				"runtime error: " + ext::detail::pop_error( thread_ ) ) );
 		}
 
 		auto length = std::size_t{ 0 };
@@ -120,7 +125,8 @@ namespace mcode {
 		auto budget = budget_scope{ this };
 
 		if ( lua_pcall( thread_, 1, 1, 0 ) != 0 ) {
-			return std::unexpected( fail( errc::lua_error, "runtime error: " + ext::detail::pop_error( thread_ ) ) );
+			return std::unexpected( fail( errc::lua_error,
+				"runtime error: " + ext::detail::pop_error( thread_ ) ) );
 		}
 
 		auto length = std::size_t{ 0 };
@@ -169,12 +175,20 @@ namespace mcode {
 			}
 
 			lua_pop( state, 1 );
+		} else {
+			// the cache store below indexes -2, so the slot must be a table, not a leftover.
+			lua_pop( state, 1 );
+
+			lua_newtable( state );
+			lua_pushvalue( state, -1 );
+			lua_setfield( state, LUA_REGISTRYINDEX, "mcode.modules" );
 		}
 
 		auto* loader = ext::detail::loader_from( state );
 
 		if ( loader == nullptr || !*loader ) {
-			lua_settop( state, 0 );
+			// the modules table goes, not the path: `path` must stay reachable for the message.
+			lua_remove( state, -2 );
 
 			lua_pushfstring( state, "module not found: %s", path );
 
@@ -185,7 +199,7 @@ namespace mcode {
 		auto source = ( *loader )( path );
 
 		if ( !source ) {
-			lua_settop( state, 0 );
+			lua_remove( state, -2 );
 
 			lua_pushfstring( state, "module not found: %s", path );
 
@@ -196,6 +210,8 @@ namespace mcode {
 
 		if ( !ext::detail::load_chunk( state, *source, path, message ) ) {
 			lua_remove( state, -2 );
+
+			lua_pushlstring( state, message.data( ), message.size( ) );
 
 			lua_error( state );
 		}

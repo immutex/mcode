@@ -177,7 +177,7 @@ namespace mcode::mcp {
 	}
 
 	auto client::handle_line( inbound&& item ) -> void {
-		
+
 		auto log_line = []( const std::string_view text ) {
 			if ( logging_initialized( ) ) {
 				logger( )->warn( "mcp: {}", text );
@@ -240,8 +240,8 @@ namespace mcode::mcp {
 		}
 
 		// no client caps are advertised, so method-not-found is the honest reply
-		auto response = jsonrpc::render_response( frame.id,
-			R"({"code":-32601,"message":"method not found","data":null})" );
+		auto response = jsonrpc::render_error_response( frame.id,
+			jsonrpc::METHOD_NOT_FOUND, "method not found" );
 
 		if ( response ) {
 			auto sent = wire_->send( *response );
@@ -264,6 +264,10 @@ namespace mcode::mcp {
 		failure_.message = "the server's stdout ended";
 
 		fail_pending( errc::io, "the server's stdout ended" );
+
+		if ( on_end_ ) {
+			on_end_( );
+		}
 	}
 
 	auto client::fail_pending( const errc code, std::string message ) -> void {
@@ -301,8 +305,8 @@ namespace mcode::mcp {
 			return std::unexpected( std::move( stamped ).error( ) );
 		}
 
-		const auto id = next_id_++;
-		auto frame = jsonrpc::render_request( id, method, *stamped );
+		const auto id = jsonrpc::request_id::numeric( next_id_++ );
+		auto frame = jsonrpc::render_request( id.number, method, *stamped );
 
 		if ( !frame ) {
 			return std::unexpected( frame.error( ) );
@@ -342,7 +346,7 @@ namespace mcode::mcp {
 
 			if ( std::chrono::steady_clock::now( ) >= deadline ) {
 				auto cancelled = send_notification( jsonrpc::CANCELLED_NOTIFICATION,
-					cancel_params( id ) );
+					cancel_params( id.number ) );
 
 				if ( !cancelled && logging_initialized( ) ) {
 					logger( )->warn( "mcp: could not send the cancellation: {}",

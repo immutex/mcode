@@ -99,9 +99,7 @@ namespace mcode {
 			out.request.messages.push_back( std::move( note ) );
 		}
 
-		// Only a provider with explicit markers needs them; the layout rule still applies for
-		// the others, it just costs full price. The prefix (tools, then the system message) is
-		// identical on every request, so one breakpoint there caches everything before it.
+		// one breakpoint on the stable prefix (tools, then system) caches everything before it.
 		if ( out.request.cache.mode == model::cache_mode::explicit_markers ) {
 			out.request.cache.breakpoints = model::cache_breakpoints( out.request, options.fields );
 		}
@@ -109,9 +107,7 @@ namespace mcode {
 		return out;
 	}
 
-	// Compaction lives here with the rest of the context budget: it keeps the first events and
-	// the most recent tail, and drops the middle. It triggers on estimated history size, so a
-	// model with no declared window still compacts against the default one.
+	// compaction keeps the first events and the newest tail, dropping everything between them.
 	auto agent_loop::maybe_compact( ) -> status {
 		const auto window_tokens = caps_.effective_context_window( );
 		const auto usable = static_cast< double >( window_tokens - RESERVED_OUTPUT_TOKENS );
@@ -122,32 +118,60 @@ namespace mcode {
 			return status{ };
 		}
 
-		auto result = compaction_result{ };
+		const auto ends_on_a_call = []( const model::message& value ) {
+			for ( const auto& block : value.blocks ) {
+				if ( block.kind == model::block_kind::tool_call ) {
+					return true;
+				}
+			}
 
-		const auto pinned = std::min( COMPACTION_KEEP_FIRST_EVENTS, history_.size( ) );
+			return false;
+		};
 
-		for ( auto index = std::size_t{ 0 }; index < pinned; ++index ) {
-			result.kept.push_back( history_[ index ] );
-		}
+		const auto newest = history_.size( ) - 1;
 
-		result.pinned_facts.push_back( user_task_ );
+		// the newest message is the turn's own answer, so it survives even when it alone is huge.
+		auto tail_start = newest;
+		auto tail_messages = std::size_t{ 1 };
+		auto kept_tokens = loop_internal::message_tokens( history_[ newest ] );
 
-		auto kept_tokens = std::int64_t{ 0 };
-		auto keep_from = history_.size( );
+		while ( tail_start > 0 && tail_messages < COMPACTION_KEEP_LAST_TURNS ) {
+			const auto cost = loop_internal::message_tokens( history_[ tail_start - 1 ] );
 
-		for ( auto index = history_.size( ); index > pinned; --index ) {
-			const auto cost = loop_internal::message_tokens( history_[ index - 1 ] );
-
-			if ( kept_tokens + cost > COMPACTION_KEEP_LAST_TOKENS ||
-				history_.size( ) - index >= COMPACTION_KEEP_LAST_TURNS ) {
+			if ( kept_tokens + cost > COMPACTION_KEEP_LAST_TOKENS ) {
 				break;
 			}
 
 			kept_tokens += cost;
-			keep_from = index - 1;
+			--tail_start;
+			++tail_messages;
 		}
 
-		const auto tail_start = std::max( keep_from, pinned );
+		// a tool result cannot survive its assistant call, so the tail walks back over the pair.
+		while ( tail_start > 0 && history_[ tail_start ].speaker == model::role::tool ) {
+			--tail_start;
+		}
+
+		auto pinned = std::min( COMPACTION_KEEP_FIRST_EVENTS, history_.size( ) );
+
+		if ( pinned > tail_start ) {
+			pinned = tail_start;
+		}
+
+		// neither side of the cut may hold half a tool pair: walk the prefix back to a seam.
+		while ( pinned > 0 && pinned < tail_start
+			&& ( history_[ pinned ].speaker == model::role::tool
+				|| ends_on_a_call( history_[ pinned - 1 ] ) ) ) {
+			--pinned;
+		}
+
+		auto result = compaction_result{ };
+
+		result.pinned_facts.push_back( user_task_ );
+
+		for ( auto index = std::size_t{ 0 }; index < pinned; ++index ) {
+			result.kept.push_back( history_[ index ] );
+		}
 
 		for ( auto index = tail_start; index < history_.size( ); ++index ) {
 			result.kept.push_back( history_[ index ] );

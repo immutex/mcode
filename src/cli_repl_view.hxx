@@ -14,8 +14,9 @@
 
 // The prompt loop's view and key glue: the small helpers `run_repl` uses to
 // keep the coordinator fed and to map terminal keys onto the view and the
-// editor. Everything here is called on the main thread; the ones that touch
-// the coordinator take `render_gate` and assume the caller holds it.
+// editor. Everything here is called on the main thread. `render_gate` is not a
+// recursive mutex, so each function that touches the coordinator states
+// whether it locks the gate or expects the caller to already hold it.
 
 // Caller holds `render_gate`.
 auto refresh( mcode::tui::render_coordinator& coordinator, const mcode::agent_loop& loop,
@@ -25,11 +26,14 @@ auto refresh( mcode::tui::render_coordinator& coordinator, const mcode::agent_lo
 [[nodiscard]] auto key_scroll_rows( const mcode::tui::tty_session& session_tty,
 	const mcode::tui::key_event::kind type ) -> std::optional< int >;
 
+// Locks `render_gate`.
 auto scroll_view( mcode::tui::render_coordinator& coordinator, std::mutex& render_gate,
 	const int rows ) -> void;
 
+// Locks `render_gate`.
 auto return_to_live( mcode::tui::render_coordinator& coordinator, std::mutex& render_gate ) -> void;
 
+// Locks `render_gate`.
 [[nodiscard]] auto view_scrolled( const mcode::tui::render_coordinator& coordinator,
 	std::mutex& render_gate ) -> bool;
 

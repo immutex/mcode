@@ -64,6 +64,9 @@ namespace mcode::ext {
 
 		[[nodiscard]] auto invoke( std::string_view tool_name, std::string_view arguments_json )
 			-> result< std::string >;
+
+		// fires every loaded extension's due timers; the host drives it once per loop step.
+		auto pump_timers( ) -> void;
 	};
 
 
@@ -82,7 +85,7 @@ namespace mcode::ext {
 		std::vector< std::string > disabled_names;
 
 		std::uint64_t memory_limit_bytes = 0;
-		std::chrono::milliseconds time_limit{ 0 };
+		std::chrono::milliseconds time_limit = DEFAULT_TIME_LIMIT;
 
 		std::function< status( const registration& ) > register_api;
 	};
@@ -110,6 +113,7 @@ namespace mcode::ext {
 	[[nodiscard]] auto default_roots( const std::filesystem::path& workspace )
 		-> std::vector< std::filesystem::path >;
 
-	[[nodiscard]] auto unload_extension( tool_registry& registry, std::string_view owner ) -> std::size_t;
+	[[nodiscard]] auto unload_extension( tool_registry& registry,
+		std::string_view owner ) -> std::size_t;
 
 }

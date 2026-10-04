@@ -10,13 +10,6 @@
 
 namespace mcode::ext {
 
-	namespace {
-
-		[[nodiscard]] auto result_field( const std::string& rendered,
-			const char* key ) -> std::optional< std::string >;
-
-	}
-
 	auto handle_fs_read( lua_State* state ) -> int {
 		auto* self = surface_from( state );
 
@@ -58,16 +51,7 @@ namespace mcode::ext {
 			return 2;
 		}
 
-		const auto body = result_field( *outcome, "text" );
-
-		if ( !body ) {
-			lua_pushnil( state );
-			lua_pushliteral( state, "the read result carried no text" );
-
-			return 2;
-		}
-
-		lua_pushlstring( state, body->data( ), body->size( ) );
+		lua_pushlstring( state, outcome->data( ), outcome->size( ) );
 
 		return 1;
 	}
@@ -128,31 +112,6 @@ namespace mcode::ext {
 		lua_pushboolean( state, 1 );
 
 		return 1;
-	}
-
-}
-
-namespace mcode::ext {
-
-	namespace {
-
-		auto result_field( const std::string& rendered, const char* key )
-			-> std::optional< std::string > {
-			auto parsed = mcode::json::document::parse( rendered );
-
-			if ( !parsed ) {
-				return std::nullopt;
-			}
-
-			auto value = parsed->get_string( key );
-
-			if ( !value ) {
-				return std::nullopt;
-			}
-
-			return *value;
-		}
-
 	}
 
 }

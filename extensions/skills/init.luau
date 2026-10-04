@@ -12,6 +12,8 @@ local loaded: boolean = pcall(function()
 		description = "Read the full body of a skill by name. Call this when the "
 			.. "skill index in the system prompt names a skill relevant to the "
 			.. "current task, before following its instructions.",
+		-- gated exactly as the built-in `read` is: the host resolves the name itself.
+		permission = "read",
 		schema = {
 			["type"] = "object",
 			properties = {

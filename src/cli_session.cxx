@@ -220,9 +220,14 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 			parts->engine->add_root( dir );
 		}
 
-		parts->engine->add_config_rules( mcode::perm::rule_scope::user,
-			config->get_string_array( "permissions.deny" ),
-			config->get_string_array( "permissions.ask" ) );
+		auto deny_rules = config->get_string_array( "permissions.deny" );
+		auto ask_rules = config->get_string_array( "permissions.ask" );
+
+		if ( !deny_rules || !ask_rules ) {
+			return std::unexpected( !deny_rules ? deny_rules.error( ) : ask_rules.error( ) );
+		}
+
+		parts->engine->add_config_rules( mcode::perm::rule_scope::user, *deny_rules, *ask_rules );
 
 		if ( const auto loaded = parts->engine->load_store( ); !loaded ) {
 			std::fprintf( stderr, "mcode: %s\n", loaded.error( ).msg.c_str( ) );
@@ -282,6 +287,9 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 	parts->loop_deps.permissions = &*parts->engine;
 	parts->loop_deps.instruction_chain = skills_context.chain.text;
 	parts->loop_deps.skill_index = skills_context.skill_index;
+
+	// the loop drives the timers: one pump per step, on the thread the VM belongs to.
+	parts->loop_deps.pump_timers = [ ]( ) { parts->extensions.pump_timers( ); };
 
 	auto loop = mcode::agent_loop{ parts->loop_deps };
 

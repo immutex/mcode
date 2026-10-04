@@ -86,14 +86,8 @@ namespace mcode::ext {
 				return { };
 			}
 
-			if ( yyjson_is_int( value ) ) {
-				lua_pushnumber( state, static_cast< double >( yyjson_get_sint( value ) ) );
-
-				return { };
-			}
-
-			if ( yyjson_is_real( value ) ) {
-				lua_pushnumber( state, yyjson_get_real( value ) );
+			if ( yyjson_is_num( value ) ) {
+				lua_pushnumber( state, yyjson_get_num( value ) );
 
 				return { };
 			}
@@ -128,6 +122,13 @@ namespace mcode::ext {
 		auto encode_value( lua_State* state, int index, std::string& out,
 			encode_context& context ) -> status;
 
+		// the key is kept, not its rendered text: a numeric key is not a field name.
+		struct table_key {
+			bool numeric = false;
+			double number = 0.0;
+			std::string text;
+		};
+
 		auto encode_table( lua_State* state, const int index, std::string& out,
 			encode_context& context ) -> status {
 			const auto* identity = lua_topointer( state, index );
@@ -147,7 +148,7 @@ namespace mcode::ext {
 			const auto table = lua_absindex( state, index );
 			const auto length = static_cast< std::size_t >( lua_objlen( state, table ) );
 
-			auto keys = std::vector< std::string >{ };
+			auto keys = std::vector< table_key >{ };
 			auto array_like = true;
 			auto count = std::size_t{ 0 };
 
@@ -156,29 +157,40 @@ namespace mcode::ext {
 			while ( lua_next( state, table ) != 0 ) {
 				++count;
 
-				if ( lua_type( state, -2 ) == LUA_TNUMBER ) {
-					const auto number = lua_tonumber( state, -2 );
+				auto key = table_key{ };
+				const auto key_type = lua_type( state, -2 );
 
-					if ( number < 1.0 || number > static_cast< double >( length ) ||
-						number != std::floor( number ) ) {
+				if ( key_type == LUA_TNUMBER ) {
+					key.numeric = true;
+					key.number = lua_tonumber( state, -2 );
+
+					if ( key.number < 1.0 || key.number > static_cast< double >( length ) ||
+						key.number != std::floor( key.number ) ) {
 						array_like = false;
-
-						auto buffer = std::array< char, NUMBER_BUFFER_SIZE >{ };
-						std::snprintf( buffer.data( ), buffer.size( ), NUMBER_FORMAT, number );
-
-						keys.emplace_back( buffer.data( ) );
 					}
-				} else if ( lua_type( state, -2 ) == LUA_TSTRING ) {
-					const auto* text = lua_tolstring( state, -2, nullptr );
 
-					if ( text != nullptr ) {
-						keys.emplace_back( text );
-					}
+					auto buffer = std::array< char, NUMBER_BUFFER_SIZE >{ };
+					std::snprintf( buffer.data( ), buffer.size( ), NUMBER_FORMAT, key.number );
+					key.text.assign( buffer.data( ) );
+				} else if ( key_type == LUA_TSTRING ) {
+					auto key_length = std::size_t{ 0 };
+					const auto* text = lua_tolstring( state, -2, &key_length );
+
+					key.text.assign( text != nullptr ? text : "", key_length );
 
 					array_like = false;
 				} else {
-					array_like = false;
+					// both the key and its value: the iteration never resumes from here.
+					lua_pop( state, 2 );
+
+					context.active.erase( identity );
+					--context.depth;
+
+					return std::unexpected( fail( errc::config,
+						"a table key must be a string or a number" ) );
 				}
+
+				keys.push_back( std::move( key ) );
 
 				lua_pop( state, 1 );
 			}
@@ -214,7 +226,10 @@ namespace mcode::ext {
 			}
 
 			// sorted so two runs emit byte-identical JSON, which the prompt cache keys on.
-			std::sort( keys.begin( ), keys.end( ) );
+			std::sort( keys.begin( ), keys.end( ),
+				[]( const table_key& left, const table_key& right ) {
+					return left.text < right.text;
+				} );
 
 			out += '{';
 
@@ -228,10 +243,16 @@ namespace mcode::ext {
 				first = false;
 
 				out += '"';
-				json::append_escaped( out, key );
+				json::append_escaped( out, key.text );
 				out += "\":";
 
-				lua_getfield( state, table, key.c_str( ) );
+				if ( key.numeric ) {
+					lua_pushnumber( state, key.number );
+				} else {
+					lua_pushlstring( state, key.text.data( ), key.text.size( ) );
+				}
+
+				lua_rawget( state, table );
 
 				if ( auto encoded = encode_value( state, -1, out, context ); !encoded ) {
 					lua_pop( state, 1 );

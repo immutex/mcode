@@ -10,7 +10,8 @@ auto smoke_luau( ) -> void {
 smoke::section( "Luau (extension layer)" );
 
 {
-	auto host = mcode::lua_host::create( mcode::lua_host_options{ .extension_name = "smoke", .module_loader = { } } );
+	auto host = mcode::lua_host::create(
+		mcode::lua_host_options{ .extension_name = "smoke", .module_loader = { } } );
 	smoke::check( static_cast< bool >( host ), "created a lua_State" );
 
 	if ( host ) {
@@ -20,7 +21,8 @@ smoke::section( "Luau (extension layer)" );
 			"host_ping", []( const std::string_view args ) -> mcode::result< std::string > {
 				return std::string{ "pong:" } + std::string{ args };
 			} );
-		smoke::check( static_cast< bool >( registered ), "registered a host function into mcode.*" );
+		smoke::check( static_cast< bool >( registered ),
+			"registered a host function into mcode.*" );
 
 		auto pinged = host->eval_to_string( "mcode.host_ping('hello')" );
 		smoke::check( pinged && *pinged == "pong:hello", "Luau called back into C++" );
@@ -68,8 +70,10 @@ smoke::section( "Luau (extension layer)" );
 			{ "(type(collectgarbage) ~= 'nil')", "collectgarbage is absent" },
 			{ "select(1, pcall(rawset, _G, 'injected', 1))", "rawset on _G is refused" },
 			{ "select(1, pcall(setmetatable, _G, {}))", "setmetatable on _G is refused" },
-			{ "select(1, pcall(rawset, string, 'injected', 1))", "rawset on a library table is refused" },
-			{ "select(1, pcall(rawset, mcode, 'injected', 1))", "rawset on the host API table is refused" },
+			{ "select(1, pcall(rawset, string, 'injected', 1))",
+				"rawset on a library table is refused" },
+			{ "select(1, pcall(rawset, mcode, 'injected', 1))",
+				"rawset on the host API table is refused" },
 			{ "select(1, pcall(setmetatable, '', { __index = function() return 1 end }))",
 				"the string metatable is readonly" },
 			{ "(type(mcode.not_registered) ~= 'nil')", "unregistered host functions are absent" },

@@ -1,6 +1,4 @@
-# Project scope may only add restrictions (docs/22, docs/12 T3).
+# Project scope may only add restrictions.
 # A project file that tried to widen a permission is rejected at load.
 
-[permissions.deny]
-"rm -rf" = "always"
-"curl | sh" = "always"
+permissions.deny = ["rm -rf", "curl | sh"]

@@ -11,7 +11,8 @@ namespace mcode::text {
 	[[nodiscard]] auto is_valid_utf8( std::string_view input ) noexcept -> bool;
 	[[nodiscard]] auto codepoint_count( std::string_view input ) noexcept -> std::size_t;
 
-	[[nodiscard]] auto truncate_offset( std::string_view input, std::size_t max_bytes ) noexcept -> std::size_t;
+	[[nodiscard]] auto truncate_offset( std::string_view input, std::size_t max_bytes ) noexcept
+		-> std::size_t;
 
 	[[nodiscard]] auto truncate( std::string_view input, std::size_t max_bytes,
 		std::string_view ellipsis = "..." ) -> std::string;

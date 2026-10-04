@@ -84,9 +84,9 @@ namespace mcode::tools {
 			input.read( content.data( ), static_cast< std::streamsize >( max_bytes + 1 ) );
 			content.resize( static_cast< std::size_t >( input.gcount( ) ) );
 
+			// a larger file is served truncated; the caller marks that window incomplete
 			if ( content.size( ) > max_bytes ) {
-				return std::unexpected( fail( errc::io,
-					"window read exceeded its " + std::to_string( max_bytes ) + "-byte bound" ) );
+				content.resize( static_cast< std::size_t >( max_bytes ) );
 			}
 
 			return content;
@@ -190,8 +190,14 @@ namespace mcode::tools {
 
 			// an empty file is a legitimate state, not an offset past the end
 			if ( total_lines > 0 && request.offset > total_lines ) {
+				const auto window_bound = request.size_is_complete
+					? std::string{ }
+					: std::string{ " (the read window holds the first " } +
+						std::to_string( WINDOW_READ_BYTES ) + " bytes of a larger file)";
+
 				return error_result( "offset " + std::to_string( request.offset ) + " is past the end of " +
-						std::string{ request.relative } + " (" + std::to_string( total_lines ) + " lines)",
+						std::string{ request.relative } + " (" + std::to_string( total_lines ) +
+						" lines)" + window_bound,
 					"re-read with offset " + std::to_string( total_lines > 0 ? total_lines : 1 ) +
 						" or omit offset to start at line 1",
 					false );

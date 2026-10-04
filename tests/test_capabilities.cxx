@@ -117,13 +117,27 @@ TEST_CASE( "an unknown model id does not price as free", "[capabilities]" ) {
 	REQUIRE_FALSE( model::lookup_capabilities( "totally-made-up-model" ).has_value( ) );
 	REQUIRE_FALSE( model::lookup_capabilities( "" ).has_value( ) );
 
-	const auto known = model::lookup_capabilities( "claude-sonnet-4-5" );
+	const auto known = model::lookup_capabilities( "gpt-5" );
 	REQUIRE( known.has_value( ) );
 
 	if ( known ) {
-		REQUIRE( known->price_input == 3.0 );
-		REQUIRE( known->price_output == 15.0 );
-		REQUIRE( known->caching == model::cache_mode::explicit_markers );
-		REQUIRE( known->context_window == 200'000 );
+		REQUIRE( known->price_input == 1.25 );
+		REQUIRE( known->price_output == 10.0 );
+		REQUIRE( known->caching == model::cache_mode::implicit );
+		REQUIRE( known->context_window == 400'000 );
+	}
+}
+
+TEST_CASE( "a config with no entry for the model keeps the table's prices", "[capabilities]" ) {
+	auto merged = config::merged_config::merge( { } );
+	REQUIRE( static_cast< bool >( merged ) );
+
+	const auto caps = model::resolve_capabilities( "gpt-5", &*merged );
+	REQUIRE( caps.has_value( ) );
+
+	if ( caps ) {
+		REQUIRE( caps->price_input == 1.25 );
+		REQUIRE( caps->price_cached_read == 0.125 );
+		REQUIRE( caps->price_output == 10.0 );
 	}
 }

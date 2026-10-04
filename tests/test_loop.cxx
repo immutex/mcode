@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <regex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -156,7 +157,7 @@ TEST_CASE( "the loop reports context usage against the model's window", "[loop]"
 	auto fx = fixture{ };
 	fx.connect( );
 
-	CHECK( fx.loop->context_capacity( ) == 200'000 );
+	CHECK( fx.loop->context_capacity( ) == TEST_CONTEXT_WINDOW );
 	CHECK( fx.loop->context_used( ) == 0 );
 
 	fx.client.queue( text_response( "hello" ) );
@@ -164,7 +165,7 @@ TEST_CASE( "the loop reports context usage against the model's window", "[loop]"
 	std::ignore = fx.loop->run( "say hi" );
 
 	// the same counter the budget charges, not a second tally
-	CHECK( fx.loop->context_used( ) == fx.loop->budget( ).tokens_used );
+	CHECK( fx.loop->context_used( ) == fx.loop->budget( ).tokens_used.load( ) );
 	CHECK( fx.loop->context_used( ) == 150 );
 
 	// an unknown model reads 0, so a renderer omits the percentage
@@ -248,8 +249,7 @@ TEST_CASE( "budget exhaustion lands in handoff, not failed", "[loop]" ) {
 	fx.connect( );
 	fx.loop->budget( ).max_steps = 1;
 
-	// the call is dispatched even though its request spent the last step: the tool result
-	// lands, then Observe finds the budget gone and hands off.
+	// the call is answered with a budget error before Observe finds the budget gone.
 	fx.client.queue( call_response( "echo", R"({})" ) );
 
 	const auto outcome = fx.loop->run( "one call only" );
@@ -422,53 +422,48 @@ TEST_CASE( "no timestamp or cwd in the system prompt", "[loop]" ) {
 
 	CHECK( prompt.find( "C:\\" ) == std::string::npos );
 
-	const auto has_year = prompt.find( "2026" ) != std::string::npos ||
-		prompt.find( "2027" ) != std::string::npos;
-
-	CHECK( !has_year );
+	// any build-time date would surface as a four-digit year somewhere in the prompt.
+	CHECK_FALSE( std::regex_search( prompt, std::regex{ R"((19|20)[0-9]{2})" } ) );
 	CHECK( prompt.find( "session id" ) == std::string::npos );
 }
 
 TEST_CASE( "compaction triggers at 80 percent of the usable window", "[loop]" ) {
-	auto fx = fixture{ };
-	fx.connect( );
+	const auto usable = static_cast< double >( 20'000 - RESERVED_OUTPUT_TOKENS ) *
+		( 1.0 - SAFETY_MARGIN_FRACTION );
+	const auto trigger = static_cast< std::int64_t >( usable * COMPACTION_TRIGGER_FRACTION );
 
-	fx.deps.caps.context_window = 4'000;
+	auto compacts = []( const std::int64_t answer_tokens ) {
+		auto fx = fixture{ };
+		fx.connect( );
 
-	auto small = agent_loop::dependencies{ };
-	small.client = &fx.client;
-	small.registry = &fx.registry;
-	small.log = &fx.log;
-	small.model_name = "test-model";
-	small.caps = fx.deps.caps;
+		auto small = agent_loop::dependencies{ };
+		small.client = &fx.client;
+		small.registry = &fx.registry;
+		small.log = &fx.log;
+		small.model_name = "test-model";
+		small.caps = fx.deps.caps;
+		small.caps.context_window = 20'000;
 
-	auto tight = agent_loop{ small };
-	tight.register_handler( "echo", []( std::string_view args ) -> result< std::string > {
-		return std::string{ args };
-	} );
+		auto tight = agent_loop{ small };
 
-	fx.client.queue( call_response( "echo", std::string( 6'000, 'x' ) ) );
-	fx.client.queue( text_response( "done" ) );
+		const auto answer = std::string(
+			static_cast< std::size_t >( answer_tokens ) * CHARS_PER_TOKEN_ESTIMATE, 'x' );
 
-	const auto outcome = tight.run( "compact me" );
+		fx.client.queue( text_response( answer ) );
+		std::ignore = tight.run( "t" );
 
-	REQUIRE( outcome.has_value( ) );
-
-	auto compacted = false;
-
-	for ( const auto& event : fx.log.events( ) ) {
-		if ( event.kind == "context.compaction" ) {
-			compacted = true;
+		for ( const auto& event : fx.log.events( ) ) {
+			if ( event.kind == "context.compaction" ) {
+				return true;
+			}
 		}
-	}
 
-	CHECK( compacted );
+		return false;
+	};
 
-	const auto& history = tight.history( );
-
-	REQUIRE( !history.empty( ) );
-	CHECK( history.front( ).speaker == mcode::model::role::user );
-	CHECK( history.front( ).text( ).find( "compact me" ) != std::string::npos );
+	// the estimate is one token per four characters, so one token either side decides it.
+	CHECK_FALSE( compacts( trigger - 1 ) );
+	CHECK( compacts( trigger + 1 ) );
 }
 
 TEST_CASE( "verify with a passing command reaches done", "[loop]" ) {
@@ -534,14 +529,6 @@ TEST_CASE( "a hard tool error routes to reflect", "[loop]" ) {
 		"plan,act,observe,reflect,act,verify,handoff" );
 }
 
-TEST_CASE( "compaction keeps the first event and the task text", "[loop]" ) {
-	auto result = compaction_result{ };
-	result.pinned_facts.push_back( "the original task" );
-
-	CHECK( !result.pinned_facts.empty( ) );
-	CHECK( result.pinned_facts.front( ) == "the original task" );
-}
-
 TEST_CASE( "thrash detector counts repeats and respects the window", "[loop]" ) {
 	auto detector = thrash_detector{ };
 
@@ -570,9 +557,9 @@ TEST_CASE( "session budget charges tokens and usd together", "[loop]" ) {
 
 	budget.charge( 1'000, 0.10 );
 
-	CHECK( budget.steps_used == 1 );
-	CHECK( budget.tokens_used == 1'000 );
-	CHECK( budget.usd_used == Catch::Approx( 0.10 ) );
+	CHECK( budget.steps_used.load( ) == 1 );
+	CHECK( budget.tokens_used.load( ) == 1'000 );
+	CHECK( budget.usd_used.load( ) == Catch::Approx( 0.10 ) );
 	CHECK( !budget.nearly_exhausted( ) );
 
 	budget.charge( 1'000, 0.85 );

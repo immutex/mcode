@@ -185,10 +185,17 @@ TEST_CASE( "breakpoints apply right-to-left", "[render]" ) {
 
 	// markers apply right-to-left, or the first shifts the second and the cache misses.
 	const auto marker_text = std::string{ "\"cache_control\":{\"type\":\"ephemeral\"}," };
-	const auto first_offset = plain->find( "[{" ) + 2;
-	const auto second_offset = plain->find( "},{", first_offset ) + 3;
+	const auto first_anchor = plain->find( "[{" );
 
-	REQUIRE( second_offset != std::string::npos );
+	REQUIRE( first_anchor != std::string::npos );
+
+	const auto second_anchor = plain->find( "},{", first_anchor );
+
+	REQUIRE( second_anchor != std::string::npos );
+
+	const auto first_offset = first_anchor + 2;
+	const auto second_offset = second_anchor + 3;
+
 	REQUIRE( second_offset > first_offset );
 
 	request.cache.breakpoints = { first_offset, second_offset };

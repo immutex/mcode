@@ -131,10 +131,12 @@ canonicalization.
 hosts an extension may reach.
 
 Keep it minimal and honest for this slice: **an extension may reach only the
-hosts its manifest declares**, plus a config-level allowlist, and the permission
-engine sees the request as a `net`-class call so `ask`/`deny` apply. Say in the
-docs that this is not the M6 egress proxy — that is a process-level control and
-this is an API-level one. Do not imply otherwise.
+hosts its manifest declares** — as `net:<host>` entries in `permissions` — and
+the permission engine sees the request as a `net`-class call so `ask`/`deny`
+apply. The same declaration gates a `model.register` endpoint, so there is one
+mechanism rather than two. Say in the docs that this is not the M6 egress proxy
+— that is a process-level control and this is an API-level one. Do not imply
+otherwise.
 
 ### `timer` is bounded, and that matters
 
@@ -142,7 +144,10 @@ A timer that fires forever is a leak with a friendly name. Both entry points
 return a handle, `timer.at` fires once, `timer.every` fires until cancelled or
 until a named maximum number of fires. The registry is bounded and the bound is
 a named constant. Timers fire on the loop's thread, never a detached one, so
-they cannot touch the VM concurrently with a hook.
+they cannot touch the VM concurrently with a hook: the loop pumps them once per
+step, through the same per-call budget a hook gets. A timer that is never pumped
+is an inert API, which is why the pump is wired to the loop rather than left to
+the caller.
 
 ### `/reload` and quarantine
 

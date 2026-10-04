@@ -5,15 +5,63 @@
 #include "mcode/perm/rules.hxx"
 
 #include <array>
+#include <cstddef>
 #include <cstdlib>
 #include <utility>
 
 #include "mcode/fs/workspace.hxx"
 #include "mcode/platform/seams.hxx"
+#include "mcode/support/glob.hxx"
 #include "mcode/support/json.hxx"
 #include "mcode/support/logging.hxx"
 
 namespace mcode::perm {
+
+	namespace {
+
+		[[nodiscard]] auto base_program( const std::string_view program ) -> std::string {
+			const auto slash = program.find_last_of( "/\\" );
+			auto name = std::string{ slash == std::string_view::npos
+				? program
+				: program.substr( slash + 1 ) };
+
+			for ( auto& character : name ) {
+				if ( character >= 'A' && character <= 'Z' ) {
+					character = static_cast< char >( character - 'A' + 'a' );
+				}
+			}
+
+			return name;
+		}
+
+		// `find . -exec rm {} +` runs a program, so `find` is exec-capable when it carries `-exec`.
+		[[nodiscard]] auto is_exec_capable( const std::vector< std::string >& raw_argv ) -> bool {
+			const auto argv = unwrap_command( raw_argv );
+
+			if ( argv.empty( ) ) {
+				return false;
+			}
+
+			if ( is_exec_runner( argv.front( ) ) ) {
+				return true;
+			}
+
+			const auto program = base_program( argv.front( ) );
+
+			if ( program != "find" && program != "find.exe" ) {
+				return false;
+			}
+
+			for ( auto index = std::size_t{ 1 }; index < argv.size( ); ++index ) {
+				if ( argv[ index ] == "-exec" || argv[ index ] == "-execdir" ) {
+					return true;
+				}
+			}
+
+			return false;
+		}
+
+	}
 
 	auto to_string( const resolution value ) -> std::string_view {
 		switch ( value ) {
@@ -157,6 +205,19 @@ namespace mcode::perm {
 						return rule_match{ "store", key->key, decision };
 					}
 				}
+
+				// `paths` is hand-written globs, so it has no store key and is matched here.
+				if ( request.klass == tool_class::read || request.klass == tool_class::write ) {
+					for ( const auto& [ pattern, entry ] : stored_.paths ) {
+						if ( entry != wanted ) {
+							continue;
+						}
+
+						if ( support::glob_match( pattern, request.resource ) ) {
+							return rule_match{ "store", pattern, decision };
+						}
+					}
+				}
 			}
 		}
 
@@ -282,29 +343,39 @@ namespace mcode::perm {
 				const auto key = store_key_for( { request.klass, request.tool_name,
 					request.resource } );
 
-				if ( store_ != nullptr && key ) {
-					auto additions = store_layer{ };
-					section_of( additions, key->section ).insert_or_assign( key->key,
-						store_decision::allow );
+				// no key means nothing can be persisted, so the answer stays session-scoped.
+				if ( store_ == nullptr || !key ) {
+					session_rules_.push_back( rule{ request.klass, request.resource,
+						permission_decision::allow } );
 
-					const auto saved = store_->save( additions );
+					last_verdict_ = { permission_decision::allow,
+						{ "session", request.resource, permission_decision::allow },
+						"allowed for the session; this request has no persisted form" };
 
-					// the in-memory layer must reflect the answer either way.
-					section_of( stored_, key->section ).insert_or_assign( key->key,
-						store_decision::allow );
+					return permission_decision::allow;
+				}
 
-					if ( !saved ) {
-						// a failed save is not a failed approval; the session rule still applies.
-						last_verdict_ = { permission_decision::allow,
-							{ "prompt", matched.pattern, permission_decision::allow },
-							"allowed for the session; the store write failed: " +
-								saved.error( ).msg };
+				auto additions = store_layer{ };
+				section_of( additions, key->section ).insert_or_assign( key->key,
+					store_decision::allow );
 
-						session_rules_.push_back( rule{ request.klass, key->key,
-							permission_decision::allow } );
+				const auto saved = store_->save( additions );
 
-						return permission_decision::allow;
-					}
+				// the in-memory layer must reflect the answer either way.
+				section_of( stored_, key->section ).insert_or_assign( key->key,
+					store_decision::allow );
+
+				if ( !saved ) {
+					// a failed save is not a failed approval; the session rule still applies.
+					last_verdict_ = { permission_decision::allow,
+						{ "prompt", matched.pattern, permission_decision::allow },
+						"allowed for the session; the store write failed: " +
+							saved.error( ).msg };
+
+					session_rules_.push_back( rule{ request.klass, key->key,
+						permission_decision::allow } );
+
+					return permission_decision::allow;
 				}
 
 				last_verdict_ = { permission_decision::allow,
@@ -375,12 +446,14 @@ namespace mcode::perm {
 		if ( request.klass == tool_class::exec ) {
 			const auto tokens = parse_command_line( request.resource );
 
-			if ( tokens && is_exec_runner( tokens->front( ) ) ) {
-				const rule_match runner{ "engine", tokens->front( ),
+			// a leading wrapper hides the runner, so the check runs on the stripped argv.
+			if ( tokens && is_exec_capable( *tokens ) ) {
+				const auto runner_name = unwrap_command( *tokens ).front( );
+				const rule_match runner{ "engine", runner_name,
 					permission_decision::deny };
 
 				last_verdict_ = { permission_decision::deny, runner,
-					"commands through " + tokens->front( ) +
+					"commands through " + runner_name +
 						" are never allowlisted; run the program directly" };
 
 				return permission_decision::deny;

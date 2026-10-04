@@ -47,7 +47,8 @@ namespace mcode::ext {
 		auto subscribe( lua_host& host, std::string_view name, int function_reference,
 			std::string owner ) -> result< std::uint64_t >;
 
-		auto unsubscribe( std::uint64_t identifier ) -> bool;
+		// refuses an id the caller does not own, so no extension can drop another's hook.
+		auto unsubscribe( std::uint64_t identifier, std::string_view owner ) -> bool;
 
 		// custom events are not vetoable: a veto gates a host action.
 		auto emit( std::string_view name, std::string_view payload_json )

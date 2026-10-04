@@ -1,6 +1,5 @@
 #include "mcode/model/capabilities.hxx"
 
-
 #include "mcode/support/json.hxx"
 #include "mcode/support/parse.hxx"
 
@@ -10,51 +9,6 @@ namespace mcode::model {
 
 		// USD per million tokens from the providers' published pages; an absent entry fails closed.
 		const char* CAPABILITIES_JSON = R"JSON([
-	{
-		"model": "claude-sonnet-4-5",
-		"caching": "explicit_markers",
-		"supports_tool_calls": true,
-		"supports_strict_schema": false,
-		"supports_response_schema": false,
-		"supports_thinking": true,
-		"supports_effort": false,
-		"context_window": 200000,
-		"max_output_tokens": 64000,
-		"price_input": 3.0,
-		"price_cached_read": 0.3,
-		"price_cache_write": 3.75,
-		"price_output": 15.0
-	},
-	{
-		"model": "claude-haiku-4-5",
-		"caching": "explicit_markers",
-		"supports_tool_calls": true,
-		"supports_strict_schema": false,
-		"supports_response_schema": false,
-		"supports_thinking": true,
-		"supports_effort": false,
-		"context_window": 200000,
-		"max_output_tokens": 64000,
-		"price_input": 1.0,
-		"price_cached_read": 0.1,
-		"price_cache_write": 1.25,
-		"price_output": 5.0
-	},
-	{
-		"model": "claude-opus-4-1",
-		"caching": "explicit_markers",
-		"supports_tool_calls": true,
-		"supports_strict_schema": false,
-		"supports_response_schema": false,
-		"supports_thinking": true,
-		"supports_effort": false,
-		"context_window": 200000,
-		"max_output_tokens": 32000,
-		"price_input": 15.0,
-		"price_cached_read": 1.5,
-		"price_cache_write": 18.75,
-		"price_output": 75.0
-	},
 	{
 		"model": "ali/deepseek-v4.1-flash",
 		"caching": "implicit",
@@ -177,6 +131,7 @@ namespace mcode::model {
 			auto out = capabilities{ };
 			out.model = id->second.text;
 			out.caching = parse_caching( parse_string( entry, "caching" ) );
+			out.cached_read_in_input = parse_bool( entry, "cached_read_in_input", true );
 			out.supports_tool_calls = parse_bool( entry, "supports_tool_calls", true );
 			out.supports_strict_schema = parse_bool( entry, "supports_strict_schema", false );
 			out.supports_response_schema = parse_bool( entry, "supports_response_schema", false );
@@ -246,6 +201,10 @@ namespace mcode::model {
 			merged.caching = parse_caching( *value );
 		}
 
+		if ( const auto value = from_config->get_bool( prefix + "cached_read_in_input" ) ) {
+			merged.cached_read_in_input = *value;
+		}
+
 		if ( const auto value = from_config->get_int( prefix + "context_window" ) ) {
 			merged.context_window = *value;
 		}
@@ -297,8 +256,8 @@ namespace mcode::model {
 			return std::nullopt;
 		}
 
-		// an unset cached-read price is not free: assume no discount rather than under-estimating.
-		if ( !cached_read && merged.price_input > 0.0 ) {
+		// neither config nor table priced a cached read: charge it at input rather than guess low.
+		if ( !cached_read && merged.price_cached_read <= 0.0 && merged.price_input > 0.0 ) {
 			merged.price_cached_read = merged.price_input;
 		}
 

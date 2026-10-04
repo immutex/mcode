@@ -39,7 +39,7 @@ name = "git"                  # required
 version = "0.3.0"             # required
 api_version = 1               # required; integer, the minimum API it needs
 description = "Git-aware tools and commit message conventions"
-permissions = ["fs_read", "fs_write", "spawn"]   # omit ⇒ deny
+permissions = ["fs_read", "fs_write", "spawn", "net:api.example.com", "credential:GITHUB_TOKEN"]
 ```
 
 The manifest is the declarative half — the role Kong's `schema.lua` plays. **Frozen at v1**; the loader rejects anything not in this table:
@@ -49,11 +49,11 @@ The manifest is the declarative half — the role Kong's `schema.lua` plays. **F
 | `name` | string | `^[a-z0-9]+(-[a-z0-9]+)*$`, ≤64 chars, must equal the directory name | Refuse |
 | `version` | string | Semver (`MAJOR.MINOR.PATCH`, optional prerelease/build) | Refuse |
 | `api_version` | integer | ≥1. Loads iff `mcode.api_version >= api_version` | Refuse |
-| `permissions` | array of strings | Subset of `18`'s permission set. **Absent or empty means deny** | Refuse |
+| `permissions` | array of strings | Subset of `18`'s permission set, or a declaration form (`net:<host>`, `credential:<NAME>`). **Absent or empty means deny** | Refuse |
 | `description` | string | ≤1024 chars; used in `mcode ext list` | Refuse |
 | *(unknown key)* | — | Not in the table above | Refuse |
 
-**`api_version` is an integer, never a range.** The extension states the minimum API it needs; the loader compares two integers. Range syntax (`">=1"`, `"~1.2"`) is what `25` calls out as the bug class to avoid — a constraint parser is a parser, and the only question it answers here is whether one integer is at least another. The version *policy* (additive-only, deprecation windows) lives in `18` §Versioning; the manifest only declares a floor.
+**A `net:` or `credential:` entry is a declaration, not a grant.** `net:<host>` names one host the extension's `mcode.net.*` calls and provider endpoints may address; `credential:<NAME>` names one environment variable its provider `auth` block may reference. Both are matched exactly (hosts case-insensitively, with no wildcards), both require the bare permission they extend (`net:` needs `net`), and both are what the host checks at call time — the extension does not get to name a host or a credential at runtime. A malformed entry (unknown prefix, empty remainder, a URL where a host belongs, a `*`, a non-identifier env var name, or a duplicate) is a load error naming the string, not a silently inert declaration.
 
 **Unknown keys are rejected, not ignored.** A typo in `permissions` silently disabling a capability is the failure mode this prevents: `permission = ["fs_write"]` must fail loudly rather than load with no permissions and a confusing denial later. Same rule as unknown CLI flags (`AGENTS.md` §Correctness).
 

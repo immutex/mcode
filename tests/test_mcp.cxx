@@ -100,7 +100,49 @@ TEST_CASE( "jsonrpc renders and parses frames", "[mcp]" ) {
 	REQUIRE( frame );
 	REQUIRE( frame->has_value( ) );
 	CHECK( ( *frame )->kind == jsonrpc::message_kind::response );
-	CHECK( ( *frame )->id == 3 );
+	CHECK( ( *frame )->id.number == 3 );
+	CHECK_FALSE( ( *frame )->id.is_string );
+}
+
+TEST_CASE( "a string id marks a request, not a notification", "[mcp]" ) {
+	auto request = jsonrpc::parse_line( R"({"jsonrpc":"2.0","id":"abc","method":"ping"})" );
+	REQUIRE( static_cast< bool >( request ) );
+	REQUIRE( request->has_value( ) );
+	CHECK( ( *request )->kind == jsonrpc::message_kind::request );
+	CHECK( ( *request )->id.is_string );
+	CHECK( ( *request )->id.text == "abc" );
+
+	auto notification = jsonrpc::parse_line( R"({"jsonrpc":"2.0","method":"notifications/x"})" );
+	REQUIRE( static_cast< bool >( notification ) );
+	REQUIRE( notification->has_value( ) );
+	CHECK( ( *notification )->kind == jsonrpc::message_kind::notification );
+
+	// a numeric-looking string id must correlate as text, never as the number
+	auto numeric_text = jsonrpc::parse_line( R"({"jsonrpc":"2.0","id":"7","result":{}})" );
+	REQUIRE( static_cast< bool >( numeric_text ) );
+	REQUIRE( numeric_text->has_value( ) );
+	CHECK( ( *numeric_text )->id.is_string );
+	CHECK( ( *numeric_text )->id.text == "7" );
+}
+
+TEST_CASE( "an error reply carries error and never result", "[mcp]" ) {
+	auto rendered = jsonrpc::render_error_response( jsonrpc::request_id::string( "srv-1" ),
+		jsonrpc::METHOD_NOT_FOUND, "method not found" );
+	REQUIRE( static_cast< bool >( rendered ) );
+	CHECK( rendered->find( "\"error\"" ) != std::string::npos );
+	CHECK( rendered->find( "\"result\"" ) == std::string::npos );
+	CHECK( rendered->find( "\"id\":\"srv-1\"" ) != std::string::npos );
+
+	auto numeric = jsonrpc::render_error_response( jsonrpc::request_id::numeric( 3 ),
+		jsonrpc::INVALID_PARAMS, "bad params" );
+	REQUIRE( static_cast< bool >( numeric ) );
+	CHECK( numeric->find( "\"id\":3" ) != std::string::npos );
+	CHECK( numeric->find( "\"result\"" ) == std::string::npos );
+
+	auto success = jsonrpc::render_response( jsonrpc::request_id::numeric( 3 ), R"({"ok":true})" );
+	REQUIRE( static_cast< bool >( success ) );
+	CHECK( success->find( "\"result\"" ) != std::string::npos );
+	CHECK( success->find( "\"error\"" ) == std::string::npos );
 }
 
 TEST_CASE( "a session keeps stdin open and reports EOF", "[mcp][session]" ) {
@@ -157,6 +199,42 @@ TEST_CASE( "a tool call round-trips", "[mcp]" ) {
 	CHECK_FALSE( outcome->is_error );
 }
 
+TEST_CASE( "a server request with a string id is answered with an error", "[mcp]" ) {
+	auto [ wire, session_client ] = handshaked_client( "server-request" );
+
+	// tools/list makes the server send its own request, which the client must answer
+	auto tools = session_client->list_tools( );
+	REQUIRE( static_cast< bool >( tools ) );
+
+	const auto answered = wait_until( [ & ]( ) {
+		session_client->pump( std::chrono::milliseconds{ 20 } );
+
+		return wire->stderr_text( ).find( "reply-" ) != std::string::npos;
+	} );
+
+	REQUIRE( answered );
+	CHECK( wire->stderr_text( ).find( "reply-error" ) != std::string::npos );
+}
+
+TEST_CASE( "a final frame without a newline is delivered", "[mcp]" ) {
+	auto [ wire, session_client ] = handshaked_client( "unterminated" );
+
+	auto tools = session_client->list_tools( );
+	REQUIRE( static_cast< bool >( tools ) );
+	REQUIRE( tools->size( ) == 2 );
+}
+
+TEST_CASE( "an oversized unterminated line fails the transport, not memory", "[mcp]" ) {
+	auto [ wire, session_client ] = handshaked_client( "oversized" );
+
+	auto tools = session_client->list_tools( );
+	REQUIRE_FALSE( static_cast< bool >( tools ) );
+	CHECK( tools.error( ).code == errc::io );
+
+	// the server is still blocked writing; terminating it keeps the test teardown short
+	wire->stop( );
+}
+
 TEST_CASE( "a crashed server is restarted and its tools come back", "[mcp][supervisor]" ) {
 	auto registry = tool_registry{ };
 	auto mcp_source = source{ registry };
@@ -180,8 +258,9 @@ TEST_CASE( "a crashed server is restarted and its tools come back", "[mcp][super
 	CHECK( registry.find( "mcp__echo__upper" ) != nullptr );
 
 	board.on_transport_eof( );
+	board.pump( std::chrono::milliseconds{ 0 } );
 
-	REQUIRE( wait_until( [ & ]( ) { return board.state( ) == server_state::ready; } ) );
+	REQUIRE( board.state( ) == server_state::ready );
 	REQUIRE( saw_ready.size( ) == 2 );
 
 	CHECK( registry.find( "mcp__echo__upper" ) != nullptr );

@@ -430,3 +430,159 @@ TEST_CASE( "the surface exposes exactly the frozen fields", "[loader]" ) {
 	REQUIRE( *shape == "true" );
 }
 
+TEST_CASE( "a required module's compile error reaches the host", "[loader]" ) {
+	const auto root = scratch_root( );
+	const auto directory = root / "broken-module";
+
+	write( directory / "ext.toml",
+		"name = \"broken-module\"\nversion = \"0.1.0\"\napi_version = 1\n" );
+	write( directory / "init.luau", "local value = require(\"helper\")\nreturn value\n" );
+	write( directory / "helper.luau", "local x = = 1\n" );
+
+	auto registry = tool_registry{ };
+	g_registry = &registry;
+
+	auto providers = model::provider_registry{ };
+	auto bus = events::bus{ };
+	auto hooks = ext::hook_registry{ bus };
+	auto options = ext::loader_options{ };
+	options.register_api = register_api;
+
+	auto loaded = ext::load_extensions( { root }, providers, hooks, options );
+
+	REQUIRE( loaded.report.loaded.empty( ) );
+	REQUIRE( loaded.report.failed.size( ) == 1 );
+
+	if ( loaded.report.failed.size( ) == 1 ) {
+		// the compiler's line number, not the bare module path the raise would otherwise carry
+		REQUIRE( loaded.report.failed.front( ).reason.find( ":1:" ) != std::string::npos );
+	}
+
+	std::filesystem::remove_all( root );
+}
+
+TEST_CASE( "a schema table with mixed key types keeps every entry", "[loader]" ) {
+	const auto root = scratch_root( );
+	const auto directory = root / "mixed-schema";
+
+	write( directory / "ext.toml",
+		"name = \"mixed-schema\"\nversion = \"0.1.0\"\napi_version = 1\n" );
+	write( directory / "init.luau", R"LUASRC(mcode.tool.register({
+	name = "mixed",
+	description = "A schema with array entries beside named keys",
+	schema = { "first", "second", type = "object", note = "kept" },
+	run = function(args, ctx)
+		return "ok", nil
+	end,
+})
+)LUASRC" );
+
+	auto registry = tool_registry{ };
+	g_registry = &registry;
+
+	auto providers = model::provider_registry{ };
+	auto bus = events::bus{ };
+	auto hooks = ext::hook_registry{ bus };
+	auto options = ext::loader_options{ };
+	options.register_api = register_api;
+
+	auto loaded = ext::load_extensions( { root }, providers, hooks, options );
+
+	if ( loaded.report.loaded.size( ) != 1 ) {
+		FAIL( "unexpected report:" << describe( loaded.report ) );
+	}
+
+	REQUIRE( loaded.report.loaded.size( ) == 1 );
+
+	const auto* definition = registry.find( "mixed" );
+
+	REQUIRE( definition != nullptr );
+
+	if ( definition == nullptr ) {
+		return;
+	}
+
+	auto parsed = json::document::parse( definition->schema_json );
+
+	REQUIRE( static_cast< bool >( parsed ) );
+
+	if ( !parsed ) {
+		FAIL( "the registered schema is not JSON: " << parsed.error( ).msg );
+	}
+
+	// a dropped entry silently changes the schema the model is shown
+	auto first = parsed->pointer( "/1" );
+	REQUIRE( static_cast< bool >( first ) );
+
+	if ( first ) {
+		REQUIRE( *first == "first" );
+	}
+
+	auto second = parsed->pointer( "/2" );
+	REQUIRE( static_cast< bool >( second ) );
+
+	if ( second ) {
+		REQUIRE( *second == "second" );
+	}
+
+	auto note = parsed->pointer( "/note" );
+	REQUIRE( static_cast< bool >( note ) );
+
+	if ( note ) {
+		REQUIRE( *note == "kept" );
+	}
+
+	std::filesystem::remove_all( root );
+}
+
+TEST_CASE( "an unsigned argument past the signed range survives the JSON crossing", "[loader]" ) {
+	const auto root = scratch_root( );
+	const auto directory = root / "big-integer";
+
+	write( directory / "ext.toml",
+		"name = \"big-integer\"\nversion = \"0.1.0\"\napi_version = 1\n" );
+	write( directory / "init.luau", R"LUASRC(mcode.tool.register({
+	name = "magnitude",
+	description = "Reports the sign of the argument",
+	schema = { type = "object" },
+	run = function(args, ctx)
+		if args.value > 0 then
+			return "positive", nil
+		end
+
+		return "not positive", nil
+	end,
+})
+)LUASRC" );
+
+	auto registry = tool_registry{ };
+	g_registry = &registry;
+
+	auto providers = model::provider_registry{ };
+	auto bus = events::bus{ };
+	auto hooks = ext::hook_registry{ bus };
+	auto options = ext::loader_options{ };
+	options.register_api = register_api;
+
+	auto loaded = ext::load_extensions( { root }, providers, hooks, options );
+
+	if ( loaded.report.loaded.size( ) != 1 ) {
+		FAIL( "unexpected report:" << describe( loaded.report ) );
+	}
+
+	REQUIRE( loaded.report.loaded.size( ) == 1 );
+
+	// 2^64-1 is stored as an unsigned payload; reading it as signed would make it -1
+	auto result = loaded.invoke( "magnitude", R"({"value":18446744073709551615})" );
+
+	REQUIRE( static_cast< bool >( result ) );
+
+	if ( !result ) {
+		FAIL( "invoking the tool failed: " << result.error( ).msg );
+	}
+
+	REQUIRE( *result == "positive" );
+
+	std::filesystem::remove_all( root );
+}
+

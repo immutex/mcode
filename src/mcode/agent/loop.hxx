@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -60,17 +61,39 @@ namespace mcode {
 	inline constexpr std::size_t COMPACTION_KEEP_LAST_TURNS = 3;
 	inline constexpr std::int64_t COMPACTION_KEEP_LAST_TOKENS = 20'000;
 
+	// Charged on the turn thread and read by the REPL pump, so the counters are atomic.
 	struct session_budget {
 		std::uint32_t max_steps = DEFAULT_MAX_STEPS;
 		std::uint64_t max_tokens = DEFAULT_MAX_TOKENS;
 		double max_usd = DEFAULT_MAX_USD;
 
-		std::uint32_t steps_used = 0;
-		std::uint64_t tokens_used = 0;
-		double usd_used = 0.0;
+		std::atomic< std::uint32_t > steps_used{ 0 };
+		std::atomic< std::uint64_t > tokens_used{ 0 };
+		std::atomic< double > usd_used{ 0.0 };
+
+		session_budget( ) = default;
+
+		// atomics do not copy, and the budget is handed to the loop by value.
+		session_budget( const session_budget& other )
+			: max_steps( other.max_steps ), max_tokens( other.max_tokens ),
+			max_usd( other.max_usd ),
+			steps_used( other.steps_used.load( ) ), tokens_used( other.tokens_used.load( ) ),
+			usd_used( other.usd_used.load( ) ) { }
+
+		auto operator=( const session_budget& other ) -> session_budget& {
+			max_steps = other.max_steps;
+			max_tokens = other.max_tokens;
+			max_usd = other.max_usd;
+			steps_used.store( other.steps_used.load( ) );
+			tokens_used.store( other.tokens_used.load( ) );
+			usd_used.store( other.usd_used.load( ) );
+
+			return *this;
+		}
 
 		[[nodiscard]] auto exhausted( ) const noexcept -> bool {
-			return steps_used >= max_steps || tokens_used >= max_tokens || usd_used >= max_usd;
+			return steps_used.load( ) >= max_steps || tokens_used.load( ) >= max_tokens ||
+				usd_used.load( ) >= max_usd;
 		}
 
 		[[nodiscard]] auto nearly_exhausted( ) const noexcept -> bool {
@@ -78,13 +101,13 @@ namespace mcode {
 				return exhausted( );
 			}
 
-			return ( 1.0 - usd_used / max_usd ) < NEARLY_EXHAUSTED_FRACTION;
+			return ( 1.0 - usd_used.load( ) / max_usd ) < NEARLY_EXHAUSTED_FRACTION;
 		}
 
 		auto charge( const std::uint64_t tokens, const double usd ) noexcept -> void {
-			++steps_used;
-			tokens_used += tokens;
-			usd_used += usd;
+			steps_used.fetch_add( 1 );
+			tokens_used.fetch_add( tokens );
+			usd_used.fetch_add( usd );
 		}
 	};
 
@@ -120,19 +143,25 @@ namespace mcode {
 		[[nodiscard]] auto path( ) const noexcept -> const std::filesystem::path& { return path_; }
 
 		// A failed flush is counted, never thrown: losing the log must not end the session.
-		[[nodiscard]] auto write_failures( ) const noexcept -> std::uint64_t { return write_failures_; }
+		[[nodiscard]] auto write_failures( ) const noexcept -> std::uint64_t {
+			return write_failures_;
+		}
 
 		auto append( const std::string kind, std::string payload_json = "{}" ) -> event;
 
 		// Not append(): this preserves the recorded sequence and must not renumber.
 		auto restore( event recorded ) -> void;
 
-		[[nodiscard]] auto events( ) const noexcept -> const std::vector< event >& { return events_; }
+		[[nodiscard]] auto events( ) const noexcept -> const std::vector< event >& {
+			return events_;
+		}
 		[[nodiscard]] auto size( ) const noexcept -> std::size_t { return events_.size( ); }
 		[[nodiscard]] auto empty( ) const noexcept -> bool { return events_.empty( ); }
 
 
-		[[nodiscard]] auto next_sequence( ) const noexcept -> std::uint64_t { return next_sequence_; }
+		[[nodiscard]] auto next_sequence( ) const noexcept -> std::uint64_t {
+			return next_sequence_;
+		}
 
 
 		[[nodiscard]] auto to_jsonl( ) const -> std::string;
@@ -196,8 +225,11 @@ namespace mcode {
 
 		std::vector< loop_state > visited;
 
+		// the reason finish_run recorded; empty when the turn completed rather than gave up.
 		std::string summary_json;
-		std::size_t model_calls = 0;
+
+		// session_budget::steps_used at the end of the turn, the same count the CLI reports.
+		std::size_t steps = 0;
 	};
 
 	struct assembled_request {
@@ -212,8 +244,7 @@ namespace mcode {
 		bool near_budget = false;
 		std::string_view recitation;
 
-		// The provider's field names: a cache breakpoint is a byte offset into the rendered
-		// body, so the anchor must be located with the names the renderer will use.
+		// the provider's field names, so a breakpoint anchor matches the rendered body.
 		model::request_spec fields = { };
 	};
 
@@ -229,9 +260,12 @@ namespace mcode {
 	class thrash_detector {
 	public:
 		// Returns the repeat count of this exact hash within the window.
-		auto record( const std::string_view tool_name, const std::string_view args_json ) -> std::size_t;
+		auto record( const std::string_view tool_name, const std::string_view args_json )
+			-> std::size_t;
 
-		[[nodiscard]] auto repeat_count( ) const noexcept -> std::size_t { return current_repeats_; }
+		[[nodiscard]] auto repeat_count( ) const noexcept -> std::size_t {
+			return current_repeats_;
+		}
 
 	private:
 		std::vector< std::string > window_;
@@ -271,6 +305,9 @@ namespace mcode {
 
 			std::string instruction_chain;
 			std::string skill_index;
+
+			// called once per step, on the loop's thread; extension timers fire from here.
+			std::function< void( ) > pump_timers;
 		};
 
 		agent_loop( tool_registry& registry, event_log& log, session_budget budget = { } )
@@ -291,10 +328,7 @@ namespace mcode {
 			return found != handlers_.end( ) ? &found->second : nullptr;
 		}
 
-		// A turn that needs no tool costs ONE model request: when the plan response carries no
-		// tool call it is the turn's answer, so Act reuses it and the run goes straight to
-		// Verify. A plan that does carry calls has them dispatched by Act at once, so the tool
-		// path stays plan -> act -> observe -> act -> verify and no call is skipped.
+		// a plan response with no tool call is the turn's answer, so Act never re-requests it.
 		[[nodiscard]] auto run( const std::string_view user_task ) -> result< turn_outcome >;
 
 		[[nodiscard]] auto budget( ) const noexcept -> const session_budget& { return budget_; }
@@ -319,11 +353,9 @@ namespace mcode {
 			return model_name_;
 		}
 
-		// Session tokens consumed so far: the counter the budget charges and the status meter
-		// shows, never a second tally. Both reads are for the render thread, so neither locks
-		// nor allocates, and the REPL may call them while the loop runs.
+		// the same counter the budget charges; the atomic load lets the REPL read it mid-turn.
 		[[nodiscard]] auto context_used( ) const noexcept -> std::uint64_t {
-			return budget_.tokens_used;
+			return budget_.tokens_used.load( );
 		}
 
 		// The model's context window in tokens; 0 means unknown, so a caller omits the ratio.
@@ -337,6 +369,11 @@ namespace mcode {
 			return history_;
 		}
 
+		// The canonicalized workspace root the session was opened on; honours --cwd.
+		[[nodiscard]] auto workspace_root( ) const noexcept -> std::string_view {
+			return workspace_root_;
+		}
+
 		// The run-level exit-5 signal: a denial that leaves the loop unable to progress.
 		[[nodiscard]] auto permission_denied( ) const noexcept -> bool {
 			return permission_denied_;
@@ -347,10 +384,7 @@ namespace mcode {
 		auto finish_run( const loop_state terminal, const std::string_view reason ) -> void;
 
 	private:
-		// Plan is the turn's only request when the model needs no tool: a plan response with
-		// no tool call IS the turn's answer, so Act reuses it and the run goes straight to
-		// Verify (which hands off when no verification command is set). A plan response that
-		// does carry a tool call leaves it pending, and Act dispatches it exactly as before.
+		// drives plan -> act -> observe -> verify, reflecting or replanning when it stalls.
 		auto run_state_machine( ) -> turn_outcome;
 
 		auto request_and_fold( model::effort effort ) -> result< bool >;
@@ -387,16 +421,17 @@ namespace mcode {
 
 		thrash_detector thrash_;
 		std::string last_failure_;
+		std::string end_reason_;
 		bool hard_error_ = false;
 		bool permission_denied_ = false;
 		std::string verification_command_;
 		perm::permission_engine* permissions_ = nullptr;
 		std::string instruction_chain_;
 		std::string skill_index_;
+		std::function< void( ) > pump_timers_;
 		std::vector< tool_call > pending_calls_;
 
-		// Set when the plan response carried no tool call, so Act reuses it as the turn's
-		// answer rather than issuing a second request for the same bytes.
+		// the plan response carried no tool call, so Act reuses it as the turn's answer.
 		bool plan_answered_ = false;
 		std::map< std::string, std::size_t, std::less<> > reflection_counts_;
 		std::size_t total_reflections_ = 0;

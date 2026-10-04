@@ -1,7 +1,9 @@
 #include "mcode/mcp/connect.hxx"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
+#include <memory>
 #include <utility>
 
 #include "mcode/mcp/client.hxx"
@@ -35,6 +37,9 @@ namespace mcode::mcp {
 			-> std::function< result< std::string >( std::string_view ) > {
 			return [ &board, server_tool_name ]( const std::string_view arguments_json )
 				-> result< std::string > {
+				// services a restart due from an EOF; pump( 0 ) never blocks on the transport
+				board.pump( std::chrono::milliseconds{ 0 } );
+
 				if ( board.client_ptr( ) == nullptr || !board.client_ptr( )->is_alive( ) ) {
 					return std::unexpected( fail( errc::io,
 						"mcp server '" + board.config( ).name + "' is not running" ) );
@@ -64,8 +69,25 @@ namespace mcode::mcp {
 				return { };
 			}
 
-			auto board = std::make_unique< supervisor >( server,
-				supervisor::handlers{ } );
+			// on_ready fires on the first connect and on every restart, so it owns registration
+			auto registration_error = std::make_shared< std::string >( );
+
+			auto board = std::make_unique< supervisor >( server, supervisor::handlers{
+				[ registry = input.registry, name = server.name, registration_error ](
+					const std::vector< server_tool >& tools ) {
+					auto registrar = source{ *registry };
+
+					if ( const auto registered = registrar.register_server( name, tools );
+						!registered && registration_error->empty( ) ) {
+						*registration_error = registered.error( ).msg;
+					}
+				},
+				[ registry = input.registry, name = server.name ]( const std::string& reason ) {
+					auto registrar = source{ *registry };
+					registrar.unregister_server( name );
+
+					warn_stderr( "mcp server '" + name + "' is gone: " + reason );
+				} } );
 
 			auto listed = board->start( );
 
@@ -78,19 +100,16 @@ namespace mcode::mcp {
 				return message;
 			}
 
-			warn_schema_cost( server, *listed );
-
-			auto registrar = source{ *input.registry };
-
-			if ( const auto registered = registrar.register_server( server.name,
-				*listed ); !registered ) {
+			if ( !registration_error->empty( ) ) {
 				const auto message = "mcp server '" + server.name
-					+ "' tool registration failed: " + registered.error( ).msg;
+					+ "' tool registration failed: " + *registration_error;
 
 				warn_stderr( message );
 
 				return message;
 			}
+
+			warn_schema_cost( server, *listed );
 
 			for ( const auto& tool : *listed ) {
 				input.loop->register_handler(

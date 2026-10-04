@@ -1,9 +1,9 @@
 #include "mcode/ext/api_timer.hxx"
 
 #include <chrono>
-#include <cstdlib>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "lua.h"
 #include "lualib.h"
@@ -21,10 +21,11 @@ namespace mcode::ext {
 
 	}
 
-	timer_registry::timer_registry( std::function< void( ) > pump )
-		: pump_( std::move( pump ) ) { }
+	timer_registry::timer_registry( actions callbacks )
+		: actions_( std::move( callbacks ) ) { }
 
 	timer_registry::~timer_registry( ) {
+		clear( );
 	}
 
 	auto timer_registry::schedule( const std::uint64_t delay_ms, const bool repeating,
@@ -43,7 +44,7 @@ namespace mcode::ext {
 		entry.function_reference = function_reference;
 		entry.fires_limit = repeating ? MAX_TIMER_FIRES : 1;
 
-		auto [ position, inserted ] = timers_.insert_or_assign( entry.identifier, entry );
+		const auto [ position, inserted ] = timers_.insert_or_assign( entry.identifier, entry );
 		(void)position;
 
 		if ( !inserted ) {
@@ -54,101 +55,105 @@ namespace mcode::ext {
 		return &timers_.at( entry.identifier );
 	}
 
-	auto timer_registry::stop( const std::uint64_t identifier ) -> bool {
-		return timers_.erase( identifier ) > 0;
-	}
-
-	auto timer_registry::stop_all( ) -> void {
-		timers_.clear( );
-	}
-
-	auto timer_registry::find( const std::uint64_t identifier ) -> timer_entry* {
+	auto timer_registry::stop( const std::uint64_t identifier ) -> void {
 		const auto found = timers_.find( identifier );
 
-		return found != timers_.end( ) ? &found->second : nullptr;
+		if ( found == timers_.end( ) ) {
+			return;
+		}
+
+		const auto reference = found->second.function_reference;
+
+		timers_.erase( found );
+
+		if ( actions_.release ) {
+			actions_.release( reference );
+		}
 	}
 
 	auto timer_registry::pump( ) -> std::size_t {
 		auto fired = std::size_t{ 0 };
-
-		if ( !pump_ ) {
-			return fired;
-		}
-
 		const auto now = std::chrono::steady_clock::now( );
 
 		// collected before firing: a handler that schedules another must not extend this scan.
 		auto due = std::vector< std::uint64_t >{ };
 
-		for ( auto& [ identifier, entry ] : timers_ ) {
-			if ( entry.fires_done >= entry.fires_limit ) {
-				continue;
-			}
-
-			if ( now >= entry.fire_at ) {
+		for ( const auto& [ identifier, entry ] : timers_ ) {
+			if ( entry.fires_done < entry.fires_limit && now >= entry.fire_at ) {
 				due.push_back( identifier );
 			}
 		}
 
 		for ( const auto identifier : due ) {
-			auto* entry = find( identifier );
+			const auto found = timers_.find( identifier );
 
-			if ( entry == nullptr || entry->fires_done >= entry->fires_limit ) {
+			if ( found == timers_.end( ) ) {
+				continue;
+			}
+
+			auto& entry = found->second;
+
+			if ( entry.fires_done >= entry.fires_limit ) {
 				continue;
 			}
 
 			// counted before the call: a throwing repeating timer must still consume its fire.
-			++entry->fires_done;
+			++entry.fires_done;
 			++fired;
 
-			if ( entry->fires_done < entry->fires_limit ) {
-				entry->fire_at = std::chrono::steady_clock::now( )
-					+ std::chrono::milliseconds{ entry->interval_ms };
+			if ( entry.fires_done < entry.fires_limit ) {
+				entry.fire_at = std::chrono::steady_clock::now( )
+					+ std::chrono::milliseconds{ entry.interval_ms };
 			}
 
-			pump_( );
-		}
+			// read before the call: the handler may stop this timer and erase the entry.
+			const auto reference = entry.function_reference;
 
-		for ( auto iterator = timers_.begin( ); iterator != timers_.end( ); ) {
-			if ( iterator->second.fires_done >= iterator->second.fires_limit ) {
-				iterator = timers_.erase( iterator );
-			} else {
-				++iterator;
+			if ( actions_.fire ) {
+				actions_.fire( reference );
 			}
 		}
+
+		reap( );
 
 		return fired;
+	}
+
+	auto timer_registry::clear( ) -> void {
+		for ( const auto& pending : timers_ ) {
+			if ( actions_.release ) {
+				actions_.release( pending.second.function_reference );
+			}
+		}
+
+		timers_.clear( );
 	}
 
 	auto timer_registry::active_count( ) const noexcept -> std::size_t {
 		return timers_.size( );
 	}
 
-	auto timer_registry::next_due( ) -> timer_entry* {
-		const auto now = std::chrono::steady_clock::now( );
-
-		for ( auto& [ identifier, entry ] : timers_ ) {
-			if ( entry.fires_done < entry.fires_limit && now >= entry.fire_at ) {
-				return &entry;
-			}
-		}
-
-		return nullptr;
-	}
-
 	auto timer_registry::reap( ) -> void {
 		for ( auto iterator = timers_.begin( ); iterator != timers_.end( ); ) {
-			if ( iterator->second.fires_done >= iterator->second.fires_limit ) {
-				iterator = timers_.erase( iterator );
-			} else {
+			if ( iterator->second.fires_done < iterator->second.fires_limit ) {
 				++iterator;
+
+				continue;
+			}
+
+			const auto reference = iterator->second.function_reference;
+
+			iterator = timers_.erase( iterator );
+
+			if ( actions_.release ) {
+				actions_.release( reference );
 			}
 		}
 	}
 
 	namespace {
 
-		// the id travels as a lightuserdata upvalue: a number on the host side, not a pointer.
+		// the surface and the id are two upvalues: the id is a number, never a pointer.
 		auto lua_timer_stop( lua_State* state ) -> int {
 			auto* self = surface_from( state );
 
@@ -158,14 +163,8 @@ namespace mcode::ext {
 				return 0;
 			}
 
-			const auto* identifier = static_cast< const std::uint64_t* >(
-				lua_touserdata( state, lua_upvalueindex( 1 ) ) );
-
-			if ( identifier == nullptr ) {
-				return 0;
-			}
-
-			registry->stop( *identifier );
+			registry->stop( static_cast< std::uint64_t >(
+				lua_tonumber( state, lua_upvalueindex( 2 ) ) ) );
 
 			return 0;
 		}
@@ -209,23 +208,11 @@ namespace mcode::ext {
 
 			const auto identifier = ( *scheduled )->identifier;
 
-			auto* stored = static_cast< std::uint64_t* >(
-				std::malloc( sizeof( std::uint64_t ) ) );
-
-			if ( stored == nullptr ) {
-				registry->stop( identifier );
-				lua_unref( state, reference );
-
-				lua_pushliteral( state, "mcode.timer: out of memory" );
-				lua_error( state );
-			}
-
-			*stored = identifier;
-
 			lua_createtable( state, 0, 1 );
 
-			lua_pushlightuserdata( state, stored );
-			lua_pushcclosurek( state, lua_timer_stop, "stop", 1, nullptr );
+			lua_pushlightuserdata( state, self );
+			lua_pushnumber( state, static_cast< double >( identifier ) );
+			lua_pushcclosurek( state, lua_timer_stop, "stop", 2, nullptr );
 			lua_setfield( state, -2, "stop" );
 
 			return 1;
@@ -245,62 +232,47 @@ namespace mcode::ext {
 		return install_timer( state, self, true );
 	}
 
-}
+	auto api_surface::pump_timers( ) -> void {
+		if ( timers_ != nullptr ) {
+			timers_->pump( );
+		}
+	}
 
-namespace mcode::ext {
-
-	auto api_surface::pump_timers_once( ) -> void {
+	auto api_surface::fire_timer( const int function_reference ) -> void {
 		auto* state = host_ != nullptr ? host_->raw( ) : nullptr;
 
 		if ( state == nullptr ) {
 			return;
 		}
 
-		auto* registry = timers_.get( );
+		// budgets the call: a timer handler must not run forever on the loop's thread.
+		auto budget = lua_host::budget_scope{ host_ };
 
-		if ( registry == nullptr ) {
+		const auto depth = lua_gettop( state );
+
+		lua_getref( state, function_reference );
+
+		if ( lua_type( state, -1 ) != LUA_TFUNCTION ) {
+			lua_settop( state, depth );
+
 			return;
 		}
 
-		for ( ;; ) {
-			auto* due = registry->next_due( );
-
-			if ( due == nullptr ) {
-				break;
-			}
-
-			const auto reference = due->function_reference;
-
-			if ( due->fires_done + 1 >= due->fires_limit ) {
-				due->fires_done = due->fires_limit;
-			} else {
-				++due->fires_done;
-				due->fire_at = std::chrono::steady_clock::now( )
-					+ std::chrono::milliseconds{ due->interval_ms };
-			}
-
-			auto budget = lua_host::budget_scope{ host_ };
-
-			const auto depth = lua_gettop( state );
-
-			lua_getref( state, reference );
-
-			if ( lua_type( state, -1 ) != LUA_TFUNCTION ) {
-				lua_settop( state, depth );
-
-				continue;
-			}
-
-			if ( lua_pcall( state, 0, 0, 0 ) != 0 ) {
-				lua_settop( state, depth );
-
-				continue;
-			}
-
+		if ( lua_pcall( state, 0, 0, 0 ) != 0 ) {
 			lua_settop( state, depth );
+
+			return;
 		}
 
-		registry->reap( );
+		lua_settop( state, depth );
+	}
+
+	auto api_surface::release_timer( const int function_reference ) -> void {
+		auto* state = host_ != nullptr ? host_->raw( ) : nullptr;
+
+		if ( state != nullptr && function_reference != 0 ) {
+			lua_unref( state, function_reference );
+		}
 	}
 
 }
