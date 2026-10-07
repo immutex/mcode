@@ -75,6 +75,8 @@ add_library(mcode_core STATIC
 
     mcode/fs/workspace.cxx
     mcode/fs/workspace_write.cxx
+    mcode/fs/snapshot.cxx
+    mcode/fs/snapshot_restore.cxx
 
     mcode/perm/permission.cxx
     mcode/perm/rules.cxx
@@ -88,6 +90,8 @@ add_library(mcode_core STATIC
     mcode/tools/truncate.cxx
     mcode/tools/errors.cxx
     mcode/tools/tool_args.cxx
+    mcode/tools/json_repair.cxx
+    mcode/tools/schema_check.cxx
     mcode/tools/read_tool.cxx
     mcode/tools/write_tools.cxx
     mcode/tools/write_tools_common.cxx
@@ -119,6 +123,8 @@ add_library(mcode_core STATIC
 
     mcode/tui/cell.cxx
     mcode/tui/tty.cxx
+    mcode/tui/tty_decode.cxx
+    mcode/tui/notify.cxx
     mcode/tui/frame.cxx
     mcode/tui/theme.cxx
     mcode/tui/markdown.cxx
@@ -141,7 +147,7 @@ target_include_directories(mcode_core
 )
 
 if(WIN32)
-    target_sources(mcode_core PRIVATE mcode/tui/tty_windows.cxx)
+    target_sources(mcode_core PRIVATE mcode/tui/tty_windows.cxx mcode/tui/tty_records.cxx)
 else()
     target_sources(mcode_core PRIVATE mcode/tui/tty_posix.cxx)
 endif()

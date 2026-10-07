@@ -28,10 +28,18 @@ namespace mcode::tools {
 		return render_error( make_error( message, hint, retryable ) );
 	}
 
-	auto argument_error( const std::string_view detail ) -> std::string {
-		return error_result( std::string{ "malformed arguments: " } + std::string{ detail },
-			"send a JSON object matching the tool's schema; re-read the schema with tool_search if unsure",
-			false );
+	auto argument_error( const std::string_view detail, const std::string_view hint ) -> std::string {
+		return error_result( std::string{ "invalid tool arguments: " } + std::string{ detail },
+			hint, false );
+	}
+
+	auto truncation_error( const std::string_view tool_name ) -> std::string {
+		return error_result(
+			"the response was cut off by the output token limit before the arguments for '" +
+				std::string{ tool_name } + "' were complete, so the call could not be run",
+			"re-issue the call with shorter arguments, or split the work into several smaller "
+			"calls; a lower max output or a smaller file window will leave room for the call",
+			true );
 	}
 
 }

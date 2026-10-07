@@ -61,6 +61,24 @@ namespace mcode::perm {
 			return false;
 		}
 
+		// plan mode is read-only: only the read class passes.
+		[[nodiscard]] constexpr auto denied_by_plan_mode( const tool_class klass ) noexcept
+			-> bool {
+			switch ( klass ) {
+				case tool_class::read: return false;
+
+				case tool_class::write:
+				case tool_class::exec:
+				case tool_class::net:
+				case tool_class::spawn:
+				// mcp is not a read: an MCP `readOnlyHint` is an untrusted claim.
+				case tool_class::mcp: return true;
+			}
+
+			// unreachable for a valid class; an unknown one fails closed like the default set.
+			return true;
+		}
+
 	}
 
 	auto to_string( const resolution value ) -> std::string_view {
@@ -424,6 +442,15 @@ namespace mcode::perm {
 
 	auto permission_engine::decide( const permission_request& request )
 		-> permission_decision {
+		// plan mode is read-only, and decides ahead of the rule merge and of yolo.
+		if ( options_.plan_mode && denied_by_plan_mode( request.klass ) ) {
+			last_verdict_ = { permission_decision::deny,
+				{ "plan", request.resource, permission_decision::deny },
+				"plan mode is read-only: it refuses edits and commands" };
+
+			return permission_decision::deny;
+		}
+
 		// the hard-deny floor sits ahead of the rule merge and ahead of yolo.
 		if ( const auto floor = on_floor( request ) ) {
 			last_verdict_ = { permission_decision::deny,

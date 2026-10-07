@@ -1,6 +1,6 @@
 // The platform-neutral half of the terminal layer: the capability probe and
 // the environment helper. The console itself is per-platform, in tty_windows.cxx
-// and tty_posix.cxx.
+// and tty_posix.cxx; the key decoder both of them feed is in tty_decode.cxx.
 #include "mcode/tui/tty.hxx"
 
 #include <cstdlib>

@@ -235,7 +235,7 @@ TEST_CASE( "breakpoints apply right-to-left", "[render]" ) {
 	REQUIRE( recovered == *plain );
 }
 
-TEST_CASE( "explicit markers get one breakpoint on the stable prefix when none are given",
+TEST_CASE( "explicit markers anchor the stable prefix and roll with the newest message",
 	"[render]" ) {
 	auto request = make_request( );
 	request.cache.mode = model::cache_mode::explicit_markers;
@@ -246,7 +246,9 @@ TEST_CASE( "explicit markers get one breakpoint on the stable prefix when none a
 
 	const auto offsets = model::cache_breakpoints( request, descriptor.request );
 
-	REQUIRE( offsets.size( ) == 1 );
+	// two messages, so the stable-prefix anchor plus a rolling one on the newest message
+	REQUIRE( offsets.size( ) == 2 );
+	CHECK( offsets.front( ) < offsets.back( ) );
 
 	// the marker lands on the system message, so the tools block before it is cached too
 	auto located = request;
@@ -260,9 +262,13 @@ TEST_CASE( "explicit markers get one breakpoint on the stable prefix when none a
 	CHECK( marked->find( R"({"cache_control":{"type":"ephemeral"},"content":"be terse","role":"system"})" )
 		!= std::string::npos );
 
+	// the rolling anchor covers the newest message, so a growing history keeps a live cache
+	CHECK( marked->find( R"({"cache_control":{"type":"ephemeral"},"content":"read the file","role":"user"})" )
+		!= std::string::npos );
+
 	// and a breakpoint the caller supplies is applied verbatim
 	auto manual = request;
-	manual.cache.breakpoints = { offsets.front( ) };
+	manual.cache.breakpoints = offsets;
 
 	const auto with_offsets = model::render_chat_completions( manual, descriptor.request );
 	REQUIRE( static_cast< bool >( with_offsets ) );
@@ -280,6 +286,17 @@ TEST_CASE( "explicit markers get one breakpoint on the stable prefix when none a
 	const auto kept = model::cache_breakpoints( preset, descriptor.request );
 	REQUIRE( kept.size( ) == 1 );
 	CHECK( kept.front( ) == 4 );
+}
+
+TEST_CASE( "a single-message request gets only the stable-prefix anchor", "[render]" ) {
+	auto request = make_request( );
+	request.cache.mode = model::cache_mode::explicit_markers;
+	request.messages.resize( 1 );
+
+	const auto descriptor = chat_completions_descriptor( );
+	const auto offsets = model::cache_breakpoints( request, descriptor.request );
+
+	REQUIRE( offsets.size( ) == 1 );
 }
 
 TEST_CASE( "implicit cache mode renders no markers", "[render]" ) {
@@ -334,4 +351,179 @@ TEST_CASE( "render_request refuses an unrenderable descriptor by name", "[render
 	REQUIRE( refused.error( ).code == errc::unsupported );
 	REQUIRE( refused.error( ).msg.find( "anthropic-messages" ) != std::string::npos );
 	REQUIRE( refused.error( ).msg.find( "chat-completions" ) != std::string::npos );
+}
+
+TEST_CASE( "strict tool calling marks every function and widens optional parameters",
+	"[render]" ) {
+	auto request = make_request( );
+	request.strict_tools = true;
+
+	auto tool = model::tool_spec{ };
+	tool.name = "read";
+	tool.description = "Read a file";
+	tool.schema_json =
+		R"({"type":"object","properties":{"path":{"type":"string"},"limit":{"type":"integer"}},"required":["path"]})";
+
+	request.tools = { tool };
+
+	const auto descriptor = chat_completions_descriptor( );
+	const auto rendered = model::render_chat_completions( request, descriptor.request );
+
+	REQUIRE( static_cast< bool >( rendered ) );
+
+	auto parsed = json::document::parse( *rendered );
+	REQUIRE( static_cast< bool >( parsed ) );
+
+	// the marker that switches on schema-constrained generation
+	const auto strict = parsed->pointer_bool( "/tools/0/function/strict" );
+	REQUIRE( strict.has_value( ) );
+	CHECK( *strict );
+
+	// every property becomes required, so an optional member is expressed as nullable
+	auto required = parsed->pointer_string_array( "/tools/0/function/parameters/required" );
+	REQUIRE( required.has_value( ) );
+	CHECK( std::find( required->begin( ), required->end( ), "path" ) != required->end( ) );
+	CHECK( std::find( required->begin( ), required->end( ), "limit" ) != required->end( ) );
+
+	const auto additional = parsed->pointer_bool(
+		"/tools/0/function/parameters/additionalProperties" );
+	REQUIRE( additional.has_value( ) );
+	CHECK_FALSE( *additional );
+
+	// `limit` was optional, so its type admits null rather than being absent
+	const auto limit_type = parsed->pointer_raw( "/tools/0/function/parameters/properties/limit/type" );
+	REQUIRE( static_cast< bool >( limit_type ) );
+	CHECK( limit_type->find( "null" ) != std::string::npos );
+}
+
+TEST_CASE( "without strict tools the schema is emitted unchanged", "[render]" ) {
+	auto request = make_request( );
+
+	auto tool = model::tool_spec{ };
+	tool.name = "read";
+	tool.description = "Read a file";
+	tool.schema_json = R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})";
+
+	request.tools = { tool };
+
+	const auto descriptor = chat_completions_descriptor( );
+	const auto rendered = model::render_chat_completions( request, descriptor.request );
+
+	REQUIRE( static_cast< bool >( rendered ) );
+
+	auto parsed = json::document::parse( *rendered );
+	REQUIRE( static_cast< bool >( parsed ) );
+
+	CHECK_FALSE( parsed->has_pointer( "/tools/0/function/strict" ) );
+	CHECK( parsed->pointer_raw( "/tools/0/function/parameters" ).has_value( ) );
+}
+
+TEST_CASE( "a response format is dropped when tools are present and the gateway cannot do both",
+	"[render]" ) {
+	auto request = make_request( );
+	request.response_schema_json = R"({"type":"json_object"})";
+
+	auto tool = model::tool_spec{ };
+	tool.name = "read";
+	tool.description = "Read a file";
+	tool.schema_json = R"({"type":"object"})";
+
+	request.tools = { tool };
+
+	const auto descriptor = chat_completions_descriptor( );
+
+	// default: the format is dropped, because some models stop calling tools when both are set
+	const auto dropped = model::render_chat_completions( request, descriptor.request );
+	REQUIRE( static_cast< bool >( dropped ) );
+	CHECK( dropped->find( "response_format" ) == std::string::npos );
+
+	// a gateway that honours both keeps it
+	request.response_format_with_tools = true;
+
+	const auto kept = model::render_chat_completions( request, descriptor.request );
+	REQUIRE( static_cast< bool >( kept ) );
+	CHECK( kept->find( "response_format" ) != std::string::npos );
+
+	// with no tools there is nothing to suppress, so the format is always sent
+	auto tools_free = request;
+	tools_free.tools.clear( );
+	tools_free.response_format_with_tools = false;
+
+	const auto alone = model::render_chat_completions( tools_free, descriptor.request );
+	REQUIRE( static_cast< bool >( alone ) );
+	CHECK( alone->find( "response_format" ) != std::string::npos );
+}
+
+TEST_CASE( "parallel_tool_calls is only sent when the request names it", "[render]" ) {
+	auto request = make_request( );
+
+	auto tool = model::tool_spec{ };
+	tool.name = "read";
+	tool.description = "Read a file";
+	tool.schema_json = R"({"type":"object"})";
+
+	request.tools = { tool };
+
+	const auto descriptor = chat_completions_descriptor( );
+
+	const auto absent = model::render_chat_completions( request, descriptor.request );
+	REQUIRE( static_cast< bool >( absent ) );
+	CHECK( absent->find( "parallel_tool_calls" ) == std::string::npos );
+
+	request.parallel_tool_calls = false;
+
+	const auto present = model::render_chat_completions( request, descriptor.request );
+	REQUIRE( static_cast< bool >( present ) );
+	CHECK( present->find( "\"parallel_tool_calls\":false" ) != std::string::npos );
+}
+
+TEST_CASE( "a prefill turn is the last message and leaves the cache prefix stable", "[render]" ) {
+	auto request = make_request( );
+	request.prefill = "<tool_call>";
+
+	const auto descriptor = chat_completions_descriptor( );
+
+	const auto rendered = model::render_chat_completions( request, descriptor.request );
+	REQUIRE( static_cast< bool >( rendered ) );
+
+	auto parsed = json::document::parse( *rendered );
+	REQUIRE( static_cast< bool >( parsed ) );
+
+	// the prefilled assistant turn is appended, so it cannot disturb the stable prefix
+	CHECK( parsed->pointer_string( "/messages/2/role" ).value_or( "" ) == "assistant" );
+	CHECK( parsed->pointer_string( "/messages/2/content" ).value_or( "" ) == "<tool_call>" );
+
+	// and the cache anchor still lands on the first message
+	const auto offsets = model::cache_breakpoints( request, descriptor.request );
+
+	REQUIRE_FALSE( offsets.empty( ) );
+}
+
+TEST_CASE( "tool_choice is rendered only when it is not the provider default", "[render]" ) {
+	auto request = make_request( );
+
+	auto tool = model::tool_spec{ };
+	tool.name = "read";
+	tool.description = "Read a file";
+	tool.schema_json = R"({"type":"object"})";
+
+	request.tools = { tool };
+
+	const auto descriptor = chat_completions_descriptor( );
+
+	const auto automatic = model::render_chat_completions( request, descriptor.request );
+	REQUIRE( static_cast< bool >( automatic ) );
+	CHECK( automatic->find( "tool_choice" ) == std::string::npos );
+
+	request.choice.kind = model::tool_choice_kind::none;
+
+	const auto none = model::render_chat_completions( request, descriptor.request );
+	REQUIRE( static_cast< bool >( none ) );
+	CHECK( none->find( "\"tool_choice\":\"none\"" ) != std::string::npos );
+
+	request.choice.kind = model::tool_choice_kind::required;
+
+	const auto required = model::render_chat_completions( request, descriptor.request );
+	REQUIRE( static_cast< bool >( required ) );
+	CHECK( required->find( "\"tool_choice\":\"required\"" ) != std::string::npos );
 }

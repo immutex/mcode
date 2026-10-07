@@ -149,6 +149,20 @@ auto main( int argument_count, char** arguments ) -> int {
 		return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
 	}
 
+	// `--sessions` answers a question rather than opening a session, so it is handled
+	// here: a REPL would otherwise wait on stdin for a turn nobody asked for.
+	{
+		auto parsed = mcode::cli::parse_exec_options( argv );
+
+		if ( parsed && parsed->list_sessions ) {
+			const auto root = parsed->working_directory.empty( )
+				? std::filesystem::current_path( )
+				: std::filesystem::path{ parsed->working_directory };
+
+			return mcode::cli::to_int( mcode::cli::print_sessions( root ) );
+		}
+	}
+
 	return run_repl( argv );
 }
 

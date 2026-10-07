@@ -45,6 +45,8 @@ namespace mcode {
 		auto out = assembled_request{ };
 		out.request.model = std::string{ options.model_name };
 		out.request.cache.mode = options.mode;
+		out.request.strict_tools = options.strict_tools;
+		out.request.response_format_with_tools = options.response_format_with_tools;
 
 		auto tools = registry.all( );
 		std::sort( tools.begin( ), tools.end( ),

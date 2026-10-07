@@ -1,22 +1,211 @@
 #include "mcode/cli/exec.hxx"
 
+#include <algorithm>
+#include <array>
 #include <charconv>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <string>
 
 #include "mcode/agent/loop.hxx"
+#include "mcode/fs/workspace.hxx"
+#include "mcode/platform/seams.hxx"
 #include "mcode/support/json.hxx"
 #include "mcode/support/parse.hxx"
+#include "mcode/support/time.hxx"
 
 namespace mcode::cli {
 
 	namespace {
 
+		// The state directory's subdirectory, and the suffix every session file carries.
+		inline constexpr std::string_view SESSION_DIRECTORY_NAME = "sessions";
+		inline constexpr std::string_view SESSION_FILE_SUFFIX = ".jsonl";
+
+		// workspace digest, '-', epoch milliseconds padded to 13 digits.
+		inline constexpr std::size_t SESSION_DIGEST_LENGTH = 16;
+		inline constexpr std::size_t SESSION_STAMP_LENGTH = 13;
+		inline constexpr std::size_t SESSION_ID_LENGTH =
+			SESSION_DIGEST_LENGTH + 1 + SESSION_STAMP_LENGTH;
+
+		inline constexpr std::string_view SESSION_START_EVENT = "session.start";
+		inline constexpr std::string_view SESSION_RESUME_EVENT = "session.resume";
+
 		auto write_line( const std::string_view text ) -> void {
 			std::fwrite( text.data( ), 1, text.size( ), stdout );
 			std::fputc( '\n', stdout );
+		}
+
+		// u8string, not string: a non-ASCII workspace path must not be narrowed to the
+		// system code page before it is hashed.
+		auto to_utf8( const std::filesystem::path& path ) -> std::string {
+			const auto text = path.generic_u8string( );
+
+			return std::string{ reinterpret_cast< const char* >( text.data( ) ), text.size( ) };
+		}
+
+		// FNV-1a over the canonical root's UTF-8 bytes, so two workspaces cannot collide
+		// on one session id.
+		auto workspace_digest( const std::filesystem::path& canonical_root ) -> std::string {
+			return mcode::hash_bytes( to_utf8( canonical_root ) );
+		}
+
+		// The canonical root when it resolves, the normalized absolute path otherwise. Every
+		// entry point derives the digest through here, so `list`, `resolve` and the run that
+		// writes the file can never disagree about which workspace a session belongs to.
+		auto root_for_digest( const std::filesystem::path& workspace_root )
+			-> std::filesystem::path {
+			auto canonical = platform::canonicalize( workspace_root );
+
+			if ( canonical ) {
+				return *canonical;
+			}
+
+			auto error = std::error_code{ };
+			auto absolute = std::filesystem::absolute( workspace_root, error );
+
+			if ( error ) {
+				return workspace_root.lexically_normal( );
+			}
+
+			return absolute.lexically_normal( );
+		}
+
+		auto session_file_name( const std::string_view id ) -> std::string {
+			return std::string{ id } + std::string{ SESSION_FILE_SUFFIX };
+		}
+
+		// Zero-padded, so a lexical sort of the names is a chronological sort.
+		auto padded_stamp( const std::int64_t start_ms ) -> std::string {
+			auto text = std::to_string( start_ms );
+
+			if ( text.size( ) < SESSION_STAMP_LENGTH ) {
+				text.insert( 0, SESSION_STAMP_LENGTH - text.size( ), '0' );
+			}
+
+			return text;
+		}
+
+		// An id is a hex digest, a dash, and a decimal stamp -- nothing else. A user-supplied
+		// id is refused before it is joined to a path, so `../` cannot leave the directory.
+		auto is_session_id( const std::string_view id ) -> bool {
+			if ( id.size( ) != SESSION_ID_LENGTH || id[ SESSION_DIGEST_LENGTH ] != '-' ) {
+				return false;
+			}
+
+			for ( auto index = std::size_t{ 0 }; index < id.size( ); ++index ) {
+				if ( index == SESSION_DIGEST_LENGTH ) {
+					continue;
+				}
+
+				const auto character = id[ index ];
+				const auto is_hex = ( character >= '0' && character <= '9' )
+					|| ( character >= 'a' && character <= 'f' );
+
+				if ( !is_hex ) {
+					return false;
+				}
+			}
+
+			return true;
+		}
+
+		// The epoch-milliseconds stamp the id ends with, or 0 when it is not one.
+		auto stamp_of_session_id( const std::string_view id ) -> std::int64_t {
+			const auto digits = id.substr( SESSION_DIGEST_LENGTH + 1 );
+			auto value = std::int64_t{ 0 };
+			const auto parsed = std::from_chars( digits.data( ), digits.data( ) + digits.size( ),
+				value );
+
+			if ( parsed.ec != std::errc{ } ) {
+				return 0;
+			}
+
+			return value;
+		}
+
+		// Every well-formed session file in `directory`, newest first. The workspace digest
+		// filter belongs to the caller: resolving an id has to see a session from another
+		// workspace in order to name it, rather than report that no such session exists.
+		auto scan_sessions( const std::filesystem::path& directory )
+			-> result< std::vector< session_ref > > {
+			auto out = std::vector< session_ref >{ };
+			auto error = std::error_code{ };
+
+			// A workspace with no session yet is the normal first run, not a failure.
+			if ( !std::filesystem::is_directory( directory, error ) || error ) {
+				return out;
+			}
+
+			auto iterator = std::filesystem::directory_iterator{ directory, error };
+
+			if ( error ) {
+				return std::unexpected( fail( errc::io,
+					"could not read " + directory.string( ) + ": " + error.message( ) ) );
+			}
+
+			for ( const auto& entry : iterator ) {
+				// A fresh code per call: a stale one would skip every later entry.
+				auto entry_error = std::error_code{ };
+
+				if ( !entry.is_regular_file( entry_error ) || entry_error ) {
+					continue;
+				}
+
+				const auto name = to_utf8( entry.path( ).filename( ) );
+
+				if ( !name.ends_with( SESSION_FILE_SUFFIX ) ) {
+					continue;
+				}
+
+				const auto id = name.substr( 0, name.size( ) - SESSION_FILE_SUFFIX.size( ) );
+
+				if ( !is_session_id( id ) ) {
+					continue;
+				}
+
+				auto session = session_ref{ };
+				session.path = entry.path( );
+				session.id = id;
+				session.started_ms = stamp_of_session_id( id );
+
+				const auto size = std::filesystem::file_size( session.path, entry_error );
+
+				session.size_bytes = entry_error ? 0 : size;
+
+				out.push_back( std::move( session ) );
+			}
+
+			// Newest first: the id carries the start time, so the ordering is deterministic
+			// even when two runs land in the same millisecond.
+			std::sort( out.begin( ), out.end( ),
+				[]( const session_ref& left, const session_ref& right ) {
+					if ( left.started_ms != right.started_ms ) {
+						return left.started_ms > right.started_ms;
+					}
+
+					return left.id > right.id;
+				} );
+
+			return out;
+		}
+
+		auto format_utc( const std::int64_t milliseconds ) -> std::string {
+			const auto seconds = static_cast< std::time_t >( milliseconds / 1000 );
+			auto utc = std::tm{ };
+
+		#if defined( _WIN32 )
+			gmtime_s( &utc, &seconds );
+		#else
+			gmtime_r( &seconds, &utc );
+		#endif
+
+			auto buffer = std::array< char, 32 >{ };
+			std::strftime( buffer.data( ), buffer.size( ), "%Y-%m-%dT%H:%M:%SZ", &utc );
+
+			return buffer.data( );
 		}
 
 	}
@@ -100,6 +289,27 @@ namespace mcode::cli {
 				options.no_extensions = true;
 			} else if ( argument == "--yolo" ) {
 				options.yolo = true;
+			} else if ( argument == "--ask" ) {
+				options.ask = true;
+			} else if ( argument == "--plan" ) {
+				options.plan = true;
+			} else if ( argument == "--continue" || argument == "-c" ) {
+				options.continue_session = true;
+			} else if ( argument == "--sessions" ) {
+				options.list_sessions = true;
+			} else if ( argument == "--resume" || argument == "-r" ) {
+				auto value = next_value( argument );
+
+				if ( !value ) {
+					return std::unexpected( value.error( ) );
+				}
+
+				if ( value->empty( ) ) {
+					return std::unexpected( fail( errc::config,
+						"--resume needs a session id, got an empty value" ) );
+				}
+
+				options.resume_session = *value;
 			} else if ( argument == "--approval" ) {
 				auto value = next_value( argument );
 
@@ -180,7 +390,233 @@ namespace mcode::cli {
 			}
 		}
 
+		// resolved after the loop, so --ask beats --yolo in either order.
+		if ( options.ask ) {
+			options.yolo = false;
+		}
+
+		// resolved after the loop, so an explicit id wins whichever order the two arrive in.
+		if ( !options.resume_session.empty( ) ) {
+			options.continue_session = false;
+		}
+
 		return options;
+	}
+
+	auto session_directory( ) -> result< std::filesystem::path > {
+		auto state = platform::app_data_path( platform::data_kind::state );
+
+		if ( !state ) {
+			return std::unexpected( state.error( ) );
+		}
+
+		return *state / std::string{ SESSION_DIRECTORY_NAME };
+	}
+
+	auto session_id_for( const std::filesystem::path& workspace_root,
+		const std::int64_t started_ms ) -> std::string {
+		auto id = workspace_digest( root_for_digest( workspace_root ) );
+		id += '-';
+		id += padded_stamp( started_ms );
+
+		return id;
+	}
+
+	auto list_sessions( const std::filesystem::path& workspace_root )
+		-> result< std::vector< session_ref > > {
+		auto directory = session_directory( );
+
+		if ( !directory ) {
+			return std::unexpected( directory.error( ) );
+		}
+
+		auto sessions = scan_sessions( *directory );
+
+		if ( !sessions ) {
+			return std::unexpected( sessions.error( ) );
+		}
+
+		const auto digest = workspace_digest( root_for_digest( workspace_root ) );
+
+		std::erase_if( *sessions, [ &digest ]( const session_ref& session ) {
+			return !session.id.starts_with( digest );
+		} );
+
+		return sessions;
+	}
+
+	auto resolve_session( const std::filesystem::path& workspace_root,
+		const std::string_view id ) -> result< session_ref > {
+		auto directory = session_directory( );
+
+		if ( !directory ) {
+			return std::unexpected( directory.error( ) );
+		}
+
+		if ( !id.empty( ) ) {
+			// The id embeds the workspace digest, so a well-formed id still has to belong
+			// to this workspace; a foreign one is refused by name rather than reopened.
+			if ( !is_session_id( id ) ) {
+				return std::unexpected( fail( errc::config,
+					"no session named '" + std::string{ id } + "': a session id is 16 hex "
+					"digits, a dash, and the start time in milliseconds" ) );
+			}
+
+			if ( !id.starts_with( workspace_digest( root_for_digest( workspace_root ) ) ) ) {
+				return std::unexpected( fail( errc::config,
+					"no session named '" + std::string{ id } + "' for this workspace" ) );
+			}
+
+			auto session = session_ref{ };
+			session.id = std::string{ id };
+			session.path = *directory / session_file_name( id );
+			session.started_ms = stamp_of_session_id( id );
+
+			auto error = std::error_code{ };
+
+			if ( !std::filesystem::is_regular_file( session.path, error ) || error ) {
+				return std::unexpected( fail( errc::config,
+					"no session named '" + session.id + "' in " + directory->string( ) ) );
+			}
+
+			const auto size = std::filesystem::file_size( session.path, error );
+
+			session.size_bytes = error ? 0 : size;
+
+			return session;
+		}
+
+		auto sessions = list_sessions( workspace_root );
+
+		if ( !sessions ) {
+			return std::unexpected( sessions.error( ) );
+		}
+
+		if ( sessions->empty( ) ) {
+			return std::unexpected( fail( errc::config,
+				"no sessions for this workspace yet; run a turn first" ) );
+		}
+
+		return sessions->front( );
+	}
+
+	auto open_session_for_run( const exec_options& options,
+		const std::filesystem::path& workspace_root ) -> result< session_ref > {
+		if ( !options.resume_session.empty( ) ) {
+			return resolve_session( workspace_root, options.resume_session );
+		}
+
+		if ( options.continue_session ) {
+			return resolve_session( workspace_root, { } );
+		}
+
+		auto directory = session_directory( );
+
+		if ( !directory ) {
+			return std::unexpected( directory.error( ) );
+		}
+
+		auto error = std::error_code{ };
+		std::filesystem::create_directories( *directory, error );
+
+		if ( error ) {
+			return std::unexpected( fail( errc::io,
+				"could not create " + directory->string( ) + ": " + error.message( ) ) );
+		}
+
+		auto session = session_ref{ };
+		session.started_ms = support::epoch_milliseconds( );
+		session.id = session_id_for( workspace_root, session.started_ms );
+		session.path = *directory / session_file_name( session.id );
+
+		return session;
+	}
+
+	auto start_session_log( event_log& log, const session_ref& session, const bool resumed )
+		-> std::string {
+		// Read before the marker is appended: this is what was on disk, not what this run adds.
+		const auto restored_events = resumed ? log.size( ) : std::size_t{ 0 };
+
+		auto payload = std::string{ "{\"id\":\"" };
+		json::append_escaped( payload, session.id );
+		payload += "\",\"path\":\"";
+		json::append_escaped( payload, session.path.string( ) );
+		payload += "\",\"resumed\":";
+		payload += resumed ? "true" : "false";
+		payload += ",\"restored_events\":";
+		payload += std::to_string( restored_events );
+		payload += "}";
+
+		log.append( std::string{ resumed ? SESSION_RESUME_EVENT : SESSION_START_EVENT },
+			std::move( payload ) );
+
+		auto report = std::string{ "mcode: session " };
+		report += session.id;
+
+		if ( !resumed ) {
+			report += " started (";
+			report += session.path.string( );
+			report += ")\n";
+
+			return report;
+		}
+
+		// The one thing a resume cannot carry is spelled out here: the log holds tool
+		// activity, so the model's own transcript is not in it and the turn starts empty.
+		report += " resumed with ";
+		report += std::to_string( restored_events );
+		report += " recorded events; the event log is restored, the model's conversation "
+			"history is not, so this turn starts from an empty transcript\n";
+
+		return report;
+	}
+
+	auto print_sessions( const std::filesystem::path& workspace_root ) -> exit_code {
+		auto sessions = list_sessions( workspace_root );
+
+		if ( !sessions ) {
+			std::fprintf( stderr, "mcode: %s\n", sessions.error( ).msg.c_str( ) );
+
+			return exit_code::usage_error;
+		}
+
+		auto canonical = platform::canonicalize( workspace_root );
+		auto header = std::string{ "sessions for " };
+		header += canonical ? canonical->string( ) : workspace_root.string( );
+		header += ":";
+
+		write_line( header );
+
+		if ( sessions->empty( ) ) {
+			write_line( "  (none)" );
+
+			return exit_code::success;
+		}
+
+		for ( const auto& session : *sessions ) {
+			auto line = std::string{ "  " };
+			line += session.id;
+			line += "  ";
+
+			if ( session.started_ms > 0 ) {
+				line += format_utc( session.started_ms );
+			} else {
+				line += "unknown start time";
+			}
+
+			line += "  ";
+			line += std::to_string( session.size_bytes );
+			line += " bytes";
+
+			write_line( line );
+		}
+
+		auto hint = std::string{ "resume with: mcode exec --resume " };
+		hint += sessions->front( ).id;
+
+		write_line( hint );
+
+		return exit_code::success;
 	}
 
 	json_stream::json_stream( const bool enabled ) : enabled_( enabled ) { }
@@ -272,7 +708,12 @@ namespace mcode::cli {
 		out += "  --cwd <path>           working directory\n";
 		out += "  --max-steps <n>        stop after n steps\n";
 		out += "  --max-budget-usd <n>   stop after spending n USD\n";
-		out += "  --approval <mode>      never | on-request | always (default on-request)\n";
+		out += "  --approval <mode>      never | on-request | always (default never)\n";
+		out += "  --ask                  restore prompting for every mutating action\n";
+		out += "  --plan                 read-only: refuse edits and commands\n";
+		out += "  --continue, -c         reopen the newest session for this workspace\n";
+		out += "  --resume <id>, -r <id> reopen the session with this id (see --sessions)\n";
+		out += "  --sessions             list this workspace's sessions and exit\n";
 		out += "  --add-dir <path>       add an extra workspace root for this run\n";
 		out += "  --no-extensions        disable every extension\n";
 		out += "  --yolo                 skip approval prompts; the hard-deny floor and\n";

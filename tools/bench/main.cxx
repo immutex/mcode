@@ -31,6 +31,10 @@ namespace {
 
 	using clock_type = std::chrono::steady_clock;
 
+	// `01-north-star.md` bounds cold start at 15 ms. Referenced here rather than redefined:
+	// the doc owns the budget, this only measures against it.
+	inline constexpr double COLD_START_BUDGET_MS = 15.0;
+
 #if !defined( _WIN32 )
 	auto page_size_bytes( ) -> long {
 		static const auto cached = ::sysconf( _SC_PAGESIZE );
@@ -38,6 +42,107 @@ namespace {
 		return cached > 0 ? cached : 4096;
 	}
 #endif
+
+	// Milliseconds since the process was created, from the OS, so the measurement includes
+	// dynamic-loader and C-runtime start-up that a timer started in `main` cannot see. That
+	// is the whole point of the cold-start budget: `01` bounds the time to a usable process.
+	auto process_age_ms( ) -> double {
+	#if defined( _WIN32 )
+		FILETIME created{};
+		FILETIME exited{};
+		FILETIME kernel{};
+		FILETIME user{};
+
+		if ( GetProcessTimes( GetCurrentProcess( ), &created, &exited, &kernel, &user ) == 0 ) {
+			return -1.0;
+		}
+
+		ULARGE_INTEGER created_ticks{};
+		created_ticks.LowPart = created.dwLowDateTime;
+		created_ticks.HighPart = created.dwHighDateTime;
+
+		FILETIME now{};
+		GetSystemTimeAsFileTime( &now );
+
+		ULARGE_INTEGER now_ticks{};
+		now_ticks.LowPart = now.dwLowDateTime;
+		now_ticks.HighPart = now.dwHighDateTime;
+
+		// FILETIME is 100-nanosecond intervals, so the difference is 100ns units.
+		return static_cast< double >( now_ticks.QuadPart - created_ticks.QuadPart ) / 10'000.0;
+	#else
+		auto* file = std::fopen( "/proc/self/stat", "r" );
+
+		if ( file == nullptr ) {
+			return -1.0;
+		}
+
+		char buffer[ 4096 ]{ };
+
+		if ( std::fgets( buffer, sizeof( buffer ), file ) == nullptr ) {
+			std::fclose( file );
+
+			return -1.0;
+		}
+
+		std::fclose( file );
+
+		// The comm field is parenthesised and may contain spaces, so fields are counted from
+		// the last ')' — starttime is field 22, the 20th after the state field.
+		auto* close = std::strrchr( buffer, ')' );
+
+		if ( close == nullptr ) {
+			return -1.0;
+		}
+
+		unsigned long long start_ticks = 0;
+		auto fields_after_comm = 0;
+		auto* cursor = close + 1;
+
+		while ( *cursor != '\0' && fields_after_comm < 20 ) {
+			while ( *cursor == ' ' ) {
+				++cursor;
+			}
+
+			if ( *cursor == '\0' ) {
+				break;
+			}
+
+			if ( fields_after_comm == 19 ) {
+				start_ticks = std::strtoull( cursor, nullptr, 10 );
+
+				break;
+			}
+
+			while ( *cursor != '\0' && *cursor != ' ' ) {
+				++cursor;
+			}
+
+			++fields_after_comm;
+		}
+
+		const auto ticks_per_second = static_cast< double >( ::sysconf( _SC_CLK_TCK ) );
+		const auto uptime_seconds = static_cast< double >( start_ticks ) / ticks_per_second;
+
+		auto* uptime_file = std::fopen( "/proc/uptime", "r" );
+
+		if ( uptime_file == nullptr ) {
+			return -1.0;
+		}
+
+		double system_uptime = 0.0;
+
+		if ( std::fscanf( uptime_file, "%lf", &system_uptime ) != 1 ) {
+			std::fclose( uptime_file );
+
+			return -1.0;
+		}
+
+		std::fclose( uptime_file );
+
+		return ( system_uptime - uptime_seconds ) * 1000.0;
+	#endif
+	}
 
 	auto current_rss_kb( ) -> unsigned long long {
 	#if defined( _WIN32 )
@@ -510,6 +615,24 @@ auto main( int argument_count, char** arguments ) -> int {
 		static_cast< long long >( rss_now ) - static_cast< long long >( baseline_rss ) );
 	std::printf( "rss_peak_kb=%llu\n", peak_rss_kb( ) );
 	std::printf( "process_uptime_ms=%.3f\n", milliseconds_since( process_start ) );
+
+	// Cold start is measured from the OS, not from a timer in `main`, so it includes the
+	// loader and C-runtime start-up the budget in `01` is actually about. A probe that could
+	// not read the process creation time emits NO metric rather than a sentinel: the gate
+	// treats a missing gated metric as a failure, which is what a broken probe is.
+	const auto cold_start_ms = process_age_ms( );
+
+	if ( cold_start_ms < 0.0 ) {
+		++measurement_failures;
+	} else {
+		std::printf( "cold_start_ms=%.3f\n", cold_start_ms );
+
+		if ( cold_start_ms > COLD_START_BUDGET_MS ) {
+			std::printf( "cold_start_budget=FAIL exceeded %.1f ms\n", COLD_START_BUDGET_MS );
+		} else {
+			std::printf( "cold_start_budget=ok\n" );
+		}
+	}
 
 	return ( load_failures != 0 || measurement_failures != 0 ) ? 1 : 0;
 }

@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "mcode/model/delta_applier.hxx"
+#include "mcode/model/http_client.hxx"
 #include "mcode/model/provider.hxx"
 #include "mcode/support/json.hxx"
 
@@ -551,4 +552,179 @@ TEST_CASE( "reasoning tokens are mapped, not dropped", "[provider]" ) {
 	}
 
 	REQUIRE( applier.accumulated_usage( ).reasoning == 25 );
+}
+
+TEST_CASE( "a gateway that pins the tool-call index at zero does not merge distinct calls",
+	"[provider]" ) {
+	// ollama #15457: the index is present but constant, so keying by it merges every call.
+	const auto json = R"({
+		"name": "x", "endpoint": "https://x/v1",
+		"stream": {
+			"text_delta": "/t",
+			"tool_calls": { "index": "/i", "id": "/id", "name": "/n", "args": "/a" }
+		}
+	})";
+
+	auto descriptor = model::descriptor_from_json( json );
+	REQUIRE( descriptor.has_value( ) );
+
+	auto applier = model::delta_applier{ *descriptor };
+
+	collect( applier, "", R"({"i":0,"id":"c0","n":"read","a":"{\"p\":\"a\"}"})" );
+	collect( applier, "", R"({"i":0,"id":"c1","n":"glob","a":"{\"q\":\"*.cxx\"}"})" );
+
+	auto calls = std::vector< model::chat_event >{ };
+
+	for ( const auto& event : applier.finish( ) ) {
+		if ( event.type == model::chat_event::kind::tool_call_delta ) {
+			calls.push_back( event );
+		}
+	}
+
+	REQUIRE( calls.size( ) == 2 );
+	CHECK( calls[ 0 ].tool_name == "read" );
+	CHECK( calls[ 0 ].args_fragment == R"({"p":"a"})" );
+	CHECK( calls[ 1 ].tool_name == "glob" );
+	CHECK( calls[ 1 ].args_fragment == R"({"q":"*.cxx"})" );
+	CHECK( calls[ 0 ].index != calls[ 1 ].index );
+}
+
+TEST_CASE( "a fragment that re-sends the accumulated id replaces rather than appends",
+	"[provider]" ) {
+	const auto json = R"({
+		"name": "x", "endpoint": "https://x/v1",
+		"stream": {
+			"text_delta": "/t",
+			"tool_calls": { "index": "/i", "id": "/id", "name": "/n", "args": "/a" }
+		}
+	})";
+
+	auto descriptor = model::descriptor_from_json( json );
+	REQUIRE( descriptor.has_value( ) );
+
+	auto applier = model::delta_applier{ *descriptor };
+
+	// the same id arrives on both fragments, which some gateways do
+	collect( applier, "", R"({"i":0,"id":"call_1","n":"read","a":"{\"p\":"})" );
+	collect( applier, "", R"({"i":0,"id":"call_1","n":"read","a":"\"a\"}"})" );
+
+	auto calls = std::vector< model::chat_event >{ };
+
+	for ( const auto& event : applier.finish( ) ) {
+		if ( event.type == model::chat_event::kind::tool_call_delta ) {
+			calls.push_back( event );
+		}
+	}
+
+	REQUIRE( calls.size( ) == 1 );
+	CHECK( calls[ 0 ].tool_call_id == "call_1" );
+	CHECK( calls[ 0 ].args_fragment == R"({"p":"a"})" );
+}
+
+TEST_CASE( "a fragment with an absent index continues the newest call", "[provider]" ) {
+	const auto json = R"({
+		"name": "x", "endpoint": "https://x/v1",
+		"stream": {
+			"text_delta": "/t",
+			"tool_calls": { "id": "/id", "name": "/n", "args": "/a" }
+		}
+	})";
+
+	auto descriptor = model::descriptor_from_json( json );
+	REQUIRE( descriptor.has_value( ) );
+
+	auto applier = model::delta_applier{ *descriptor };
+
+	collect( applier, "", R"({"id":"c0","n":"read","a":"{\"p\":"})" );
+	collect( applier, "", R"({"a":"\"a\"}"})" );
+
+	auto calls = std::vector< model::chat_event >{ };
+
+	for ( const auto& event : applier.finish( ) ) {
+		if ( event.type == model::chat_event::kind::tool_call_delta ) {
+			calls.push_back( event );
+		}
+	}
+
+	REQUIRE( calls.size( ) == 1 );
+	CHECK( calls[ 0 ].args_fragment == R"({"p":"a"})" );
+}
+
+TEST_CASE( "a feature block parses and an unknown feature key is refused", "[provider]" ) {
+	auto descriptor = model::descriptor_from_json( R"({
+		"name": "x", "endpoint": "https://x/v1",
+		"stream": { "text_delta": "/t" },
+		"features": {
+			"strict_tools": true,
+			"parallel_tool_calls": true,
+			"prefill_text": "<tool_call>",
+			"response_format_with_tools": true
+		}
+	})" );
+
+	REQUIRE( static_cast< bool >( descriptor ) );
+	CHECK( descriptor->features.strict_tools );
+	CHECK( descriptor->features.parallel_tool_calls );
+	CHECK( descriptor->features.prefill_text == "<tool_call>" );
+	CHECK( descriptor->features.response_format_with_tools );
+
+	// every feature defaults off, so a descriptor written before the block existed is unchanged
+	auto bare = model::descriptor_from_json( R"({
+		"name": "x", "endpoint": "https://x/v1",
+		"stream": { "text_delta": "/t" }
+	})" );
+
+	REQUIRE( static_cast< bool >( bare ) );
+	CHECK_FALSE( bare->features.strict_tools );
+	CHECK_FALSE( bare->features.parallel_tool_calls );
+	CHECK_FALSE( bare->features.response_format_with_tools );
+	CHECK( bare->features.prefill_text.empty( ) );
+
+	CHECK_FALSE( static_cast< bool >( model::descriptor_from_json( R"({
+		"name": "x", "endpoint": "https://x/v1",
+		"stream": { "text_delta": "/t" },
+		"features": { "not_a_feature": true }
+	})" ) ) );
+}
+
+TEST_CASE( "a 400 naming a request field is classified for downgrade", "[provider]" ) {
+	const auto strict = model::detect_feature_downgrade(
+		R"({"error":{"message":"Unrecognized request argument supplied: strict"}})" );
+
+	CHECK( strict.matched );
+	CHECK( strict.field == "strict" );
+
+	const auto parallel = model::detect_feature_downgrade(
+		R"({"error":{"message":"parallel_tool_calls is not supported"}})" );
+
+	CHECK( parallel.matched );
+	CHECK( parallel.field == "parallel_tool_calls" );
+
+	const auto prefill = model::detect_feature_downgrade(
+		R"({"error":{"message":"final assistant content cannot end with trailing whitespace"}})" );
+
+	CHECK_FALSE( prefill.matched );
+
+	// an unrelated 400 is not a downgrade, so it stays fatal
+	CHECK_FALSE( model::detect_feature_downgrade(
+		R"({"error":{"message":"invalid model"}})" ).matched );
+}
+
+TEST_CASE( "the request member names are overridable per provider", "[provider]" ) {
+	auto descriptor = model::descriptor_from_json( R"({
+		"name": "x", "endpoint": "https://x/v1",
+		"stream": { "text_delta": "/t" },
+		"request": {
+			"tools": "functions",
+			"tool_choice": "function_call",
+			"parallel_tool_calls": "parallel_calls",
+			"tool_strict": "schema_strict"
+		}
+	})" );
+
+	REQUIRE( static_cast< bool >( descriptor ) );
+	CHECK( descriptor->request.tools == "functions" );
+	CHECK( descriptor->request.tool_choice == "function_call" );
+	CHECK( descriptor->request.parallel_tool_calls == "parallel_calls" );
+	CHECK( descriptor->request.tool_strict == "schema_strict" );
 }

@@ -3,12 +3,14 @@
 #include "mcode/agent/loop_internal.hxx"
 
 #include <algorithm>
+#include <atomic>
 #include <exception>
 #include <fstream>
 #include <map>
 
 #include "mcode/support/json.hxx"
 #include "mcode/support/time.hxx"
+#include "mcode/tools/tool_args.hxx"
 
 #include <array>
 #include <chrono>
@@ -41,6 +43,7 @@ namespace mcode {
 		provider_( deps.provider ), api_key_( deps.api_key ),
 		workspace_root_( deps.workspace_root ),
 		platform_name_( deps.platform_name ),
+		snapshots_( deps.snapshots ),
 		permissions_( deps.permissions ),
 		instruction_chain_( deps.instruction_chain ),
 		skill_index_( deps.skill_index ),
@@ -56,6 +59,14 @@ namespace mcode {
 		if ( bus_ == nullptr ) {
 			bus_ = &owned_bus_;
 		}
+	}
+
+	auto agent_loop::mint_run_id( ) -> void {
+		// The serial keeps two runs inside one millisecond from sharing a capture group.
+		static auto serial = std::atomic< std::uint64_t >{ 0 };
+
+		snapshot_run_id_ = std::to_string( support::epoch_milliseconds( ) ) + "-" +
+			std::to_string( serial.fetch_add( 1, std::memory_order_relaxed ) );
 	}
 
 	auto agent_loop::publish( const events::kind type, std::string payload_json ) -> void {
@@ -101,10 +112,29 @@ namespace mcode {
 				.mode = caps_.caching,
 				.near_budget = near_budget,
 				.recitation = { },
-				.fields = provider_.request } );
+				.fields = provider_.request,
+				.strict_tools = caps_.supports_strict_schema && provider_.features.strict_tools,
+				.response_format_with_tools =
+					provider_.features.response_format_with_tools } );
 
 		auto stream_request = model::stream_request{ };
 		stream_request.request = assembled.request;
+
+		// Parallel calls are default-off for an unknown gateway: several do not implement the
+		// field, and the loop serializes calls anyway, so naming it buys nothing unless the
+		// descriptor says the gateway honours it.
+		if ( provider_.features.parallel_tool_calls &&
+			!provider_.request.parallel_tool_calls.empty( ) ) {
+			stream_request.request.parallel_tool_calls = false;
+		}
+
+		// Prefill suppresses the prose preamble some models emit before a tool call. The text
+		// is the gateway's convention, so it is declared in the descriptor and never guessed;
+		// a gateway that rejects it is caught by the 400 downgrade path.
+		if ( !provider_.features.prefill_text.empty( ) &&
+			!stream_request.request.tools.empty( ) ) {
+			stream_request.request.prefill = provider_.features.prefill_text;
+		}
 		stream_request.request.reasoning_effort = effort;
 		stream_request.provider = provider_;
 		stream_request.api_key = api_key_;
@@ -150,6 +180,10 @@ namespace mcode {
 			}
 		}
 
+		// Accumulated across the run, not just this request, so the summary can report the
+		// cache hit rate a consumer needs to tell a cheap turn from an expensive one.
+		run_usage_ += folded;
+
 		cost = compute_cost( caps_, folded );
 		budget_.charge( static_cast< std::uint64_t >( total_tokens( caps_, folded ) ), cost );
 
@@ -165,7 +199,21 @@ namespace mcode {
 
 		pending_calls_ = loop_internal::collect_calls( events );
 
+		// A response cut off by the output limit is a distinct failure from a malformed one: the
+		// arguments are a valid prefix of a call that was never finished, and no repair can
+		// recover them. Recorded here so dispatch reports it as truncation, not as a parse error.
+		const auto stop_reason = loop_internal::turn_stop_reason( events );
+
+		turn_truncated_ = loop_internal::is_truncation_stop_reason( stop_reason );
+		stop_reason_ = stop_reason;
+
 		const auto& calls = pending_calls_;
+
+		if ( turn_truncated_ ) {
+			for ( auto& call : pending_calls_ ) {
+				call.truncated = true;
+			}
+		}
 
 		for ( const auto& call : calls ) {
 			auto block = model::block{ };
@@ -187,18 +235,77 @@ namespace mcode {
 		hard_error_ = dispatch_calls( pending );
 	}
 
+	// A response whose tool arguments will not parse is, on most gateways, sampling noise
+	// rather than a model that cannot express the call. Blind resampling beats showing the
+	// model its own broken output, which anchors a small model to that output. Truncation is
+	// excluded: the same input reproduces it, so it takes the error path instead, where the
+	// message can say the response was cut off. Retries saturate by the third attempt.
+	auto agent_loop::resample_pending_calls( ) -> bool {
+		if ( pending_calls_.empty( ) || tool_call_retries_ >= MAX_TOOL_CALL_RETRIES ) {
+			return false;
+		}
+
+		auto unparsable = false;
+
+		for ( const auto& call : pending_calls_ ) {
+			if ( call.truncated ) {
+				return false;
+			}
+
+			const auto* definition = registry_->find( call.name );
+
+			if ( definition == nullptr ) {
+				continue;
+			}
+
+			const auto prepared =
+				tools::prepare_arguments( definition->schema_json, call.args_json );
+
+			if ( !prepared.ok( ) ) {
+				unparsable = true;
+
+				break;
+			}
+		}
+
+		if ( !unparsable ) {
+			return false;
+		}
+
+		++tool_call_retries_;
+
+		// Blind: the failed attempt leaves the conversation, so the retry is a fresh sample.
+		if ( !history_.empty( ) ) {
+			history_.pop_back( );
+		}
+
+		pending_calls_.clear( );
+
+		return true;
+	}
+
 	auto agent_loop::dispatch_calls( const std::vector< tool_call >& calls ) -> bool {
 		auto hard_error = false;
 
 		for ( const auto& call : calls ) {
-			thrash_.record( call.name, call.args_json );
+			// recorded first, so the repeat count decides before the call runs.
+			const auto repeats = thrash_.record( call.name, call.args_json );
 
-			auto outcome = execute( call );
+			auto outcome = repeats >= DOOM_LOOP_THRESHOLD
+				? refuse_doom_loop( call, repeats )
+				: execute( call );
+
 			observe_result( call, outcome );
 
 			if ( !outcome.ok ) {
 				hard_error = true;
 				last_failure_ = outcome.error_message;
+
+				// The reflect ladder groups failures by class so it does not reflect twice on
+				// the same problem. The message is written for the model and may embed a value
+				// that changes each attempt (a repeat count), which would make every failure
+				// its own class and defeat the cap; a stable class keeps the grouping honest.
+				last_failure_class_ = outcome.failure_class;
 			}
 		}
 
@@ -220,15 +327,25 @@ namespace mcode {
 		summary += std::to_string( budget_.max_steps > budget_.steps_used.load( )
 				? budget_.max_steps - budget_.steps_used.load( )
 				: 0 );
-		summary += ",\"remaining_usd\":";
+		summary += "\",\"remaining_usd\":";
 		summary += std::to_string( budget_.max_usd > budget_.usd_used.load( )
 				? budget_.max_usd - budget_.usd_used.load( )
 				: 0.0 );
+		summary += ",\"input_tokens\":";
+		summary += std::to_string( run_usage_.input );
+		summary += ",\"output_tokens\":";
+		summary += std::to_string( run_usage_.output );
+		summary += ",\"cached_read_tokens\":";
+		summary += std::to_string( run_usage_.cached_read );
+		summary += ",\"cache_write_tokens\":";
+		summary += std::to_string( run_usage_.cache_write );
+		summary += ",\"reasoning_tokens\":";
+		summary += std::to_string( run_usage_.reasoning );
 		summary += ",\"state\":\"";
 		summary += to_string( terminal );
 		summary += "\",\"reason\":\"";
 		json::append_escaped( summary, reason );
-		summary += "\"}";
+		summary += "}";
 
 		log_->append( "run.end", summary );
 
@@ -245,13 +362,23 @@ namespace mcode {
 		plan_answered_ = false;
 		hard_error_ = false;
 		permission_denied_ = false;
+
+		// the doom-loop repeat count rides on this window, so this clears it too.
 		thrash_ = thrash_detector{ };
 		reflection_counts_.clear( );
 		total_reflections_ = 0;
 		last_failure_.clear( );
+		last_failure_class_.clear( );
 		end_reason_.clear( );
+		stop_reason_.clear( );
+		turn_truncated_ = false;
+		tool_call_retries_ = 0;
+		run_usage_ = model::usage{ };
 		replan_count_ = 0;
 		last_failure_repeats_ = 0;
+
+		// A fresh capture group per run, so /undo undoes this run and not the previous one.
+		mint_run_id( );
 
 		auto task_message = model::message{ };
 		task_message.speaker = model::role::user;
@@ -350,6 +477,13 @@ namespace mcode {
 					}
 
 					if ( *acted ) {
+						// A response whose arguments cannot be repaired is resampled blind:
+						// the attempt is dropped and the request repeated, because showing a
+						// small model its own broken output anchors it to that output.
+						if ( resample_pending_calls( ) ) {
+							break;
+						}
+
 						dispatch_pending( );
 						state_ = loop_state::observe;
 
@@ -369,15 +503,11 @@ namespace mcode {
 						break;
 					}
 
-					if ( hard_error_ && total_reflections_ < MAX_REFLECTIONS_PER_RUN ) {
-						hard_error_ = false;
-						state_ = loop_state::reflect;
-
-						break;
-					}
-
-					hard_error_ = false;
-
+					// The repeated-call ladder is consulted before the failure branch. A call the
+					// dispatch guard refused is both a repeat and a failure, and the repeat is
+					// the informative reading: the ladder reflects once, then demands a new
+					// plan, where the failure branch alone would spend the whole reflection
+					// budget on a loop only replanning can break.
 					const auto repeats = thrash_.repeat_count( );
 
 					if ( repeats >= THRASH_ESCALATION_FACTOR * THRASH_REPEAT_LIMIT ) {
@@ -407,6 +537,15 @@ namespace mcode {
 						break;
 					}
 
+					if ( hard_error_ && total_reflections_ < MAX_REFLECTIONS_PER_RUN ) {
+						hard_error_ = false;
+						state_ = loop_state::reflect;
+
+						break;
+					}
+
+					hard_error_ = false;
+
 					state_ = loop_state::act;
 
 					break;
@@ -419,9 +558,11 @@ namespace mcode {
 						break;
 					}
 
-					auto arguments = std::string{ "{\"command\":" };
+					// the command is a JSON string member, so it must be quoted and escaped;
+					// an unquoted value is not JSON and the call would be rejected.
+					auto arguments = std::string{ "{\"command\":\"" };
 					json::append_escaped( arguments, verification_command_ );
-					arguments += "}";
+					arguments += "\"}";
 
 					auto checked = execute( tool_call{ std::string{ }, "bash", arguments } );
 
@@ -463,9 +604,9 @@ namespace mcode {
 				}
 
 				case loop_state::reflect: {
-					const auto failure_class = last_failure_.empty( )
-						? std::string{ "thrash" }
-						: last_failure_;
+					const auto failure_class = !last_failure_class_.empty( )
+						? last_failure_class_
+						: last_failure_.empty( ) ? std::string{ "thrash" } : last_failure_;
 
 					auto& count = reflection_counts_[ failure_class ];
 
@@ -530,6 +671,22 @@ namespace mcode {
 
 				case loop_state::handoff:
 				case loop_state::done: {
+					// The log needs a run.end even when the turn completed without a prior
+					// finish_run, but `summary_json` is the run-level "gave up" signal the
+					// exit-code mapping reads: setting it here would turn a completed run into
+					// a provider error. The event is appended directly, and the outcome keeps
+					// the empty summary that means "completed".
+					if ( end_reason_.empty( ) ) {
+						auto payload = std::string{ "{\"reason\":\"" };
+						json::append_escaped( payload, state_ == loop_state::done
+								? "turn complete" : "handed off" );
+						payload += "\",\"state\":\"";
+						payload += to_string( state_ );
+						payload += "\"}";
+
+						log_->append( "run.end", std::move( payload ) );
+					}
+
 					outcome.final_state = state_;
 					outcome.visited = visited_;
 					outcome.steps = budget_.steps_used.load( );

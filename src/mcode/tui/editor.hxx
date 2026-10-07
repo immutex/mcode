@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace mcode::tui {
@@ -51,6 +52,10 @@ namespace mcode::tui {
 
 		// Replaces the buffer with one line and parks the caret at its end.
 		auto set_text( std::string text ) -> void;
+
+		// Inserts text at the caret, opening a row per newline. Never
+		// submits: a pasted block is content, and its line breaks are rows.
+		auto insert_text( std::string_view text ) -> void;
 
 		// The pending input as one line, rows joined by a space. The prompt row
 		// is a single line, so this is what it echoes while typing.

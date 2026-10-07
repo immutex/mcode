@@ -109,6 +109,25 @@ namespace mcode::model {
 
 		cache_plan cache;
 
+		// Emit the strict tool-calling shape: `strict: true` plus a schema every property of
+		// which is required with additional properties refused, so the provider constrains
+		// generation to the schema instead of the model having to follow it unaided.
+		bool strict_tools = false;
+
+		// Default-off for an unknown gateway: several do not implement the field, and a
+		// request that names it can be rejected outright. Absent means the provider's default.
+		std::optional< bool > parallel_tool_calls = std::nullopt;
+
+		// Whether a JSON response format may accompany a tool list. Some open-weight models
+		// stop calling tools when both are present, so the format is dropped unless the
+		// gateway is known to honour both.
+		bool response_format_with_tools = false;
+
+		// A trailing assistant message whose content the model continues. A gateway that
+		// accepts it starts the answer mid-turn, which skips the preamble some models emit
+		// before a tool call. Empty means none is sent.
+		std::string prefill;
+
 		std::int64_t max_output_tokens = 0;
 		double temperature = -1.0;
 		bool stream = true;
@@ -155,6 +174,17 @@ namespace mcode::model {
 		std::int64_t reasoning = 0;
 
 		auto add( const chat_event& event ) -> void;
+
+		// Sums another reading into this one, for a total across several requests.
+		auto operator+=( const usage& other ) noexcept -> usage& {
+			input += other.input;
+			output += other.output;
+			cached_read += other.cached_read;
+			cache_write += other.cache_write;
+			reasoning += other.reasoning;
+
+			return *this;
+		}
 	};
 
 	// The window assumed for a model the table does not know; without one it never compacts.

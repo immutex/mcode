@@ -55,6 +55,15 @@ dispatch_handlers_10_us_per_call = { kind = "ceiling", limit = 10 }
 provider_declarative_us_per_event = { kind = "ceiling", limit = 2 }
 provider_escape_hatch_us_per_event = { kind = "ceiling", limit = 5 }
 
+# docs/01 bounds cold start at 15 ms. This metric is measured from the process
+# creation time the OS reports, so it includes dynamic-loader and C-runtime
+# start-up -- which is what the budget is about -- and it therefore cannot be
+# gated at the bare 15 ms on a shared runner: process creation alone on a loaded
+# Linux container runs into tens of milliseconds. The gate is set to catch an
+# order-of-magnitude regression while a tight 15 ms check stays a local
+# measurement, per the timing-metric rule above.
+cold_start_ms = { kind = "ceiling", limit = 250 }
+
 # Both paths must produce exactly ONE event per iteration. A hatch that silently
 # drops events is the failure this catches -- it would otherwise show up as a
 # suspiciously fast escape hatch.

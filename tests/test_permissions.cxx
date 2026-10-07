@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "mcode/cli/exec.hxx"
 #include "mcode/perm/argv.hxx"
 
 #include "permission_test_helpers.hxx"
@@ -179,6 +180,83 @@ namespace permission_test {
 		CHECK( setup.exec( "rm -rf ~" ) == perm::permission_decision::deny );
 
 		CHECK( setup.exec( "rm -rf ./build" ) == perm::permission_decision::allow );
+	}
+
+	TEST_CASE( "plan mode denies every mutating class ahead of rules and yolo",
+		"[perm][plan]" ) {
+		auto setup = rig{ true };
+
+		auto options = perm::permission_engine::options{ };
+		options.yolo = true;
+		options.plan_mode = true;
+		setup.engine.set_options( options );
+
+		// a user allow cannot lift it: plan mode decides ahead of the rule merge.
+		setup.engine.add_config_rules( perm::rule_scope::user, { }, { "git status" } );
+
+		CHECK( setup.exec( "git status" ) == perm::permission_decision::deny );
+		CHECK( setup.engine.last_verdict( ).reason.find( "plan mode" ) != std::string::npos );
+
+		// a write inside the workspace is still a write.
+		CHECK( setup.write( "src/new-file.cxx" ) == perm::permission_decision::deny );
+
+		auto net_request = perm::permission_request{ };
+		net_request.tool_name = "fetch";
+		net_request.klass = tool_class::net;
+		net_request.resource = "https://example.com";
+		CHECK( setup.engine.decide( net_request ) == perm::permission_decision::deny );
+
+		auto spawn_request = perm::permission_request{ };
+		spawn_request.tool_name = "spawn";
+		spawn_request.klass = tool_class::spawn;
+		spawn_request.resource = "worker";
+		CHECK( setup.engine.decide( spawn_request ) == perm::permission_decision::deny );
+
+		// mcp is not a read class, so it is refused too rather than escaping via yolo.
+		CHECK( setup.mcp( "write_file", "{\"path\":\"a.txt\"}" )
+			== perm::permission_decision::deny );
+
+		// reads are untouched: looking without touching is the point.
+		CHECK( setup.read( "src/main.cxx" ) == perm::permission_decision::allow );
+		CHECK( setup.approval.asks( ) == 0 );
+	}
+
+	TEST_CASE( "--ask and --plan parse as boolean flags and --ask beats --yolo",
+		"[perm][argv]" ) {
+		auto plan = cli::parse_exec_options( { "--plan" } );
+		REQUIRE( plan.has_value( ) );
+		CHECK( plan->plan );
+		CHECK_FALSE( plan->ask );
+		CHECK_FALSE( plan->yolo );
+		CHECK( plan->unknown_arguments.empty( ) );
+
+		auto ask = cli::parse_exec_options( { "--ask" } );
+		REQUIRE( ask.has_value( ) );
+		CHECK( ask->ask );
+		CHECK_FALSE( ask->yolo );
+
+		// whichever order the two arrive in, the prompt is restored.
+		auto ask_then_yolo = cli::parse_exec_options( { "--ask", "--yolo" } );
+		REQUIRE( ask_then_yolo.has_value( ) );
+		CHECK( ask_then_yolo->ask );
+		CHECK_FALSE( ask_then_yolo->yolo );
+
+		auto yolo_then_ask = cli::parse_exec_options( { "--yolo", "--ask" } );
+		REQUIRE( yolo_then_ask.has_value( ) );
+		CHECK( yolo_then_ask->ask );
+		CHECK_FALSE( yolo_then_ask->yolo );
+
+		// --plan is independent: it does not disturb the other flags.
+		auto both = cli::parse_exec_options( { "--plan", "--yolo" } );
+		REQUIRE( both.has_value( ) );
+		CHECK( both->plan );
+		CHECK( both->yolo );
+
+		auto approval = cli::parse_exec_options( { "--approval", "always" } );
+		REQUIRE( approval.has_value( ) );
+		CHECK( approval->approval == "always" );
+		CHECK_FALSE( approval->ask );
+		CHECK_FALSE( approval->plan );
 	}
 
 	TEST_CASE( "an unparsable or compound command is an ask, never an allow",

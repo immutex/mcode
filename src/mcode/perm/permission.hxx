@@ -99,7 +99,11 @@ namespace mcode::perm {
 		struct options {
 			bool yolo = false;
 			bool headless = false;
-			// `always` prompts even for reads; yolo implies never.
+			// read-only: write, exec, net and spawn are denied before the rule merge.
+			bool plan_mode = false;
+			// The engine's own default stays conservative: a session with no human present
+			// must fail closed rather than auto-allow. The interactive session opts into the
+			// permissive `never` explicitly, and prints the boundary when it does.
 			std::string approval = "on-request";
 		};
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -46,6 +47,20 @@ namespace mcode::cli {
 		bool no_extensions = false;
 		bool yolo = false;
 
+		// --ask restores prompting for every mutating action and wins over --yolo.
+		bool ask = false;
+
+		// --plan is read-only: the engine refuses edits and commands.
+		bool plan = false;
+
+		// --continue reopens the newest session for the workspace; --resume names one.
+		// An explicit id wins when both are given.
+		bool continue_session = false;
+		std::string resume_session;
+
+		// --sessions prints the workspace's sessions and exits without running a turn.
+		bool list_sessions = false;
+
 		// `never` | `on-request` | `always`, from --approval or the merged
 		// config's sandbox.approval. Empty means "not set", so the config
 		// value can win.
@@ -64,6 +79,55 @@ namespace mcode::cli {
 	// dropped, so `main` can refuse them with a usage error and a hint.
 	[[nodiscard]] auto parse_exec_options( const std::vector< std::string >& arguments )
 		-> result< exec_options >;
+
+	// One JSONL event log under the state directory: the unit a resume reopens.
+	struct session_ref {
+		std::string id;
+		std::filesystem::path path;
+
+		// Epoch milliseconds decoded from the id, 0 when the name is not one this
+		// program wrote. `--sessions` prints it and `--continue` orders by it.
+		std::int64_t started_ms = 0;
+		std::uintmax_t size_bytes = 0;
+	};
+
+	// `app_data_path( state )/sessions`. Resolving it never creates it.
+	[[nodiscard]] auto session_directory( ) -> result< std::filesystem::path >;
+
+	// The id is the canonical workspace root's digest plus the start time, so two
+	// workspaces cannot collide on one file and the name is filesystem-safe.
+	[[nodiscard]] auto session_id_for( const std::filesystem::path& workspace_root,
+		const std::int64_t started_ms ) -> std::string;
+
+	// The workspace's sessions, newest first. An absent sessions directory is an
+	// empty list, not an error; an unresolvable state directory is an error.
+	[[nodiscard]] auto list_sessions( const std::filesystem::path& workspace_root )
+		-> result< std::vector< session_ref > >;
+
+	// The session an explicit id names, or the workspace's newest when `id` is empty.
+	// An unknown id is a named `errc::config` error -- it maps to the usage exit --
+	// and never falls back to a fresh session.
+	[[nodiscard]] auto resolve_session( const std::filesystem::path& workspace_root,
+		const std::string_view id ) -> result< session_ref >;
+
+	// The log file this run writes: the resumed session when one was named, else a
+	// new file under `sessions/`, which this creates. `event_log::open` replays an
+	// existing file, so a resumed session keeps its sequence numbers.
+	[[nodiscard]] auto open_session_for_run( const exec_options& options,
+		const std::filesystem::path& workspace_root ) -> result< session_ref >;
+
+	// Appends the run's opening event and returns the one-line report the callers
+	// print. A resume restores the event log and nothing else: the log records tool
+	// calls, tool results and run summaries, so the model's own user and assistant
+	// messages are not in it and cannot be replayed into the next turn.
+	auto start_session_log( event_log& log, const session_ref& session, bool resumed )
+		-> std::string;
+
+	// One line per known session (id, start time, size) on stdout, ending in a
+	// `resume with` hint. Exits 0 even when the workspace has no sessions yet; a
+	// usage error when the state directory cannot be resolved.
+	[[nodiscard]] auto print_sessions( const std::filesystem::path& workspace_root )
+		-> exit_code;
 
 	// The `exec --json` stream. One JSON object per line on stdout;
 	// diagnostics go to stderr.

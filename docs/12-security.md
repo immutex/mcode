@@ -37,29 +37,33 @@ When no git root and no explicit root exist (e.g. `/` or a home directory), mcod
 
 Decides *before* a tool call. Rule evaluation: `deny` → `ask` → `allow`, first match wins, from four scopes (managed > user > project > session).
 
+**Ordering is the safety argument.** Three checks run ahead of the rule merge and ahead of the approval mode, so no rule, no `--yolo` and no permissive default can reach them: **plan mode** (read-only), the **hard-deny floor**, and an **unparsable command** (never auto-allowed). The **interactive** session defaults to `never` (permissive) — defensible because a human is present, sees the boundary printed on entry, and has `/undo`; `--ask` restores prompting. A **headless** run has none of those, so it keeps the conservative default and fails closed. The engine's own default is `on-request`, so a caller that sets nothing cannot accidentally auto-allow.
+
 | Action | Default | Persist "don't ask"? | Sandbox? |
 |---|---|---|---|
 | Read file inside workspace | auto | — | n/a |
 | Read outside workspace | ask | session | n/a |
 | Read `.env`, `.git/`, keys, `id_rsa*`, `.aws/`, `*.pem` | deny | — | sandbox denyRead |
-| Edit/create inside workspace | ask | session | sandboxed |
+| Edit/create inside workspace | auto (prompts under `--ask`) | session | sandboxed |
 | Edit outside workspace | ask (never auto) | no | requires unsandboxed approval |
 | Write `.mcode/`, `.git/` internals | deny (project cannot override) | — | sandbox denyWrite |
 | Shell: read-only builtins (`ls cat grep git status`) | auto inside workspace | — | sandboxed |
-| Shell: any write/exec | ask | per exact parsed argv | sandboxed |
-| Shell: network (`curl`, `git push`, `npm install`) | ask | per exact argv | sandboxed + egress policy |
+| Shell: any write/exec | auto (prompts under `--ask`) | per exact parsed argv | sandboxed |
+| Shell: network (`curl`, `git push`, `npm install`) | auto (prompts under `--ask`) | per exact argv | sandboxed + egress policy |
 | Unparsable/compound command | ask (never auto-allow) | no | sandboxed |
 | Package install | ask + show lifecycle scripts | per project | sandboxed, network allowlist |
-| Web fetch / search | ask | per domain, per project | through egress proxy |
+| Web fetch / search | auto (prompts under `--ask`) | per domain, per project | through egress proxy |
 | MCP tool call | ask per server trust tier | per tool, per project | server process sandboxed |
 | MCP server connect | ask, full tool-list diff shown | per server | server sandboxed |
-| Git commit | ask | session | sandboxed |
-| Git push (force: deny unless flagged) | ask | no | sandboxed |
-| `rm`/`rmdir` in workspace | ask | no | sandboxed |
+| Git commit | auto (prompts under `--ask`) | session | sandboxed |
+| Git push (force: deny unless flagged) | auto (prompts under `--ask`) | no | sandboxed |
+| `rm`/`rmdir` in workspace | auto (prompts under `--ask`) | no | sandboxed |
 | Delete outside workspace, `sudo`, registry | deny | — | — |
 | **Extension load** | **ask + hash-pinned trust grant** | per file, hash-verified each load | sandboxed thread in-process; untrusted tier would be a subprocess |
 | **`mcode.spawn` / `mcode.fs.*`** | checked against the manifest's declared permissions | per extension | see Layer 3 |
-| YOLO | explicit flag + typed confirmation per session | no | still sandboxed unless `--no-sandbox` (double flag) |
+| YOLO | explicit flag | no | still sandboxed unless `--no-sandbox` (double flag) |
+
+**The hard-deny floor.** A small, non-overridable set, checked ahead of the rules and of `--yolo`: privilege escalation (`sudo`, `doas`, `runas`), filesystem creation (`mkfs*`), partition/format tools (`fdisk`, `diskpart`, `format`), raw-device writes (`dd of=/dev/…`, `\\.\PhysicalDrive*`), and a recursive force delete (`rm -rf`) whose target resolves to a filesystem root or the home directory. A target is resolved **before** matching — the final symlink or junction included, not just the parent — because `weakly_canonical` alone leaves a final link in place and `rm -rf link-to-root` would otherwise name a path that is not a root. Flag clusters (`-rf`, `-fr`, `--recursive --force`), a path-prefixed program (`/bin/rm`) and wrappers (`env`, `timeout`, `nice`, `nohup`) are all unwrapped first. `tool.command` then records the exact text that ran, after the permission check, because a permission incident is uninverifiable when only the output was kept.
 
 **How the two gate inputs compose.** A permission decision is:
 

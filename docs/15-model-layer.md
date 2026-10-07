@@ -104,6 +104,23 @@ struct IProvider {
 - Retries live in the transport layer, keyed off the canonical taxonomy; `Retry-After` honored; never retry `Fatal`; never retry a partially-consumed stream — resurface partial text + error to the agent loop, which re-issues the turn (idempotent because tool results are recorded client-side). **This section owns the retry policy**; `03` and `04` reference it. Default: exponential backoff with full jitter, cap ~30 s, **max 5 attempts** per request.
 - Fallback policy: on `Transient`-exhausted or provider outage → optional fallback chain, only when the user enabled it. **Fallback is run-boundary only, never mid-run.** Switching providers mid-run would strand the run on a capability mismatch (the fallback model may reject the tool-schema subset or lack the effort level), and it discards the cached prefix at the old provider's write rates. So: fail the run with partial state preserved, offer the fallback model for the next run. On `ContextOverflow` → compaction, not a model switch. Abort: Ctrl-C cancels the HTTP body; record the partial turn; tool calls never execute after abort.
 
+### Request-side capabilities: declared, attempted, downgraded
+
+A gateway's wire format says what it *could* express; only the gateway says what it *implements*. Two gateways can accept the same body shape and differ on whether `strict`, `parallel_tool_calls` or a prefilled assistant turn does anything. Each is therefore a declared flag on the descriptor, defaulting to the conservative answer, and a technique is attempted only when its flag is set:
+
+| Feature | Default | Effect when set |
+|---|---|---|
+| `strict_tools` | off | `strict: true` per function plus the strict schema shape (`06`) |
+| `parallel_tool_calls` | off | `parallel_tool_calls: false` — the loop serializes calls anyway, so naming it buys nothing unless the gateway honours it |
+| `prefill_text` | empty | An assistant turn with this content, sent last, so the answer begins mid-turn and skips a preamble |
+| `response_format_with_tools` | off | Keep the JSON response format when a tool list is present (`06`) |
+
+Two flags can also be *unset* by the gateway at runtime. A 400 whose body names a request field means the gateway does not implement that field, not that the request is malformed: the field is dropped and the request retried, bounded by `MAX_FEATURE_DOWNGRADES`. Failing a whole run over an unsupported optimisation is worse than running without it, and the retry does not consume an attempt because the request that failed was never one the gateway could have served. A 400 that names no known field stays fatal.
+
+`strict_tools` additionally requires the model's capability table to declare `supports_strict_schema`: the gateway must accept the field *and* the model must honour the grammar, so either alone is not enough.
+
+**No stall watchdog on the stream.** The transport sets a per-read timeout (60 s) and nothing shorter, deliberately: Anthropic streams tool input as partial JSON one key at a time with multi-second gaps between them, so a short inactivity watchdog would abort a healthy stream. The bound that matters is the per-read timeout, not a gap detector.
+
 ### Prompt layout rule (cache-first)
 
 Provider cache order is **`tools` → `system` → `messages`** — cumulative hash to the breakpoint; a change at any level invalidates that level and everything after it (`05` §KV-cache-friendly prompt construction, which owns this rule). Fixed order, append-only:
@@ -115,6 +132,8 @@ Provider cache order is **`tools` → `system` → `messages`** — cumulative h
 5. **volatile tail** — current user turn, fresh tool results, clock/cwd annotations
 
 Rules: never mutate an emitted history message (edits/compaction invalidate everything after the mutation point — allowed, but priced as a full rewrite); timestamps/uptime live only in the tail; keep tool-result messages in history order; batch parallel tool results before the next request so the prefix grows monotonically. On Anthropic: breakpoints at layers 1, 2, and the last stable history message (max 4; watch the 20-block lookback). On [OI]: automatic prefix caching plus a stable `prompt_cache_key`; on GPT-5.6+ use explicit `prompt_cache_breakpoint`. On Gemini: implicit caching only for interactive sessions.
+
+**A single stable-prefix anchor is not enough.** A cache read walks back only a bounded number of blocks from a breakpoint, so an anchor that never moves stops hitting once the history in front of it exceeds that window. `cache_breakpoints` therefore returns **two** offsets: the stable prefix (tools, then system) and a **rolling** one on the newest message, so the cached region extends as the conversation grows instead of silently missing. Breakpoints are applied right-to-left, because a marker occupies bytes and would otherwise shift the next offset.
 
 **Deferred tool loading is cache-neutral.** Both Anthropic and [OI] designed tool search to preserve the prefix: discovered tool definitions are appended to *history* (Anthropic `tool_reference`, [OI] end-of-context injection), never spliced into the tools array. What breaks the cache is **client-side mutation of the `tools` array mid-session** — mcode never does that (`06` §Loading strategy, `05`).
 
@@ -188,4 +207,6 @@ Routing is by task class, not by token count: the agent loop tags each call (`pl
 - https://gorilla.cs.berkeley.edu/leaderboard (BFCL v4 methodology)
 - https://www.benchleader.com/benchmarks/bfcl_overall (Sep 2026 scores — third-party mirror)
 - https://github.com/openai/tiktoken/issues/474 (tool-call token count discrepancy)
+- https://docs.vllm.ai/en/latest/features/tool_calling/ (clients never set `strict`; malformed markup leaks)
+- https://github.com/ollama/ollama/issues/7881 and https://github.com/ollama/ollama/issues/15457 (tool-call index absent, then constant zero)
 - Community Haiku-vs-Sonnet reliability testing: benchlm.ai, mashblog.com, noelcabral.com (directional, not benchmark-grade)

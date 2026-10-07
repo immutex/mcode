@@ -25,6 +25,10 @@ namespace mcode::model {
 		inline constexpr unsigned MAX_BACKOFF_SHIFT = 16;
 		inline constexpr std::int64_t MILLISECONDS_PER_SECOND = 1000;
 
+		// Bounds the retries a request-field downgrade may add, so an unhelpful body cannot
+		// loop: three fields can be dropped, so three retries is the most it can produce.
+		inline constexpr unsigned MAX_FEATURE_DOWNGRADES = 3;
+
 		// 413 is fatal, not context overflow: an oversized request is a client bug to fix.
 		[[nodiscard]] auto is_fatal_status( const int status ) noexcept -> bool {
 			switch ( status ) {
@@ -240,6 +244,28 @@ namespace mcode::model {
 		return std::nullopt;
 	}
 
+	// A 400 that names a request field means the gateway does not implement that field. The
+	// body is scanned for the field names this build can send, so an unsupported optimisation
+	// costs the optimisation rather than the run.
+	auto detect_feature_downgrade( const std::string_view raw_body ) -> feature_downgrade {
+		static constexpr std::string_view CANDIDATES[] = {
+			"parallel_tool_calls",
+			"prefill",
+			"strict",
+			"tool_choice",
+		};
+
+		const auto body = lower( raw_body );
+
+		for ( const auto candidate : CANDIDATES ) {
+			if ( body.find( candidate ) != std::string::npos ) {
+				return feature_downgrade{ .field = std::string{ candidate }, .matched = true };
+			}
+		}
+
+		return feature_downgrade{ };
+	}
+
 	http_model_client::http_model_client( net::http_client& transport, client_options options )
 		: transport_( &transport ), options_( std::move( options ) ) {
 		if ( !options_.sleep ) {
@@ -335,10 +361,15 @@ namespace mcode::model {
 
 		auto rng = std::mt19937_64{ options_.random ? options_.random( ) : 0u };
 
+		// A downgrade rewrites the request, so the retry loop works on a copy the caller
+		// never sees. Each field is dropped at most once per stream, which bounds the loop.
+		auto active = request;
+		auto downgrades_left = MAX_FEATURE_DOWNGRADES;
+
 		for ( unsigned attempt_index = 0; attempt_index < MAX_ATTEMPTS; ++attempt_index ) {
 			auto outcome = failure_class::fatal;
 			auto failure = net::http_failure{ };
-			auto result = attempt( request, sink, outcome, failure );
+			auto result = attempt( active, sink, outcome, failure );
 
 			if ( result ) {
 				return result;
@@ -351,7 +382,52 @@ namespace mcode::model {
 				case failure_class::context_overflow:
 					break;
 
-				case failure_class::fatal:
+				case failure_class::fatal: {
+					// A 400 naming a request field is the gateway refusing an optimisation it
+					// does not implement, not a malformed request. Dropping the field and
+					// retrying immediately is cheaper than failing a run that would work.
+					if ( failure.status != 400 ) {
+						return std::unexpected( fail( result.error( ).code, error_message ) );
+					}
+
+					const auto downgrade = detect_feature_downgrade( failure.body );
+
+					if ( !downgrade.matched ) {
+						return std::unexpected( fail( result.error( ).code, error_message ) );
+					}
+
+					auto applied = false;
+
+					if ( downgrade.field == "parallel_tool_calls" &&
+						active.request.parallel_tool_calls.has_value( ) ) {
+						active.request.parallel_tool_calls.reset( );
+						applied = true;
+					} else if ( downgrade.field == "prefill" &&
+						!active.request.prefill.empty( ) ) {
+						active.request.prefill.clear( );
+						applied = true;
+					} else if ( downgrade.field == "strict" && active.request.strict_tools ) {
+						active.request.strict_tools = false;
+						applied = true;
+					} else if ( downgrade.field == "tool_choice" &&
+						active.request.choice.kind != tool_choice_kind::automatic ) {
+						active.request.choice = tool_choice{ };
+						applied = true;
+					}
+
+					if ( !applied || downgrades_left == 0 ) {
+						return std::unexpected( fail( result.error( ).code, error_message ) );
+					}
+
+					--downgrades_left;
+
+					// The retry does not consume an attempt: the request that failed was never
+					// one the gateway could have served.
+					--attempt_index;
+
+					continue;
+				}
+
 				case failure_class::content_filter:
 				case failure_class::partial_stream:
 					return std::unexpected( fail( result.error( ).code, error_message ) );

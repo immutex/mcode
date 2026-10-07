@@ -25,6 +25,8 @@ namespace mcode::perm {
 
 namespace mcode {
 
+	class snapshot_store;
+
 	inline constexpr std::uint32_t DEFAULT_MAX_STEPS = 100;
 	inline constexpr std::uint64_t DEFAULT_MAX_TOKENS = 2'000'000;
 	inline constexpr double DEFAULT_MAX_USD = 5.0;
@@ -33,12 +35,19 @@ namespace mcode {
 	inline constexpr std::size_t THRASH_WINDOW = 12;
 	inline constexpr std::size_t THRASH_REPEAT_LIMIT = 3;
 
+	// Identical dispatches after which the call is refused, not merely escalated as thrash.
+	inline constexpr std::size_t DOOM_LOOP_THRESHOLD = 3;
+
 	inline constexpr std::size_t MAX_REFLECTIONS_PER_FAILURE_CLASS = 2;
 	inline constexpr std::size_t MAX_REFLECTIONS_PER_RUN = 4;
 
 	inline constexpr std::size_t THRASH_ESCALATION_FACTOR = 2;
 	inline constexpr std::size_t REPLAN_GUARD_LIMIT = 2;
 	inline constexpr std::size_t REFLECT_REPEAT_LIMIT = 2;
+
+	// Resampling a response whose tool arguments will not parse. Retries saturate by the third
+	// attempt, so a fourth only spends budget on a call the model cannot produce.
+	inline constexpr std::size_t MAX_TOOL_CALL_RETRIES = 3;
 
 	inline constexpr double COMPACTION_TRIGGER_FRACTION = 0.80;
 	inline constexpr double TOOL_CLEAR_TRIGGER_FRACTION = 0.60;
@@ -197,6 +206,10 @@ namespace mcode {
 		std::string id;
 		std::string name;
 		std::string args_json;
+
+		// Set when the response that carried this call hit the output limit, so a call whose
+		// arguments will not parse is reported as truncated rather than as malformed.
+		bool truncated = false;
 	};
 
 	struct tool_outcome {
@@ -205,6 +218,12 @@ namespace mcode {
 		errc code = errc::ok;
 		std::string error_message;
 		std::chrono::milliseconds elapsed{ 0 };
+
+		// A stable name for what went wrong, used by the loop to decide whether it has
+		// already reflected on this kind of failure. Empty means fall back to the message.
+		// Distinct from `error_message`, which is written for the model and may embed a
+		// value that changes on every attempt.
+		std::string failure_class;
 
 		// One denial is a failed call, not the end of the run; cleared by any later success.
 		bool permission_denied = false;
@@ -251,6 +270,12 @@ namespace mcode {
 
 		// the provider's field names, so a breakpoint anchor matches the rendered body.
 		model::request_spec fields = { };
+
+		// Constrain tool-call generation to the schema where the provider supports it.
+		bool strict_tools = false;
+
+		// Whether a JSON response format may accompany a tool list.
+		bool response_format_with_tools = false;
 	};
 
 	// The prefix order (tools, system, messages) is byte-stable; mutable state lives in the tail.
@@ -310,6 +335,10 @@ namespace mcode {
 
 			std::string instruction_chain;
 			std::string skill_index;
+
+			// Optional: when set, the bytes of every write-class target are captured before
+			// the handler runs, which is what /undo and /rewind restore from.
+			snapshot_store* snapshots = nullptr;
 
 			// called once per step, on the loop's thread; extension timers fire from here.
 			std::function< void( ) > pump_timers;
@@ -374,9 +403,22 @@ namespace mcode {
 			return history_;
 		}
 
+		// The project instruction chain the session loaded; empty when none was found.
+		[[nodiscard]] auto instruction_chain( ) const noexcept -> std::string_view {
+			return instruction_chain_;
+		}
+
 		// The canonicalized workspace root the session was opened on; honours --cwd.
 		[[nodiscard]] auto workspace_root( ) const noexcept -> std::string_view {
 			return workspace_root_;
+		}
+
+		// Null when the caller supplied no store: /undo then reports that nothing was captured.
+		[[nodiscard]] auto snapshots( ) const noexcept -> snapshot_store* { return snapshots_; }
+
+		// Identifies this run's captures in the snapshot index; empty before the first run.
+		[[nodiscard]] auto run_id( ) const noexcept -> std::string_view {
+			return snapshot_run_id_;
 		}
 
 		// The run-level exit-5 signal: a denial that leaves the loop unable to progress.
@@ -397,7 +439,21 @@ namespace mcode {
 		// Clears pending_calls_ and dispatches them, recording a hard error for observe.
 		auto dispatch_pending( ) -> void;
 
+		// Discards a response whose tool arguments cannot be repaired and asks the model again.
+		auto resample_pending_calls( ) -> bool;
+
 		auto dispatch_calls( const std::vector< tool_call >& calls ) -> bool;
+
+		// Refuses an exact repeat already dispatched DOOM_LOOP_THRESHOLD times.
+		[[nodiscard]] auto refuse_doom_loop( const tool_call& call, const std::size_t repeats )
+			-> tool_outcome;
+
+		// Records the write target's current bytes before the handler runs; a failure is
+		// logged and swallowed, because an unusable store must not block a working edit.
+		auto capture_before_write( const tool_call& call, const tool_class klass ) -> void;
+
+		// Opens a fresh capture group, so /undo restores this run and not the previous one.
+		auto mint_run_id( ) -> void;
 
 		auto maybe_compact( ) -> status;
 		auto publish( const events::kind type, std::string payload_json ) -> void;
@@ -423,10 +479,25 @@ namespace mcode {
 		std::string api_key_;
 		std::string workspace_root_;
 		std::string platform_name_;
+		snapshot_store* snapshots_ = nullptr;
+		std::string snapshot_run_id_;
 
 		thrash_detector thrash_;
 		std::string last_failure_;
+		std::string last_failure_class_;
 		std::string end_reason_;
+
+		// the provider's own finish reason for the last response, and whether it means cut off.
+		std::string stop_reason_;
+		bool turn_truncated_ = false;
+
+		// resamples spent on this run, bounded by MAX_TOOL_CALL_RETRIES.
+		std::size_t tool_call_retries_ = 0;
+
+		// Provider-reported token counts summed across the run, so the summary can report
+		// cache reads and writes as well as the two totals.
+		model::usage run_usage_;
+
 		bool hard_error_ = false;
 		bool permission_denied_ = false;
 		std::string verification_command_;

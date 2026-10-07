@@ -8,6 +8,7 @@ add_executable(mcode_tests
     test_sse.cxx
     test_http_client.cxx
     test_workspace.cxx
+    test_snapshot.cxx
     test_tools.cxx
     test_tools_bash.cxx
     test_permissions.cxx
@@ -42,6 +43,8 @@ add_executable(mcode_tests
     test_tui_cell.cxx
     test_tui_markdown.cxx
     test_tui_editor.cxx
+    test_tui_paste.cxx
+    test_tui_notify.cxx
     test_tui_repl.cxx
     test_tui_render.cxx
     test_tui_stream.cxx

@@ -13,6 +13,58 @@ namespace mcode::loop_internal {
 	inline constexpr std::string_view NEAR_BUDGET_NOTE =
 		"budget nearly exhausted - wrap up or report blockers";
 
+	// A response cut off by the output limit is a distinct failure from a malformed one: the
+	// arguments are a valid prefix of a call that was never finished, so no repair can recover
+	// them. Matched case-insensitively against the provider's own finish reason.
+	inline constexpr std::string_view TRUNCATION_STOP_REASONS[] = {
+		"length",
+		"max_tokens",
+		"max_output_tokens",
+		"length_exceeded",
+		"model_length",
+	};
+
+	[[nodiscard]] inline auto is_truncation_stop_reason( const std::string_view reason ) noexcept
+		-> bool {
+		for ( const auto marker : TRUNCATION_STOP_REASONS ) {
+			if ( reason.size( ) != marker.size( ) ) {
+				continue;
+			}
+
+			auto equal = true;
+
+			for ( auto index = std::size_t{ 0 }; index < reason.size( ); ++index ) {
+				const auto byte = static_cast< unsigned char >( reason[ index ] );
+				const auto lowered = static_cast< char >(
+					( byte >= 'A' && byte <= 'Z' ) ? byte + ( 'a' - 'A' ) : byte );
+
+				if ( lowered != marker[ index ] ) {
+					equal = false;
+
+					break;
+				}
+			}
+
+			if ( equal ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	// the finish reason the provider reported for the turn, empty when it reported none.
+	[[nodiscard]] inline auto turn_stop_reason( const std::vector< model::chat_event >& events )
+		-> std::string {
+		for ( auto index = events.rbegin( ); index != events.rend( ); ++index ) {
+			if ( index->type == model::chat_event::kind::turn_done ) {
+				return index->stop_reason;
+			}
+		}
+
+		return { };
+	}
+
 	inline auto token_estimate( const std::string_view text ) noexcept -> std::int64_t {
 		return static_cast< std::int64_t >( text.size( ) / CHARS_PER_TOKEN_ESTIMATE );
 	}
@@ -77,7 +129,9 @@ namespace mcode::loop_internal {
 		for ( const auto& event : events ) {
 			switch ( event.type ) {
 				case model::chat_event::kind::tool_call_delta: {
-					// A fragment extending what is accumulated is that snapshot, so it replaces.
+					// The applier emits the accumulated name and id on every fragment, so the
+					// last write for an index is the complete value; registering the index even
+					// when it is still empty keeps an incomplete call visible to the loop.
 					names[ event.index ] = event.tool_name;
 					ids[ event.index ] = event.tool_call_id;
 

@@ -1,14 +1,18 @@
 #include "mcode/agent/loop.hxx"
 
 #include <chrono>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <utility>
 
+#include "mcode/fs/snapshot.hxx"
 #include "mcode/perm/argv.hxx"
 #include "mcode/perm/permission.hxx"
 #include "mcode/support/json.hxx"
 #include "mcode/support/time.hxx"
+#include "mcode/tools/errors.hxx"
+#include "mcode/tools/tool_args.hxx"
 
 namespace mcode {
 
@@ -53,6 +57,82 @@ namespace mcode {
 			return perm::canonical_argv( *tokens );
 		}
 
+	}
+
+	auto agent_loop::capture_before_write( const tool_call& call, const tool_class klass ) -> void {
+		if ( snapshots_ == nullptr || klass != tool_class::write ) {
+			return;
+		}
+
+		const auto parsed = json::document::parse(
+			call.args_json.empty( ) ? std::string_view{ "{}" } :
+			std::string_view{ call.args_json } );
+
+		if ( !parsed ) {
+			log_->append( "snapshot.capture",
+				"{\"ok\":false,\"error\":\"arguments are not JSON\"}" );
+
+			return;
+		}
+
+		const auto path = parsed->pointer_string( "/path" );
+
+		if ( !path ) {
+			// A write-class tool with no `path` argument has no single target to capture.
+			log_->append( "snapshot.capture", "{\"ok\":false,\"error\":\"no path argument\"}" );
+
+			return;
+		}
+
+		auto absolute = std::filesystem::path{ *path };
+
+		if ( absolute.is_relative( ) ) {
+			absolute = std::filesystem::path{ workspace_root_ } / absolute;
+		}
+
+		const auto captured = snapshots_->capture( workspace_root_, absolute, snapshot_run_id_ );
+
+		if ( captured ) {
+			return;
+		}
+
+		// Never silent, and never fatal: an unusable store must not block a working edit.
+		auto payload = std::string{ "{\"ok\":false,\"tool\":\"" };
+		json::append_escaped( payload, call.name );
+		payload += "\",\"path\":\"";
+		json::append_escaped( payload, *path );
+		payload += "\",\"error\":\"";
+		json::append_escaped( payload, captured.error( ).msg );
+		payload += "\"}";
+
+		log_->append( "snapshot.capture", std::move( payload ) );
+	}
+
+	auto agent_loop::refuse_doom_loop( const tool_call& call, const std::size_t repeats )
+		-> tool_outcome {
+		auto outcome = tool_outcome{ };
+
+		outcome.ok = false;
+		outcome.code = errc::tool_failed;
+		outcome.failure_class = "doom_loop";
+
+		const auto prior_dispatches = std::to_string( repeats - 1 );
+
+		outcome.error_message = tools::error_result(
+			"doom loop: '" + call.name + "' has already been dispatched " + prior_dispatches +
+				" times with identical arguments, so this call was refused",
+			"change the arguments or the approach, or report the blocker, instead of issuing "
+			"the identical call again",
+			true );
+
+		auto payload = std::string{ "{\"ok\":false,\"error\":\"doom_loop\",\"tool\":\"" };
+		json::append_escaped( payload, call.name );
+		payload += "\"}";
+
+		log_->append( "tool.result", payload );
+		publish( events::kind::tool_result, std::move( payload ) );
+
+		return outcome;
 	}
 
 	auto agent_loop::execute( const tool_call& call ) -> tool_outcome {
@@ -118,12 +198,45 @@ namespace mcode {
 			return finish( );
 		}
 
+		// One checkpoint for the arguments of every tool - built-in, extension and MCP alike:
+		// repair the payload the model produced, then check it against the schema it was shown.
+		// Ahead of the veto and the permission check, so both see the arguments that will
+		// actually run, and a call that cannot proceed never prompts the user.
+		auto prepared = tools::prepare_arguments( definition->schema_json, call.args_json );
+
+		if ( !prepared.ok( ) ) {
+			outcome.ok = false;
+			outcome.code = errc::tool_failed;
+			// A cut-off response is a different failure with a different fix: the arguments were
+			// never finished, so the model must re-issue a smaller call rather than correct a
+			// parameter it got wrong.
+			outcome.error_message = call.truncated
+				? tools::truncation_error( call.name )
+				: prepared.failure;
+
+			auto payload = std::string{ "{\"ok\":false,\"tool\":\"" };
+			json::append_escaped( payload, call.name );
+			payload += "\",\"error\":\"";
+			payload += call.truncated ? "truncated_arguments" : "invalid_arguments";
+			payload += "\"}";
+
+			log_->append( "tool.result", std::move( payload ) );
+			publish( events::kind::tool_result,
+				call.truncated ? "{\"ok\":false,\"error\":\"truncated_arguments\"}"
+								: "{\"ok\":false,\"error\":\"invalid_arguments\"}" );
+
+			return finish( );
+		}
+
+		const auto effective_call =
+			tool_call{ call.id, call.name, prepared.json, call.truncated };
+
 		// A veto denies even under --yolo, so it is published before the handler runs.
 		{
 			auto pre_payload = std::string{ "{\"tool\":\"" };
-			json::append_escaped( pre_payload, call.name );
+			json::append_escaped( pre_payload, effective_call.name );
 			pre_payload += "\",\"args\":";
-			pre_payload += call.args_json.empty( ) ? "{}" : call.args_json;
+			pre_payload += effective_call.args_json.empty( ) ? "{}" : effective_call.args_json;
 			pre_payload += "}";
 
 			auto pre_event = events::event{ };
@@ -161,10 +274,10 @@ namespace mcode {
 		// One check point: built-in, extension and MCP tools all pass through here.
 		if ( permissions_ != nullptr ) {
 			auto request = perm::permission_request{ };
-			request.tool_name = call.name;
+			request.tool_name = effective_call.name;
 			request.klass = definition->klass;
 			request.owner = definition->owner;
-			request.resource = permission_resource( call, definition->klass );
+			request.resource = permission_resource( effective_call, definition->klass );
 
 			const auto decision = permissions_->decide( request );
 
@@ -194,11 +307,35 @@ namespace mcode {
 			}
 		}
 
+		// After the permission check, so a refused call never fills the store, and before the
+		// handler, so the bytes recorded are the ones the edit is about to replace.
+		capture_before_write( effective_call, definition->klass );
+
+		// The audit trail has to name the command that actually runs, not just its output: a
+		// permission incident is otherwise uninverifiable, because the expanded text is the
+		// only record of what was executed and the log held the raw model output alone. Logged
+		// after the permission check, so it reflects what was approved.
+		if ( definition->klass == tool_class::exec ) {
+			auto command = json::document::parse( effective_call.args_json );
+
+			if ( command ) {
+				if ( auto text = command->pointer_string( "/command" ) ) {
+					auto payload = std::string{ "{\"tool\":\"" };
+					json::append_escaped( payload, effective_call.name );
+					payload += "\",\"command\":\"";
+					json::append_escaped( payload, *text );
+					payload += "\"}";
+
+					log_->append( "tool.command", std::move( payload ) );
+				}
+			}
+		}
+
 		auto produced = result< std::string >{ std::unexpected( fail( errc::tool_failed,
 			"tool handler threw" ) ) };
 
 		try {
-			produced = ( *handler )( call.args_json );
+			produced = ( *handler )( prepared.json );
 		} catch ( const std::exception& error ) {
 			produced = std::unexpected( fail( errc::tool_failed,
 				std::string{ "tool handler threw: " } + error.what( ) ) );

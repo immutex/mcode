@@ -5,6 +5,7 @@
 #include "mcode/events/bus.hxx"
 #include "mcode/ext/hooks.hxx"
 #include "mcode/ext/loader.hxx"
+#include "mcode/fs/snapshot.hxx"
 #include "mcode/fs/workspace.hxx"
 #include "mcode/mcp/connect.hxx"
 #include "mcode/model/capabilities.hxx"
@@ -40,6 +41,13 @@
 
 #include "cli_session.hxx"
 
+namespace {
+
+	// Under the per-user data directory, so a restore survives a workspace being removed.
+	inline constexpr std::string_view SNAPSHOT_DIRECTORY = "snapshots";
+
+}
+
 auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 	mcode::perm::approval_source* interactive_approval )
 	-> mcode::result< mcode::agent_loop > {
@@ -59,6 +67,10 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 		mcode::net::http_client transport;
 		mcode::model::http_model_client client;
 		mcode::event_log log;
+
+		// Undo is what makes the permissive approval default survivable, so the store is
+		// always built: /undo has something to restore rather than reporting a zero.
+		std::optional< mcode::snapshot_store > snapshots;
 		mcode::session_budget budget;
 		mcode::agent_loop::dependencies loop_deps;
 
@@ -81,6 +93,18 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 	const auto workspace_path = parsed.working_directory.empty( )
 		? std::filesystem::current_path( )
 		: std::filesystem::path{ parsed.working_directory };
+
+	// Resolved before any provider or key work, so a mistyped --resume id is reported as
+	// the argument error it is rather than as a provider complaint. The loop opens the
+	// same file again below; this only fails the run early and by name.
+	if ( !parsed.resume_session.empty( ) || parsed.continue_session ) {
+		const auto existing = mcode::cli::resolve_session( workspace_path,
+			parsed.resume_session );
+
+		if ( !existing ) {
+			return std::unexpected( existing.error( ) );
+		}
+	}
 
 	const auto config = mcode::config::load( workspace_path );
 
@@ -199,12 +223,36 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 		auto engine_options = mcode::perm::permission_engine::options{ };
 		engine_options.yolo = parsed.yolo;
 		engine_options.headless = !interactive;
+		engine_options.plan_mode = parsed.plan;
+
+		// The permissive default is for a human who can see the disclaimer and use /undo.
+		// A headless run has neither, so it keeps the engine's conservative default and
+		// fails closed on anything the rules do not already allow.
 		engine_options.approval = parsed.approval.empty( )
-			? config->get_string( "sandbox.approval" ).value_or( std::string{ "on-request" } )
+			? config->get_string( "sandbox.approval" ).value_or(
+				std::string{ interactive ? "never" : "on-request" } )
 			: parsed.approval;
 
+		// --yolo forces the permissive mode; --ask is applied after it so the explicit
+		// request to be prompted wins over every permissive flag.
 		if ( parsed.yolo ) {
 			engine_options.approval = "never";
+		}
+
+		if ( parsed.ask ) {
+			engine_options.approval = "on-request";
+			engine_options.yolo = false;
+		}
+
+		// The permissive default is only defensible if the user is told what still holds. The
+		// disclaimer names the real boundary - the hard-deny floor and the deny rules, which
+		// are decided ahead of the approval mode - rather than claiming the mode is safe.
+		if ( interactive && engine_options.approval == "never" && !parsed.plan ) {
+			std::fputs(
+				"mcode: approval = never: edits and commands run without prompting. "
+				"The hard-deny floor and permissions.deny still apply. "
+				"Use --ask to be prompted, --plan to stay read-only.\n",
+				stderr );
 		}
 
 		parts->engine->set_options( engine_options );
@@ -288,10 +336,34 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 	parts->loop_deps.instruction_chain = skills_context.chain.text;
 	parts->loop_deps.skill_index = skills_context.skill_index;
 
+	// The store lives in the per-user data directory, keyed by nothing else: the index
+	// records the workspace-relative path, so one store serves every project.
+	if ( auto data = mcode::platform::app_data_path( mcode::platform::data_kind::data ) ) {
+		parts->snapshots.emplace( *data / SNAPSHOT_DIRECTORY );
+		parts->loop_deps.snapshots = &*parts->snapshots;
+	}
+
 	// the loop drives the timers: one pump per step, on the thread the VM belongs to.
 	parts->loop_deps.pump_timers = [ ]( ) { parts->extensions.pump_timers( ); };
 
 	auto loop = mcode::agent_loop{ parts->loop_deps };
+
+	// The session file is opened before the first turn, so an interactive session's
+	// events are on disk the same way an exec run's are. An unknown --resume id is
+	// refused here rather than starting a fresh session under it.
+	const auto session = mcode::cli::open_session_for_run( parsed, parts->space->root( ) );
+
+	if ( !session ) {
+		return std::unexpected( session.error( ) );
+	}
+
+	const auto resumed = !parsed.resume_session.empty( ) || parsed.continue_session;
+
+	if ( const auto opened = parts->log.open( session->path ); !opened ) {
+		return std::unexpected( opened.error( ) );
+	}
+
+	std::fputs( mcode::cli::start_session_log( parts->log, *session, resumed ).c_str( ), stderr );
 
 	for ( auto& [ name, handler ] : sink.take( ) ) {
 		loop.register_handler( name, std::move( handler ) );

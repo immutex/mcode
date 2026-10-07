@@ -79,11 +79,101 @@ namespace mcode::tui {
 			// Wheel notches, reported only while mouse reporting is on.
 			mouse_scroll_up,
 			mouse_scroll_down,
+
+			// One bracketed paste with its markers stripped. The text is
+			// content, not keystrokes: the caller inserts it without
+			// submitting, so the newlines inside it survive.
+			paste,
 		};
 
 		kind type = kind::character;
 		std::string text;
 	};
+
+	// The sequences a terminal wraps a paste in while DECSET 2004 is on, and
+	// the pair that turns that wrapping on and off.
+	inline constexpr std::string_view BRACKETED_PASTE_START = "\x1b[200~";
+	inline constexpr std::string_view BRACKETED_PASTE_END = "\x1b[201~";
+	inline constexpr std::string_view BRACKETED_PASTE_ENABLE = "\x1b[?2004h";
+	inline constexpr std::string_view BRACKETED_PASTE_DISABLE = "\x1b[?2004l";
+
+	// Splits a terminal's byte stream into ordinary input and bracketed
+	// pastes. A marker can be split across two reads, and a marker the user
+	// pasted must not be mistaken for a real one, so this runs ahead of the
+	// keystroke decoder and holds whatever is still undecided. One
+	// implementation, so no platform can disagree about what a marker is.
+	class paste_decoder {
+	public:
+		enum class outcome : std::uint8_t {
+			// ordinary input: decode `text` normally
+			plain,
+
+			// a marker prefix: everything fed so far is held
+			incomplete,
+
+			// the start marker: a paste is open
+			started,
+
+			// the end marker: `text` is the paste
+			finished,
+		};
+
+		// Consumes the head of `bytes`. `consumed` is how much of `bytes` the
+		// outcome accounts for, so the caller drops exactly that much and
+		// feeds the rest again. `text` is valid until the next call.
+		[[nodiscard]] auto feed( std::string_view bytes ) -> outcome;
+
+		// What the last `feed` reported: ordinary bytes, or the paste.
+		[[nodiscard]] auto text( ) const noexcept -> std::string_view { return text_; }
+
+		// How many bytes of the last `feed` argument it accounts for.
+		[[nodiscard]] auto consumed( ) const noexcept -> std::size_t { return consumed_; }
+
+		// True while a paste is open.
+		[[nodiscard]] auto active( ) const noexcept -> bool { return active_; }
+
+		// True while a marker prefix is held: the next byte may continue it.
+		[[nodiscard]] auto holding( ) const noexcept -> bool { return !held_.empty( ); }
+
+		// Releases a held marker prefix when a wait expires, so a lone Escape
+		// is not held forever. An open paste keeps its candidate: those bytes
+		// are content, and they may still be the front of the end marker.
+		[[nodiscard]] auto flush( ) -> std::string_view;
+
+	private:
+		// A held prefix that diverged from the marker being looked for is
+		// ordinary input -- or paste content, when a paste is open.
+		[[nodiscard]] auto release_held( ) -> outcome;
+
+		bool active_ = false;
+		std::string held_;
+		std::string paste_;
+		std::string text_;
+		std::size_t consumed_ = 0;
+	};
+
+	// The half-decoded tail of a read. A read can split an escape sequence,
+	// and a bracketed paste's end marker can land in a later read, so the
+	// decoders keep their state here instead of in local variables.
+	struct decode_state {
+		std::string carry;
+		paste_decoder paste;
+	};
+
+	// Decodes a terminal's byte stream into keys, appending to `out`. The
+	// paste machine runs first, so a paste arrives as one event and its
+	// markers never reach the keystroke decoder. One implementation, so the
+	// two platforms cannot disagree about what a marker is.
+	auto decode_key_bytes( std::string_view bytes, decode_state& state,
+		std::vector< key_event >& out, bool mouse_reporting ) -> void;
+
+	// One keystroke decoder for both platforms: the bytes are the same bytes
+	// whichever console produced them, and a second implementation would be a
+	// second thing to keep in step. Used by `decode_key_bytes` on input that
+	// is not part of a paste, and directly by a wait that releases a partial
+	// marker.
+	auto decode_plain_key_bytes( std::string_view bytes, decode_state& state,
+		std::vector< key_event >& out, bool mouse_reporting ) -> void;
 
 	// Milliseconds from a monotonic clock. One definition, so the timeout
 	// arithmetic is identical on every platform.
@@ -160,9 +250,9 @@ namespace mcode::tui {
 		// key, so the surplus waits here rather than being dropped.
 		std::vector< key_event > pending_;
 
-		// A read can split an escape sequence: `\x1b[A` may arrive as `\x1b`
-		// then `[A`.
-		std::string carry_;
+		// A read can split an escape sequence, and a bracketed paste can
+		// straddle two reads.
+		decode_state decode_;
 
 #if defined( _WIN32 )
 		void* input_handle_ = nullptr;

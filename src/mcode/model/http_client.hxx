@@ -37,6 +37,18 @@ namespace mcode::model {
 	[[nodiscard]] auto retry_after_seconds( const net::http_failure& failure )
 		-> std::optional< std::int64_t >;
 
+	// A 400 whose body names a request field means the gateway does not implement that field,
+	// not that the request is malformed. The field is switched off for the rest of the session
+	// and the request retried, because failing the whole run over an unsupported optimisation
+	// is worse than running without it.
+	struct feature_downgrade {
+		std::string field;
+		bool matched = false;
+	};
+
+	[[nodiscard]] auto detect_feature_downgrade( std::string_view raw_body )
+		-> feature_downgrade;
+
 	class http_model_client final : public model_client {
 	public:
 		using sleep_function = std::function< void( std::chrono::milliseconds ) >;

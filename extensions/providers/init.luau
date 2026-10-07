@@ -14,6 +14,14 @@ mcode.model.register({
 	endpoint = "https://api.openai.com/v1/chat/completions",
 	auth = { from = "env", name = "OPENAI_API_KEY", header = "Authorization" },
 
+	-- Strict tool calling and parallel calls are both part of this wire format, and the
+	-- gateway honours a JSON response format alongside a tool list.
+	features = {
+		strict_tools = true,
+		parallel_tool_calls = true,
+		response_format_with_tools = true,
+	},
+
 	-- [OI] Chat Completions: stateless `messages`, tool calls as
 	-- choices[0].delta.tool_calls[] fragments keyed by index.
 	stream = {
@@ -64,6 +72,12 @@ mcode.model.register({
 	name = "anthropic-messages",
 	endpoint = "https://api.anthropic.com/v1/messages",
 	auth = { from = "env", name = "ANTHROPIC_API_KEY", header = "x-api-key", scheme = "" },
+
+	-- Anthropic takes a prefilled assistant turn, which is how its tool use is seeded; it
+	-- has no `strict` or `parallel_tool_calls` member on this wire format.
+	features = {
+		prefill_text = "<function_calls>",
+	},
 
 	-- Anthropic: content_block_start / content_block_delta / content_block_stop
 	-- around each block, with thinking as a separate delta type. Usage arrives

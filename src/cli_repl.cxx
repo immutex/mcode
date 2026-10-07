@@ -31,6 +31,7 @@
 #include "mcode/tui/editor.hxx"
 #include "mcode/tui/frame.hxx"
 #include "mcode/tui/mention.hxx"
+#include "mcode/tui/notify.hxx"
 #include "mcode/tui/render.hxx"
 #include "mcode/tui/tty.hxx"
 #include <algorithm>
@@ -187,6 +188,7 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 
 	auto pump_until_done = [&]() {
 		auto was_running = false;
+		auto was_asking = false;
 
 		while ( !turn_done.load( ) ) {
 			// The approval prompt reads the same console on the worker thread,
@@ -195,12 +197,21 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 			// window is microseconds wide and the prompt has not been shown to
 			// the user yet, so no answer can be lost in it.
 			auto pressed = mcode::tui::key_event{ };
+			const auto asking = approval_active.load( );
 
-			if ( !approval_active.load( ) ) {
+			if ( !asking ) {
 				pressed = session_tty->read_key( PUMP_TICK_MS );
 			} else {
 				std::this_thread::sleep_for( std::chrono::milliseconds( PUMP_TICK_MS ) );
 			}
+
+			// The prompt appeared: a window that is not in front gets told,
+			// because the question blocks until it is answered.
+			if ( asking && !was_asking ) {
+				mcode::tui::notify_terminal( "mcode", "approval needed" );
+			}
+
+			was_asking = asking;
 
 			const auto drained = queue.drain( );
 			auto applied = false;
@@ -455,6 +466,17 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 				}
 			}
 
+			// A paste is inserted, never submitted: its newlines are content,
+			// and a multi-line paste that submitted line by line was the bug.
+			if ( key.type == mcode::tui::key_event::kind::paste ) {
+				editor.insert_text( key.text );
+
+				sync_palette( );
+				show_prompt( );
+
+				continue;
+			}
+
 			const auto forwarded = translate_key( key );
 
 			if ( !forwarded.has_value( ) ) {
@@ -550,6 +572,11 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 		worker.join( );
 
 		session_tty->set_mouse_reporting( false );
+
+		// The turn is over: a window that is not in front gets told, and one
+		// that is gets an invisible notification the terminal discards.
+		mcode::tui::notify_terminal( "mcode",
+			last_code == mcode::cli::exit_code::success ? "turn complete" : "turn failed" );
 
 		last_turn_elapsed_ms = static_cast< std::uint64_t >( std::chrono::duration_cast<
 			std::chrono::milliseconds >( std::chrono::steady_clock::now( )

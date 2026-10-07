@@ -274,6 +274,37 @@ namespace mcode::tui {
 		cursor_row_ = 0;
 	}
 
+	auto input_editor::insert_text( const std::string_view text ) -> void {
+		auto begin = std::size_t{ 0 };
+
+		while ( true ) {
+			const auto found = text.find( '\n', begin );
+			const auto stop = found == std::string_view::npos ? text.size( ) : found;
+
+			// Re-bound per segment: `lines_` may have reallocated above.
+			auto& line = lines_[ cursor_row_ ];
+
+			line.text.insert( line.cursor, text.substr( begin, stop - begin ) );
+			line.cursor += stop - begin;
+
+			if ( found == std::string_view::npos ) {
+				return;
+			}
+
+			// A pasted line break opens a row, exactly as the newline key
+			// does, and the caret follows into it. A trailing newline opens a
+			// final empty row, so the caret lands where the text ends.
+			auto split = editor_line{ };
+			split.text = line.text.substr( line.cursor );
+			line.text.resize( line.cursor );
+
+			lines_.insert( lines_.begin( ) +
+				static_cast< std::ptrdiff_t >( cursor_row_ + 1 ), std::move( split ) );
+			++cursor_row_;
+			begin = found + 1;
+		}
+	}
+
 	auto input_editor::text( ) const -> std::string {
 		auto out = std::string{ };
 

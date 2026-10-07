@@ -70,9 +70,45 @@ namespace mcode::model {
 			return out;
 		}
 
+		// A strict schema admits no optional member: every property becomes required and
+		// additional properties are refused, so a member that was optional is expressed as a
+		// nullable type instead. Providers reject the request outright otherwise.
+		[[nodiscard]] auto strictify_schema( const json::node& schema ) -> json::node {
+			auto out = schema;
+
+			auto& properties = out.members[ "properties" ];
+
+			if ( properties.type != json::node::kind::object ) {
+				return out;
+			}
+
+			auto required = json::node::make_array( );
+
+			for ( auto& [name, property] : properties.members ) {
+				required.items.push_back( json::node::make_string( name ) );
+
+				auto* declared = property.member( "type" );
+
+				if ( declared == nullptr || declared->type == json::node::kind::array ) {
+					continue;
+				}
+
+				auto widened = json::node::make_array( );
+				widened.items.push_back( *declared );
+				widened.items.push_back( json::node::make_string( "null" ) );
+
+				property.members[ "type" ] = std::move( widened );
+			}
+
+			out.members[ "required" ] = std::move( required );
+			out.members[ "additionalProperties" ] = json::node::make_boolean( false );
+
+			return out;
+		}
+
 		// sorted by name: the array's byte order is part of the cache prefix.
-		[[nodiscard]] auto render_tools( const std::vector< tool_spec >& tools )
-			-> result< json::node > {
+		[[nodiscard]] auto render_tools( const std::vector< tool_spec >& tools,
+			const bool strict, const std::string_view strict_member ) -> result< json::node > {
 			auto sorted = tools;
 			std::sort( sorted.begin( ), sorted.end( ),
 				[]( const tool_spec& left, const tool_spec& right ) {
@@ -97,7 +133,14 @@ namespace mcode::model {
 				function = json::node::make_object( );
 				function.members[ "name" ] = json::node::make_string( tool.name );
 				function.members[ "description" ] = json::node::make_string( tool.description );
-				function.members[ "parameters" ] = std::move( *schema );
+
+				if ( strict && !strict_member.empty( ) ) {
+					function.members[ std::string{ strict_member } ] =
+						json::node::make_boolean( true );
+					function.members[ "parameters" ] = strictify_schema( *schema );
+				} else {
+					function.members[ "parameters" ] = std::move( *schema );
+				}
 
 				out.items.push_back( std::move( entry ) );
 			}
@@ -141,6 +184,75 @@ namespace mcode::model {
 			}
 
 			return { array_at + 2 };
+		}
+
+		// The byte offset just inside each element of the messages array, in order. The marker
+		// is inserted at a member position, so an element's opening brace is the anchor and the
+		// element's own key cannot occur before it.
+		[[nodiscard]] auto message_offsets( const std::string_view body,
+			const request_spec& fields ) -> std::vector< std::size_t > {
+			const auto key = "\"" + fields.messages + "\":";
+			const auto key_at = body.find( key );
+
+			if ( key_at == std::string_view::npos ) {
+				return { };
+			}
+
+			const auto array_at = body.find( '[', key_at + key.size( ) );
+
+			if ( array_at == std::string_view::npos ) {
+				return { };
+			}
+
+			auto offsets = std::vector< std::size_t >{ };
+			auto depth = 0;
+			auto quote = false;
+			auto escaped = false;
+
+			for ( auto index = array_at + 1; index < body.size( ); ++index ) {
+				const auto character = body[ index ];
+
+				if ( quote ) {
+					if ( escaped ) {
+						escaped = false;
+					} else if ( character == '\\' ) {
+						escaped = true;
+					} else if ( character == '"' ) {
+						quote = false;
+					}
+
+					continue;
+				}
+
+				if ( character == '"' ) {
+					quote = true;
+
+					continue;
+				}
+
+				if ( character == '{' ) {
+					// depth 0 is an element of the messages array; deeper is inside one.
+					if ( depth == 0 ) {
+						offsets.push_back( index + 1 );
+					}
+
+					++depth;
+
+					continue;
+				}
+
+				if ( character == '}' ) {
+					--depth;
+
+					continue;
+				}
+
+				if ( character == ']' && depth == 0 ) {
+					break;
+				}
+			}
+
+			return offsets;
 		}
 
 		[[nodiscard]] auto apply_breakpoints( std::string body,
@@ -190,14 +302,53 @@ namespace mcode::model {
 				messages.items.push_back( std::move( *rendered ) );
 			}
 
+			// A prefilled assistant turn the model continues, which starts the answer at the
+			// first tool call. It is the last message, so it cannot disturb the cache prefix.
+			if ( !request.prefill.empty( ) ) {
+				auto seeded = json::node::make_object( );
+				seeded.members[ "role" ] = json::node::make_string( fields.role_assistant );
+				seeded.members[ "content" ] = json::node::make_string( request.prefill );
+
+				messages.items.push_back( std::move( seeded ) );
+			}
+
 			if ( !request.tools.empty( ) ) {
-				auto tools = render_tools( request.tools );
+				auto tools = render_tools( request.tools, request.strict_tools,
+					fields.tool_strict );
 
 				if ( !tools ) {
 					return std::unexpected( tools.error( ) );
 				}
 
 				body.members[ fields.tools ] = std::move( *tools );
+			}
+
+			// Absent means the provider's own default, so only an explicit choice is rendered.
+			if ( request.parallel_tool_calls && !fields.parallel_tool_calls.empty( ) ) {
+				body.members[ fields.parallel_tool_calls ] =
+					json::node::make_boolean( *request.parallel_tool_calls );
+			}
+
+			if ( !request.choice.name.empty( ) ) {
+				body.members[ fields.tool_choice ] = json::node::make_string( request.choice.name );
+			} else {
+				switch ( request.choice.kind ) {
+					case tool_choice_kind::automatic:
+						break;
+
+					case tool_choice_kind::none:
+						body.members[ fields.tool_choice ] = json::node::make_string( "none" );
+
+						break;
+
+					case tool_choice_kind::required:
+						body.members[ fields.tool_choice ] = json::node::make_string( "required" );
+
+						break;
+
+					case tool_choice_kind::specific:
+						break;
+				}
 			}
 
 			if ( request.max_output_tokens > 0 ) {
@@ -214,8 +365,14 @@ namespace mcode::model {
 			}
 
 			if ( !request.response_schema_json.empty( ) ) {
-				body.members[ fields.response_schema ] =
-					json::node::make_string( request.response_schema_json );
+				// Tool-calling and a JSON response format together make some open-weight models
+				// stop calling tools entirely. Tool-calling is this harness's primary mode, so
+				// the response format is dropped rather than allowed to suppress it, unless the
+				// gateway is known to honour both.
+				if ( request.tools.empty( ) || request.response_format_with_tools ) {
+					body.members[ fields.response_schema ] =
+						json::node::make_string( request.response_schema_json );
+				}
 			}
 
 			if ( request.reasoning_effort != effort::provider_default ) {
@@ -284,7 +441,23 @@ namespace mcode::model {
 			return { };
 		}
 
-		return stable_prefix_offsets( *text, fields );
+		auto offsets = stable_prefix_offsets( *text, fields );
+
+		if ( offsets.empty( ) ) {
+			return offsets;
+		}
+
+		// A second breakpoint on the newest message keeps the cache extending as the
+		// conversation grows: a read walks back only a bounded number of blocks from a
+		// breakpoint, so a single anchor on the stable prefix stops hitting once the history
+		// in front of it is longer than that window.
+		const auto elements = message_offsets( *text, fields );
+
+		if ( elements.size( ) > 1 ) {
+			offsets.push_back( elements.back( ) );
+		}
+
+		return offsets;
 	}
 
 }

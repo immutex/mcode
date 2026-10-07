@@ -214,6 +214,56 @@ TEST_CASE( "key-order-only differences still thrash", "[loop]" ) {
 		"plan,act,observe,act,observe,act,observe,reflect,act,verify,handoff" );
 }
 
+TEST_CASE( "a third identical call is refused before it runs", "[loop]" ) {
+	auto fx = fixture{ };
+	fx.connect( );
+
+	auto payloads = std::vector< std::string >{ };
+	std::ignore = fx.loop->bus( ).subscribe( events::kind::tool_result,
+		[ &payloads ]( const events::event& value ) { payloads.push_back( value.payload_json ); } );
+
+	fx.client.queue( call_response( "echo", R"({"a":1})" ) );
+	fx.client.queue( call_response( "echo", R"({"a":1})" ) );
+	fx.client.queue( call_response( "echo", R"({"a":1})" ) );
+	fx.client.queue( text_response( "diagnosis: stop repeating" ) );
+	fx.client.queue( call_response( "echo", R"({"a":2})" ) );
+	fx.client.queue( text_response( "final answer" ) );
+
+	const auto outcome = fx.loop->run( "repeat until refused" );
+
+	REQUIRE( outcome.has_value( ) );
+
+	auto results = std::vector< std::string >{ };
+
+	for ( const auto& message : fx.loop->history( ) ) {
+		for ( const auto& block : message.blocks ) {
+			if ( block.kind == model::block_kind::tool_result ) {
+				results.push_back( block.result_json );
+			}
+		}
+	}
+
+	REQUIRE( results.size( ) == 4 );
+
+	// the first two identical calls reach the handler, which echoes its arguments
+	CHECK( results[ 0 ].find( R"("a":1)" ) != std::string::npos );
+	CHECK( results[ 1 ].find( R"("a":1)" ) != std::string::npos );
+
+	// the third is refused instead, and the refusal names the tool and the repeat count
+	CHECK( results[ 2 ].find( "doom loop" ) != std::string::npos );
+	CHECK( results[ 2 ].find( "echo" ) != std::string::npos );
+	CHECK( results[ 2 ].find( "already been dispatched 2 times" ) != std::string::npos );
+	CHECK( results[ 2 ].find( R"("retryable":true)" ) != std::string::npos );
+
+	// different arguments are not a repeat, so that call still runs
+	CHECK( results[ 3 ].find( R"("a":2)" ) != std::string::npos );
+
+	const auto refusals = std::count( payloads.begin( ), payloads.end( ),
+		R"({"ok":false,"error":"doom_loop","tool":"echo"})" );
+
+	CHECK( refusals == 1 );
+}
+
 TEST_CASE( "thrash escalates to replan and then handoff", "[loop]" ) {
 	auto fx = fixture{ };
 	fx.connect( );

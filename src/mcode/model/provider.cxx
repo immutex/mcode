@@ -33,13 +33,6 @@ namespace mcode::model {
 			return text.starts_with( "http://" ) || text.starts_with( "https://" );
 		}
 
-		auto string_member( const json::document& doc, const std::string_view key,
-			std::string& target ) -> void {
-			if ( const auto found = doc.get_string( key ) ) {
-				target = *found;
-			}
-		}
-
 	}
 
 	auto validate( const provider_descriptor& descriptor ) -> status {
@@ -107,8 +100,14 @@ namespace mcode::model {
 
 	namespace {
 
-		inline constexpr auto ALLOWED_TOP_LEVEL = std::array< std::string_view, 7 >{
+		inline constexpr auto ALLOWED_TOP_LEVEL = std::array< std::string_view, 8 >{
 			"name", "endpoint", "auth", "request", "stream", "extra_headers", "on_event",
+			"features",
+		};
+
+		inline constexpr auto ALLOWED_FEATURES = std::array< std::string_view, 4 >{
+			"strict_tools", "parallel_tool_calls", "prefill_text",
+			"response_format_with_tools",
 		};
 
 		inline constexpr auto ALLOWED_AUTH = std::array< std::string_view, 4 >{
@@ -132,9 +131,10 @@ namespace mcode::model {
 			"in", "out", "cached_read", "cache_write", "reasoning",
 		};
 
-		inline constexpr auto ALLOWED_REQUEST = std::array< std::string_view, 7 >{
+		inline constexpr auto ALLOWED_REQUEST = std::array< std::string_view, 10 >{
 			"model", "messages", "tools", "max_output_tokens", "temperature",
-			"response_schema", "reasoning_effort",
+			"response_schema", "reasoning_effort", "tool_choice", "parallel_tool_calls",
+			"tool_strict",
 		};
 
 		auto reject_unknown_at( const json::document& document, const std::string_view path,
@@ -152,7 +152,7 @@ namespace mcode::model {
 
 		auto reject_unknown_keys( const json::document& document ) -> status {
 			const auto levels =
-				std::array< std::pair< const char*, std::span< const std::string_view > >, 7 >{ {
+				std::array< std::pair< const char*, std::span< const std::string_view > >, 8 >{ {
 				{ "", ALLOWED_TOP_LEVEL },
 				{ "/auth", ALLOWED_AUTH },
 				{ "/stream", ALLOWED_STREAM },
@@ -160,6 +160,7 @@ namespace mcode::model {
 				{ "/stream/usage", ALLOWED_USAGE },
 				{ "/stream/error", ALLOWED_ERROR },
 				{ "/request", ALLOWED_REQUEST },
+				{ "/features", ALLOWED_FEATURES },
 			} };
 
 			for ( const auto& [path, allowed] : levels ) {
@@ -233,9 +234,19 @@ namespace mcode::model {
 			descriptor.auth.scheme = *scheme;
 		}
 
-		string_member( *parsed, "model", descriptor.request.model );
-		string_member( *parsed, "messages", descriptor.request.messages );
-		string_member( *parsed, "tools", descriptor.request.tools );
+		// These three are the request-block names, not top-level keys: reading them from the
+		// top level silently ignored `/request/tools` while the allowlist accepted it.
+		if ( auto field = parsed->pointer_string( "/request/model" ) ) {
+			descriptor.request.model = *field;
+		}
+
+		if ( auto field = parsed->pointer_string( "/request/messages" ) ) {
+			descriptor.request.messages = *field;
+		}
+
+		if ( auto field = parsed->pointer_string( "/request/tools" ) ) {
+			descriptor.request.tools = *field;
+		}
 
 		if ( auto field = parsed->pointer_string( "/request/max_output_tokens" ) ) {
 			descriptor.request.max_output_tokens = *field;
@@ -247,6 +258,18 @@ namespace mcode::model {
 
 		if ( auto field = parsed->pointer_string( "/request/response_schema" ) ) {
 			descriptor.request.response_schema = *field;
+		}
+
+		if ( auto field = parsed->pointer_string( "/request/tool_choice" ) ) {
+			descriptor.request.tool_choice = *field;
+		}
+
+		if ( auto field = parsed->pointer_string( "/request/parallel_tool_calls" ) ) {
+			descriptor.request.parallel_tool_calls = *field;
+		}
+
+		if ( auto field = parsed->pointer_string( "/request/tool_strict" ) ) {
+			descriptor.request.tool_strict = *field;
 		}
 
 		if ( auto text = parsed->pointer_string( "/stream/text_delta" ) ) {
@@ -303,6 +326,21 @@ namespace mcode::model {
 
 		if ( auto code = parsed->pointer_string( "/stream/error/code" ) ) {
 			descriptor.stream.error_code = *code;
+		}
+
+		const auto read_feature = [ & ]( const char* path, bool& target ) {
+			if ( auto value = parsed->pointer_bool( path ) ) {
+				target = *value;
+			}
+		};
+
+		read_feature( "/features/strict_tools", descriptor.features.strict_tools );
+		read_feature( "/features/parallel_tool_calls", descriptor.features.parallel_tool_calls );
+		read_feature( "/features/response_format_with_tools",
+			descriptor.features.response_format_with_tools );
+
+		if ( auto text = parsed->pointer_string( "/features/prefill_text" ) ) {
+			descriptor.features.prefill_text = *text;
 		}
 
 		if ( parsed->has_pointer( "/stream/text_events" ) ) {

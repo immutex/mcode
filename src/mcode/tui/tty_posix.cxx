@@ -1,4 +1,3 @@
-
 #if !defined( _WIN32 )
 
 #include "mcode/tui/tty.hxx"
@@ -17,7 +16,6 @@
 #include <unistd.h>
 
 #include "mcode/platform/seams.hxx"
-#include "mcode/tui/cell.hxx"
 
 namespace mcode::tui {
 
@@ -33,38 +31,8 @@ namespace mcode::tui {
 		inline constexpr std::string_view MOUSE_DISABLE_SEQUENCE =
 			"\x1b[?1006l\x1b[?1000l";
 
-		inline constexpr std::size_t MAX_ESCAPE_BYTES = 32;
-
-		// before a CSI's final byte: digits, `;`, SGR `<`, private-mode `?`
-		inline constexpr std::string_view CSI_PARAMETERS = "0123456789;<?";
-
 		// How long `poll_resize` waits between checks of the flag.
 		inline constexpr int RESIZE_POLL_SLICE_MS = 10;
-
-		using key_kind = key_event::kind;
-
-		struct mapping {
-			std::string_view sequence;
-			key_kind kind;
-			bool mouse = false;
-		};
-
-		// Whole sequences, matched before any parameter is parsed.
-		inline constexpr mapping MAPPINGS[] = {
-			{ "\x1b[A", key_kind::up }, { "\x1b[B", key_kind::down },
-			{ "\x1b[C", key_kind::right }, { "\x1b[D", key_kind::left },
-			{ "\x1bOA", key_kind::up }, { "\x1bOB", key_kind::down },
-			{ "\x1bOC", key_kind::right }, { "\x1bOD", key_kind::left },
-			{ "\x1b[H", key_kind::home }, { "\x1b[F", key_kind::end },
-			{ "\x1b[1~", key_kind::home }, { "\x1b[7~", key_kind::home },
-			{ "\x1b[4~", key_kind::end }, { "\x1b[8~", key_kind::end },
-			{ "\x1b[3~", key_kind::delete_key }, { "\x1b[5~", key_kind::page_up },
-			{ "\x1b[6~", key_kind::page_down }, { "\x1b[1;2A", key_kind::page_up },
-			{ "\x1b[1;2B", key_kind::page_down },
-			// SGR wheel reports, whose coordinates follow the button
-			{ "\x1b[<64;", key_kind::mouse_scroll_up, true },
-			{ "\x1b[<65;", key_kind::mouse_scroll_down, true },
-		};
 
 		// the handler runs on the interrupted stack: one atomic flag only
 		volatile std::sig_atomic_t g_sigwinch_flag = 0;
@@ -138,6 +106,12 @@ namespace mcode::tui {
 			tty_environment( "TERM" ), tty_environment( "NO_COLOR" ) == "1", has_tty,
 			tty_environment( "MCODE_AMBIGUOUS_WIDTH" ) );
 
+		// Wrapped here and unwrapped in `restore`, the same place the mouse
+		// mode is handled, so the pair cannot drift apart.
+		if ( session.caps_.bracketed_paste ) {
+			session.write( BRACKETED_PASTE_ENABLE );
+		}
+
 		return session;
 	}
 
@@ -189,6 +163,13 @@ namespace mcode::tui {
 			write( MOUSE_DISABLE_SEQUENCE );
 		}
 
+		// Paired with the enable in `create`, on every path that saved the
+		// console: the shell that runs next must not inherit a terminal that
+		// keeps wrapping its pastes in markers.
+		if ( caps_.bracketed_paste ) {
+			write( BRACKETED_PASTE_DISABLE );
+		}
+
 		if ( g_sigwinch_installed ) {
 			g_sigwinch_installed = false;
 			::sigaction( SIGWINCH, &g_saved_sigwinch, nullptr );
@@ -227,6 +208,8 @@ namespace mcode::tui {
 		}
 
 		auto line = std::string{ };
+		auto state = decode_state{ };
+		auto events = std::vector< key_event >{ };
 		auto got_enter = false;
 		auto got_eof = false;
 
@@ -247,8 +230,8 @@ namespace mcode::tui {
 				return std::nullopt;
 			}
 
-			auto byte = char{ };
-			const auto count = ::read( STDIN_FILENO, &byte, 1 );
+			auto bytes = std::array< char, 256 >{ };
+			const auto count = ::read( STDIN_FILENO, bytes.data( ), bytes.size( ) );
 
 			// vmin=0/vtime=1: a zero-length read is the timer expiring, not end of input
 			if ( count == 0 ) {
@@ -261,33 +244,57 @@ namespace mcode::tui {
 				break;
 			}
 
-			if ( byte == '\r' || byte == '\n' ) {
-				// The caller advances its own row, so the key itself only
-				// returns the cursor to column zero.
-				write( "\r\n" );
+			// The same decoder the prompt uses, so a bracketed paste is
+			// content here too and its markers never land in the answer.
+			decode_key_bytes( std::string_view{ bytes.data( ),
+				static_cast< std::size_t >( count ) }, state, events, false );
 
-				got_enter = true;
+			for ( const auto& event : events ) {
+				if ( event.type == key_event::kind::enter ) {
+					// The caller advances its own row, so the key itself only
+					// returns the cursor to column zero.
+					write( "\r\n" );
 
-				break;
-			}
+					got_enter = true;
 
-			if ( byte == 0x7F || byte == 0x08 ) {
-				if ( !line.empty( ) ) {
-					line.pop_back( );
-
-					write( ERASE_SEQUENCE );
+					break;
 				}
 
-				continue;
+				if ( event.type == key_event::kind::backspace ) {
+					if ( !line.empty( ) ) {
+						line.pop_back( );
+
+						write( ERASE_SEQUENCE );
+					}
+
+					continue;
+				}
+
+				if ( event.type == key_event::kind::paste ) {
+					// A pasted answer: its first line is the whole answer, the
+					// way typing that line would have been.
+					const auto stop = event.text.find( '\n' );
+					const auto text = stop == std::string::npos ? event.text
+						: event.text.substr( 0, stop );
+
+					line += text;
+
+					write( text );
+					write( "\r\n" );
+
+					got_enter = true;
+
+					break;
+				}
+
+				if ( event.type == key_event::kind::character ) {
+					line += event.text;
+
+					write( event.text );
+				}
 			}
 
-			if ( static_cast< unsigned char >( byte ) < 0x20 ) {
-				continue;
-			}
-
-			line.push_back( byte );
-
-			write( std::string_view{ &byte, 1 } );
+			events.clear( );
 		}
 
 		if ( got_eof && line.empty( ) ) {
@@ -345,174 +352,6 @@ namespace mcode::tui {
 		}
 	}
 
-	namespace {
-
-		struct escape_result {
-			key_event event;
-			std::size_t consumed = 0;
-		};
-
-		// `consumed == 0` means `text` is a prefix: the caller keeps it.
-		auto decode_escape( const std::string_view text, const bool mouse_reporting )
-			-> escape_result {
-			auto result = escape_result{ };
-
-			for ( const auto& candidate : MAPPINGS ) {
-				// A prefix waits, so a split `ESC [ 5 ~` stays whole.
-				if ( !text.starts_with( candidate.sequence ) ) {
-					if ( candidate.sequence.starts_with( text ) ) {
-						return result;
-					}
-
-					continue;
-				}
-
-				if ( !candidate.mouse ) {
-					result.event.type = candidate.kind;
-					result.consumed = candidate.sequence.size( );
-
-					return result;
-				}
-
-				// the coordinates after the button are read and discarded
-				const auto terminator = text.find_first_of( "Mm", candidate.sequence.size( ) );
-
-				if ( terminator == std::string_view::npos ) {
-					// A report that never ends must not grow the carry.
-					if ( text.size( ) > MAX_ESCAPE_BYTES ) {
-						result.event.type = key_event::kind::timeout;
-						result.consumed = text.size( );
-					}
-
-					return result;
-				}
-
-				result.consumed = terminator + 1;
-				result.event.type = mouse_reporting ? candidate.kind
-					: key_event::kind::timeout;
-
-				return result;
-			}
-
-			// an ESC before a non-sequence byte is the escape key itself
-			if ( text.size( ) >= 2 && text[ 1 ] != '[' && text[ 1 ] != 'O' ) {
-				result.event.type = key_event::kind::escape;
-				result.consumed = 1;
-
-				return result;
-			}
-
-			// a CSI still collecting parameters waits for its final byte
-			const auto final = text.find_first_not_of( CSI_PARAMETERS, 2 );
-
-			if ( final == std::string_view::npos && text.size( ) <= MAX_ESCAPE_BYTES ) {
-				return result;
-			}
-
-			result.event.type = key_event::kind::timeout;
-			result.consumed = final == std::string_view::npos ? text.size( ) : final + 1;
-
-			return result;
-		}
-
-		// A single control byte, or nothing. `ESC` is handled before this.
-		auto control_kind( const unsigned char byte ) -> std::optional< key_kind > {
-			switch ( byte ) {
-				case '\r': case '\n': return key_kind::enter;
-				case 0x09: return key_kind::tab;
-				case 0x7F: case 0x08: return key_kind::backspace;
-				case 0x03: return key_kind::interrupt;
-				case 0x04: return key_kind::exit;
-				case 0x12: return key_kind::ctrl_r;
-				default: return std::nullopt;
-			}
-		}
-
-		// Splits a raw read into whole keys. A read can deliver several keys
-		// and can split one.
-		auto decode_posix_bytes( const std::string_view text, std::string& carry,
-			std::vector< key_event >& out, const bool mouse_reporting ) -> void {
-			carry.append( text );
-
-			auto cursor = std::size_t{ 0 };
-
-			while ( cursor < carry.size( ) ) {
-				const auto first = static_cast< unsigned char >( carry[ cursor ] );
-
-				if ( first == 0x1B ) {
-					const auto parsed = decode_escape(
-						std::string_view{ carry }.substr( cursor ), mouse_reporting );
-
-					if ( parsed.consumed == 0 ) {
-						break;
-					}
-
-					cursor += parsed.consumed;
-
-					// Swallowed: `timeout` here means nothing to report.
-					if ( parsed.event.type != key_event::kind::timeout ) {
-						out.push_back( parsed.event );
-					}
-
-					continue;
-				}
-
-				// A control byte maps to one key, or to nothing.
-				const auto control = control_kind( first );
-
-				if ( control ) {
-					auto event = key_event{ };
-					event.type = *control;
-
-					out.push_back( event );
-					++cursor;
-
-					continue;
-				}
-
-				if ( first < 0x20 ) {
-					++cursor;
-
-					continue;
-				}
-
-				// a UTF-8 character, waiting if this read split the sequence
-				const auto length = utf8_lead_length( carry[ cursor ] );
-
-				if ( length == 0 ) {
-					// a byte that cannot start a sequence: drop it rather than insert half a glyph
-					++cursor;
-
-					continue;
-				}
-
-				if ( cursor + length > carry.size( ) ) {
-					break;
-				}
-
-				// the strict decoder rejects a bad continuation, an overlong form and a surrogate
-				const auto decoded = decode_utf8( std::string_view{ carry }.substr( cursor ) );
-
-				if ( decoded.length != length ) {
-					++cursor;
-
-					continue;
-				}
-
-				auto event = key_event{ };
-				event.type = key_event::kind::character;
-				event.text.assign( carry, cursor, length );
-
-				out.push_back( std::move( event ) );
-				cursor += length;
-			}
-
-			carry.erase( 0, cursor );
-		}
-
-
-	}
-
 	auto tty_session::read_key( const std::uint32_t wait_ms ) -> key_event {
 		auto event = key_event{ };
 
@@ -558,8 +397,9 @@ namespace mcode::tui {
 					return event;
 				}
 
-				decode_posix_bytes( std::string_view{ bytes.data( ),
-					static_cast< std::size_t >( count ) }, carry_, pending_, mouse_reporting_ );
+				decode_key_bytes( std::string_view{ bytes.data( ),
+					static_cast< std::size_t >( count ) }, decode_, pending_,
+					mouse_reporting_ );
 
 				continue;
 			}
@@ -577,9 +417,22 @@ namespace mcode::tui {
 			}
 
 			if ( monotonic_ms( ) >= deadline ) {
+				// A marker prefix that never completed is ordinary input, so a
+				// lone Escape is still the escape key. The bytes go back
+				// through the keystroke decoder, which holds an incomplete
+				// escape sequence in its own carry.
+				if ( decode_.paste.holding( ) ) {
+					decode_plain_key_bytes( decode_.paste.flush( ), decode_, pending_,
+						mouse_reporting_ );
+
+					if ( !pending_.empty( ) ) {
+						continue;
+					}
+				}
+
 				// an ESC held back for a sequence that never arrived is the key
-				if ( carry_ == "\x1b" ) {
-					carry_.clear( );
+				if ( decode_.carry == "\x1b" ) {
+					decode_.carry.clear( );
 					event.type = key_event::kind::escape;
 
 					return event;

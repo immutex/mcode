@@ -105,6 +105,16 @@ oldest retained row. Scrolling never writes to the terminal — it moves an offs
 
 **File mention**: `@` in the input opens a fuzzy picker over the workspace and inserts the chosen **path** (never the file's contents — that would spend the transcript budget on a mention that may never be read). The picker is the same palette widget with a different source, so ranking, filtering and the ghost-text completion behave identically. Matching is three-tier: path prefix, then basename prefix, then subsequence; case-insensitive.
 
+**Session commands.** The built-in slash commands are: `/help`, `/cost`, `/context`, `/model`, `/tools`, `/compact`, `/export`, `/undo`, `/rewind`, `/init`, `/doctor`, `/mention`, `/exit`.
+
+- `/undo` restores the files the **current run** changed; `/rewind` restores every captured file. Both report the count, and both say so plainly when no snapshot store is configured rather than reporting a zero that reads like success.
+- `/init` writes an `AGENTS.md` scaffold **only when none exists** — the file is the user's, and overwriting it would destroy the instructions the agent is meant to follow.
+- `/doctor` reports what is actually loaded: the model, the workspace, the registered tool count with its schema cost in bytes and estimated tokens, the context fill, whether snapshots are available, and the size of the loaded instruction chain. It reports only what this build can observe, and says `unknown` rather than guessing.
+
+**Approval is visible state, not a hidden flag.** The interactive session defaults to permissive (`never`) and prints the boundary on entry — naming the hard-deny floor and `permissions.deny` as what still holds — rather than claiming the mode is safe. A headless run keeps the conservative default and fails closed, because it has neither a human to read the disclaimer nor `/undo`. `--ask` restores prompting and wins over `--yolo`; `--plan` is read-only and is decided ahead of both.
+
+**Session persistence.** Every run writes an append-only JSONL event log under the per-user data directory, in a `sessions/` subdirectory, named by a session id derived from the workspace root so two workspaces do not collide. `--continue` reopens the newest session for the current workspace; `--resume <id>` names one; `--sessions` lists them (id, start time, size) and exits without running a turn. An unknown id is a hard error, never a silent fresh start — a resume that quietly begins a new session is worse than one that fails.
+
 ### Theme spec
 
 Named tokens; each resolves per color depth. **Ship the token names and the fallback rule now; choose the actual values during implementation against real terminals.** Pixel-exact hex values for an unrendered UI are unfalsifiable, and they churn the moment anyone sees them on a real screen. The structure below is the durable part.

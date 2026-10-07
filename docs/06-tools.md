@@ -136,6 +136,70 @@ matters to the model is the 1 MiB `large_file` note, not a refusal.
 
 `write` refuses to create files >10 MiB and refuses to overwrite a file it has not read this session (the read-before-write invariant). `edit` operates on exact anchors and never silently rewrites an entire file.
 
+### Tool-call arguments: repair, then validate
+
+A call that fails to parse is not a model that cannot express the call; it is a call that never
+ran. The pipeline is **repair → validate → report**, deterministic at every stage.
+
+**Repair** (`tools::repair_json`, inside `tool_args::parse` and `prepare_arguments`). Recovers
+only what is provably present, stopping at the first form that parses: a markdown fence and
+surrounding prose (extract the first balanced `{…}`), a trailing comma, Python literals, single
+quotes, and a tail cut **at a value boundary** (close the open brackets). A tail cut
+**mid-value** is never completed — that would invent content. Fences are the highest-value
+case: a fenced payload parsed at **0%** on GPT-4o and Gemma even with a correct prompt
+(arXiv 2605.02363).
+
+**Validate** (`tools::check_arguments`). Required members, primitive types, enum membership, and
+unknown members where `additionalProperties: false`. Runs at call time in `agent_loop::execute`
+— the single checkpoint every tool passes through, core, extension and MCP alike — and ahead of
+the permission check, so a call that cannot run never prompts the user.
+
+**Report.** The message names the parameter, the observed value, and the admissible values where
+the schema bounds them. Naming the alternatives is the largest measured lever: location +
+observed + admissible lifted success **14/50 → 36/50 (+44 pp)** (arXiv 2607.14167). Content
+matters, format does not.
+
+**Truncation is distinct.** A response cut off by the output limit leaves the arguments a valid
+prefix of a call that was never finished: no repair recovers them and no parameter is wrong. The
+provider's finish reason is read from the stream and recorded on the call, and the error says so
+and asks for a smaller call. Haiku loses **36.2 pp** at a 2048-token budget with 49% truncation
+versus 7.0 pp at 4096 (arXiv 2606.09410).
+
+**Retry** is blind, capped at `MAX_TOOL_CALL_RETRIES` (3): the failed attempt leaves the
+conversation rather than being shown back, because re-conditioning a small model on its own
+broken output anchors it (−6.1 pp at 1.5B; arXiv 2607.26117), and retries saturate by the third
+attempt (arXiv 2607.05197). Truncation is excluded — the same input reproduces it.
+
+**Strict tool calling.** When both the model's capability table and the provider descriptor
+declare support, the request emits `strict: true` per function plus the strict shape: every
+property required, `additionalProperties: false`, an optional property expressed as nullable.
+Without it, vLLM notes most clients never set `strict`, "so the model generates tool calls
+**without any grammar**". A gateway that rejects the field is downgraded (`15`).
+
+**Tool suppression.** Tool-calling plus a JSON response format makes some open-weight models
+stop calling tools. The format is **dropped** when a tool list is present unless the descriptor
+says the gateway honours both. The chain is strict → plain → prompt-only, never a precondition.
+
+**Delta accumulation** keys fragments by an ordinal the applier assigns; the wire `index` only
+selects a candidate. The index is unreliable — absent on some gateways, pinned at zero on others
+(ollama #7881, #15457) — so a fragment contradicting its candidate starts a new call rather than
+merging two calls into one.
+
+**Descriptions say when *not* to call.** Merely offering an unnecessary tool dropped an answer
+rate 98.2% → 63.5%; one scope sentence recovers most of it (arXiv 2609.14157). Each core
+description names the tool it is not a substitute for.
+
+**A repeated identical call is refused, then replanned.** The thrash detector already keys on
+`(tool name, canonical arguments)`; the same signal refuses the call at dispatch once it has
+already been dispatched `DOOM_LOOP_THRESHOLD` (3) times in a run, with an error telling the model
+to change the arguments or report a blocker. The loop's repeated-call ladder is consulted
+**before** the generic failure branch, because reflecting on the call the model just repeated
+reproduces it: a repeat escalates to a new plan, and only a non-repeating failure reflects.
+
+**Schemas stay flat.** Nesting costs every model 19–73 points; merging tools −19 median; splitting
+is near-free (arXiv 2609.34971). `validate_schema` refuses a nested object property at
+registration rather than shipping it to the model.
+
 ### Tool sources (the extensibility boundary)
 
 Tools arrive from three interchangeable sources behind one interface, so the agent never learns a tool's origin:
@@ -259,3 +323,12 @@ Idempotency rules: read-class tools are trivially retryable. `edit`/`write` are 
 - https://www.arcade.dev/blog/anthropic-tool-search-4000-tools-test/ — independent 4,027-tool test (56%/64%)
 - https://github.com/toon-format/toon and https://arxiv.org/abs/2603.03306 — TOON savings and the prompt-tax caveat
 - https://sierra.ai PDF (tau-bench paper, via search) — 15/13 tool catalogs
+- https://arxiv.org/html/2605.02363v1 — markdown-fence wrapping (0% parse rate on GPT-4o and Gemma)
+- https://arxiv.org/abs/2607.14167 — error-message content (14/50 → 36/50 with location + observed + admissible alternatives)
+- https://arxiv.org/pdf/2606.09410 — truncation as a distinct failure (Haiku −36.2 pp at 2048 tokens)
+- https://arxiv.org/abs/2607.26117 — retry anchoring (−6.1 pp at 1.5B for re-conditioning on the failed attempt)
+- https://arxiv.org/html/2607.05197 — retries saturate by step 3–4
+- https://arxiv.org/html/2609.34971v1 — flat vs nested schemas (19–73 points), merge −19 median
+- https://arxiv.org/abs/2609.14157 — over-calling (98.2% → 63.5% from merely offering an unnecessary tool)
+- https://docs.vllm.ai/en/latest/features/tool_calling/ — `strict` never set by most clients
+- https://github.com/ollama/ollama/issues/7881 and https://github.com/ollama/ollama/issues/15457 — tool-call index absent, then constant zero

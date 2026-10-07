@@ -81,6 +81,18 @@ namespace mcode::perm {
 			candidate = space.root( ) / candidate;
 		}
 
+		// The floor must compare against the path the OS will act on, not the string typed.
+		// `weakly_canonical` resolves the parent but leaves a final symlink or junction in
+		// place, so `rm -rf link-to-root` would name a path that is not a root. The final
+		// component is resolved too, and an 8.3 short name resolves to its long name with it.
+		auto error = std::error_code{ };
+		auto resolved = std::filesystem::canonical( candidate, error );
+
+		if ( !error ) {
+			return resolved;
+		}
+
+		// A path that does not exist cannot be deleted, so the parent-resolved form is enough.
 		auto canonical = platform::canonicalize( candidate );
 
 		if ( !canonical ) {
@@ -102,6 +114,15 @@ namespace mcode::perm {
 
 		if ( raw.empty( ) ) {
 			return { };
+		}
+
+		// Resolved the same way a target is, so a home reached through a symlink still
+		// compares equal to a target that names the symlink.
+		auto error = std::error_code{ };
+		auto resolved = std::filesystem::canonical( raw, error );
+
+		if ( !error ) {
+			return resolved;
 		}
 
 		auto canonical = platform::canonicalize( raw );
@@ -185,9 +206,16 @@ namespace mcode::perm {
 						: home / std::filesystem::path{ target.substr( TILDE_SLASH.size( ) ) };
 
 					// the floor names the home itself, not its contents.
-					auto canonical = platform::canonicalize( expanded );
+					auto error = std::error_code{ };
+					auto canonical = std::filesystem::canonical( expanded, error );
 
-					if ( canonical && *canonical == home ) {
+					if ( error ) {
+						auto weak = platform::canonicalize( expanded );
+
+						if ( weak && *weak == home ) {
+							return "recursive delete of the home directory";
+						}
+					} else if ( canonical == home ) {
 						return "recursive delete of the home directory";
 					}
 				}

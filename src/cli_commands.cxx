@@ -23,6 +23,7 @@
 #include "mcode/events/bus.hxx"
 #include "mcode/ext/hooks.hxx"
 #include "mcode/ext/loader.hxx"
+#include "mcode/fs/snapshot.hxx"
 #include "mcode/fs/workspace.hxx"
 #include "mcode/mcp/connect.hxx"
 #include "mcode/model/capabilities.hxx"
@@ -85,6 +86,34 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		std::fputs( mcode::cli::usage_text( "mcode" ).c_str( ), stderr );
 
 		return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
+	}
+
+	// A listing runs no turn, so it is answered before any config, provider or key work:
+	// it must succeed on a machine whose model is not configured yet.
+	if ( parsed->list_sessions ) {
+		return mcode::cli::to_int( mcode::cli::print_sessions(
+			parsed->working_directory.empty( )
+				? std::filesystem::current_path( )
+				: std::filesystem::path{ parsed->working_directory } ) );
+	}
+
+	// A named session is resolved before any provider or key work, so a mistyped id is
+	// reported as the argument error it is -- naming the id -- rather than as whatever
+	// the provider lookup complains about first. A resume never falls back to a fresh
+	// session, so this is a hard stop.
+	if ( !parsed->resume_session.empty( ) || parsed->continue_session ) {
+		const auto root = parsed->working_directory.empty( )
+			? std::filesystem::current_path( )
+			: std::filesystem::path{ parsed->working_directory };
+
+		const auto existing = mcode::cli::resolve_session( root, parsed->resume_session );
+
+		if ( !existing ) {
+			std::fprintf( stderr, "mcode: %s\n", existing.error( ).msg.c_str( ) );
+
+			return mcode::cli::to_int(
+				mcode::cli::exit_code_for( existing.error( ).code ) );
+		}
 	}
 
 	auto stream = mcode::cli::json_stream{ parsed->json };
@@ -302,12 +331,36 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		auto engine_options = mcode::perm::permission_engine::options{ };
 		engine_options.yolo = parsed->yolo;
 		engine_options.headless = !interactive;
+		engine_options.plan_mode = parsed->plan;
+
+		// The permissive default is for a human who can see the disclaimer and use /undo.
+		// A headless `--json` run has neither, so it keeps the engine's conservative default
+		// and fails closed on anything the rules do not already allow.
 		engine_options.approval = parsed->approval.empty( )
-			? config->get_string( "sandbox.approval" ).value_or( std::string{ "on-request" } )
+			? config->get_string( "sandbox.approval" ).value_or(
+				std::string{ interactive ? "never" : "on-request" } )
 			: parsed->approval;
 
+		// --yolo forces the permissive mode; --ask is applied after it so the explicit
+		// request to be prompted wins over every permissive flag.
 		if ( parsed->yolo ) {
 			engine_options.approval = "never";
+		}
+
+		if ( parsed->ask ) {
+			engine_options.approval = "on-request";
+			engine_options.yolo = false;
+		}
+
+		// The permissive default is only defensible if the user is told what still holds. The
+		// disclaimer names the real boundary - the hard-deny floor and the deny rules, which
+		// are decided ahead of the approval mode - rather than claiming the mode is safe.
+		if ( interactive && engine_options.approval == "never" && !parsed->plan ) {
+			std::fputs(
+				"mcode: approval = never: edits and commands run without prompting. "
+				"The hard-deny floor and permissions.deny still apply. "
+				"Use --ask to be prompted, --plan to stay read-only.\n",
+				stderr );
 		}
 
 		engine.set_options( engine_options );
@@ -387,6 +440,31 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 
 	auto log = mcode::event_log{ };
 
+	// The session file is opened before the turn runs, so every event from the first
+	// step lands on disk. A resume names its file; an unknown id or a workspace with no
+	// session at all is refused here, before any model call is made.
+	const auto session = mcode::cli::open_session_for_run( *parsed, space->root( ) );
+
+	if ( !session ) {
+		std::fprintf( stderr, "mcode: %s\n", session.error( ).msg.c_str( ) );
+		stream.emit_run_end( mcode::cli::exit_code_for( session.error( ).code ),
+			session.error( ).msg );
+
+		return mcode::cli::to_int( mcode::cli::exit_code_for( session.error( ).code ) );
+	}
+
+	const auto resumed = !parsed->resume_session.empty( ) || parsed->continue_session;
+
+	if ( const auto opened = log.open( session->path ); !opened ) {
+		std::fprintf( stderr, "mcode: %s\n", opened.error( ).msg.c_str( ) );
+		stream.emit_run_end( mcode::cli::exit_code_for( opened.error( ).code ),
+			opened.error( ).msg );
+
+		return mcode::cli::to_int( mcode::cli::exit_code_for( opened.error( ).code ) );
+	}
+
+	std::fputs( mcode::cli::start_session_log( log, *session, resumed ).c_str( ), stderr );
+
 	auto dependencies = mcode::agent_loop::dependencies{ };
 	dependencies.registry = &tool_registry;
 	dependencies.client = &loop_client;
@@ -404,6 +482,15 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 
 	dependencies.instruction_chain = skills_context.chain.text;
 	dependencies.skill_index = skills_context.skill_index;
+
+	// A headless run edits files too, so it gets the same undo store the interactive path
+	// has; without it a `--json` run would have no rollback at all.
+	std::optional< mcode::snapshot_store > snapshots;
+
+	if ( auto data = mcode::platform::app_data_path( mcode::platform::data_kind::data ) ) {
+		snapshots.emplace( *data / "snapshots" );
+		dependencies.snapshots = &*snapshots;
+	}
 
 	// the loop drives the timers: one pump per step, on the thread the VM belongs to.
 	dependencies.pump_timers = [ &extensions ]( ) { extensions.pump_timers( ); };

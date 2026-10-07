@@ -56,15 +56,56 @@ namespace mcode::model {
 		escape_ = std::move( callback );
 	}
 
-	auto delta_applier::pending_for( const int index ) -> pending_call& {
-		for ( auto& call : pending_ ) {
-			if ( call.index == index ) {
-				return call;
+	auto delta_applier::resolve_pending( const std::optional< std::int64_t > wire_index,
+		const std::string_view id_fragment, const std::string_view name_fragment ) -> pending_call& {
+		// The index is optional on the wire and unreliable when present: absent on some
+		// gateways, pinned at zero on others, so it cannot identify a call on its own. A
+		// fragment that contradicts what the candidate already holds belongs to the next call
+		// instead - which is exactly what a constant index looks like across two calls.
+		//
+		// The id is decisive because it is unique per call and arrives whole. Names repeat
+		// across calls, so a differing name only starts a new call when neither value is a
+		// prefix of the other, which distinguishes a genuine second call from a name split
+		// across fragments.
+		const auto is_extension = []( const std::string_view stored, const std::string_view value ) {
+			return stored.starts_with( value ) || value.starts_with( stored );
+		};
+
+		const auto contradicts = [ & ]( const pending_call& call ) {
+			if ( !id_fragment.empty( ) && !call.id.empty( ) && call.id != id_fragment ) {
+				return true;
 			}
+
+			if ( !name_fragment.empty( ) && !call.name.empty( ) &&
+				!is_extension( call.name, name_fragment ) ) {
+				return true;
+			}
+
+			return false;
+		};
+
+		const auto candidate = [ & ]( ) -> pending_call* {
+			if ( wire_index ) {
+				for ( auto& call : pending_ ) {
+					if ( call.wire_index == *wire_index ) {
+						return &call;
+					}
+				}
+
+				return nullptr;
+			}
+
+			// Without an index the newest call is the only candidate.
+			return pending_.empty( ) ? nullptr : &pending_.back( );
+		};
+
+		if ( auto* found = candidate( ); found != nullptr && !contradicts( *found ) ) {
+			return *found;
 		}
 
 		auto call = pending_call{ };
-		call.index = index;
+		call.ordinal = static_cast< int >( pending_.size( ) );
+		call.wire_index = wire_index.value_or( -1 );
 
 		pending_.push_back( std::move( call ) );
 
@@ -157,13 +198,14 @@ namespace mcode::model {
 			}
 		}
 
-		const auto raw_index = optional_int( *parsed, descriptor_.stream.tool_call_index )
-			.value_or( 0 );
+		// The index is optional on the wire and is unreliable when present: absent on some
+		// gateways, pinned at zero on others. It selects the call a fragment extends; when it
+		// disagrees with what has already accumulated, the fragment starts a new call instead.
+		const auto wire_index = optional_int( *parsed, descriptor_.stream.tool_call_index );
 
-		// the wire-supplied index is untrusted: it addresses an array and is stored as an int.
-		if ( raw_index < 0 || raw_index >= MAX_PARALLEL_CALLS ) {
+		if ( wire_index && ( *wire_index < 0 || *wire_index >= MAX_PARALLEL_CALLS ) ) {
 			return std::unexpected( fail( errc::protocol,
-				"tool-call index " + std::to_string( raw_index ) + " is outside [0, " +
+				"tool-call index " + std::to_string( *wire_index ) + " is outside [0, " +
 				std::to_string( MAX_PARALLEL_CALLS ) + ")" ) );
 		}
 
@@ -178,24 +220,32 @@ namespace mcode::model {
 			: std::nullopt;
 
 		if ( id_fragment || name_fragment || args_fragment ) {
-			auto& call = pending_for( static_cast< int >( raw_index ) );
+			auto& call = resolve_pending( wire_index,
+				id_fragment.value_or( std::string{ } ),
+				name_fragment.value_or( std::string{ } ) );
 
-			if ( id_fragment ) {
-				call.id += *id_fragment;
-			}
+			// A fragment that extends what is accumulated is that same value re-sent, so it
+			// replaces rather than duplicates; a genuine continuation is appended.
+			const auto absorb = []( std::string& target, const std::string& fragment ) {
+				if ( fragment.empty( ) ) {
+					return;
+				}
 
-			if ( name_fragment ) {
-				call.name += *name_fragment;
-			}
+				if ( fragment.starts_with( target ) ) {
+					target = fragment;
+				} else {
+					target += fragment;
+				}
+			};
 
-			if ( args_fragment ) {
-				call.args_fragments += *args_fragment;
-			}
+			absorb( call.id, id_fragment.value_or( std::string{ } ) );
+			absorb( call.name, name_fragment.value_or( std::string{ } ) );
+			absorb( call.args_fragments, args_fragment.value_or( std::string{ } ) );
 
 			// emitted on any fragment, not only once a name is known.
 			auto event = chat_event{ };
 			event.type = chat_event::kind::tool_call_delta;
-			event.index = call.index;
+			event.index = call.ordinal;
 			event.tool_call_id = call.id;
 			event.tool_name = call.name;
 			event.args_fragment = args_fragment.value_or( std::string{ } );
@@ -240,7 +290,7 @@ namespace mcode::model {
 
 			auto event = chat_event{ };
 			event.type = chat_event::kind::tool_call_delta;
-			event.index = call.index;
+			event.index = call.ordinal;
 			event.tool_call_id = call.id;
 			event.tool_name = call.name;
 			event.args_fragment = call.args_fragments;

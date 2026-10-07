@@ -321,7 +321,7 @@ Each of these cost real time to discover, and they live here rather than in code
 comments. Docs cite them by number.
 
 <details>
-<summary><strong>103 constraints</strong> — expand</summary>
+<summary><strong>115 constraints</strong> — expand</summary>
 
 1. **No standalone Asio.** `docs/14` lists standalone Asio *and* Boost, but Beast
    and Boost.Process v2 are both written against `boost::asio`. Taking both would
@@ -1173,6 +1173,78 @@ comments. Docs cite them by number.
     Clang legs.** `-Wmissing-field-initializers` is on under
     `-DMCODE_WARNINGS_AS_ERRORS=ON`, and MSVC has no equivalent. Construct the
     struct and assign the fields, or initialize every member.
+
+104. **A tool call's arguments are repaired before they are validated, and
+    validation happens in `agent_loop::execute`, not in the handler wrapper.**
+    The wrapper runs for core tools only; `execute` is the one path every tool
+    takes — core, extension and MCP alike. Validating in the wrapper would leave
+    extension and MCP calls unchecked. The repair pass is inside
+    `tool_args::parse` so no caller can forget it.
+
+105. **A truncated response is a distinct failure from a malformed one.** The
+    provider's finish reason (`length`, `max_tokens`) is read from the stream and
+    recorded on each call. Without it, a call cut off mid-JSON is reported as a
+    parse error and the model is told to fix a parameter that was never wrong.
+    `tool_call::truncated` carries the flag; `tools::truncation_error` renders it.
+
+106. **The tool-call index on the wire is unreliable.** It is optional, and a
+    gateway may pin it at a constant (ollama shipped both bugs). Fragments are
+    keyed by an ordinal the applier assigns; the wire index only *selects* a
+    candidate, and a fragment that contradicts its candidate starts a new call.
+    Keying by the index directly merges distinct calls into one.
+
+107. **`strict` and `parallel_tool_calls` are two independent flags, and the
+    model's capability table is not enough.** `supports_strict_schema` says the
+    model honours the grammar; `features.strict_tools` says the gateway accepts
+    the field. Both must be set or the request is rejected outright.
+
+108. **A 400 that names a request field is not a malformed request.** The gateway
+    is refusing an optimisation it does not implement. The field is dropped and
+    the request retried, bounded by `MAX_FEATURE_DOWNGRADES`, and the retry does
+    not consume an attempt — the request that failed was never servable. A 400
+    that names no known field stays fatal.
+
+109. **A JSON response format is dropped when a tool list is present.** Some
+    open-weight models stop calling tools when both are set. Tool-calling is the
+    primary mode, so the format yields unless the descriptor declares the gateway
+    honours both.
+
+110. **The cache needs a rolling second breakpoint.** A cache read walks back
+    only a bounded number of blocks from a breakpoint, so a single anchor on the
+    stable prefix stops hitting once the history in front of it is long enough.
+    `cache_breakpoints` returns the stable-prefix offset *and* one on the newest
+    message. Breakpoints are applied right-to-left, because a marker occupies
+    bytes and would otherwise shift the next offset.
+
+111. **There is no stream stall watchdog, deliberately.** The transport sets a
+    per-read timeout (60 s) and nothing shorter: Anthropic streams tool input as
+    partial JSON one key at a time with multi-second gaps, so an inactivity
+    detector would abort a healthy stream. Do not add one.
+
+112. **`--plan` is checked ahead of the floor and ahead of `--yolo`,** in the
+    same place the floor is. A read-only mode that a permissive flag can escape
+    is not read-only. `tool_class::mcp` is denied too: an MCP `readOnlyHint` is
+    an untrusted claim, not a read class.
+
+113. **The approval default is permissive for an interactive session and
+    conservative for a headless one.** The interactive default is `never`, which
+    is safe only because the hard-deny floor and every `permissions.deny` rule
+    are decided *ahead* of the approval mode, and because a human is present to
+    read the boundary printed on entry and to use `/undo`. A headless run has
+    neither, so it keeps the engine's own `on-request` default and fails closed.
+    The engine default is deliberately conservative: a caller that sets nothing
+    must not auto-allow. `--ask` restores prompting and wins over `--yolo`.
+
+114. **The floor resolves a target before matching it.** `weakly_canonical` alone
+    leaves a final symlink or junction in place, so `rm -rf link-to-root` would
+    name a path that is not a root. The final component is resolved with
+    `std::filesystem::canonical`, falling back to the parent-resolved form when
+    the path does not exist (a path that cannot be resolved cannot be deleted).
+
+115. **The audit trail logs the expanded command, not just its output.** A
+    permission incident is otherwise uninverifiable: the recorded output says what
+    happened, not what ran. `tool.command` is appended after the permission check
+    so it reflects what was approved.
 
 </details>
 
