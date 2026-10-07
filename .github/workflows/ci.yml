@@ -249,6 +249,15 @@ jobs:
       - name: Install Conan
         run: python -m pip install "conan==${{ env.CONAN_VERSION }}"
 
+      # Same trap as the build job: `--profile` sets the HOST context only, so
+      # the BUILD profile still defaults to ~/.conan2/profiles/default, which a
+      # fresh runner does not have. The package job was tag-gated and had never
+      # run, so it carried this bug from the day it was written: the first tag
+      # failed all three platforms with "The default build profile ... doesn't
+      # exist" before it reached the build.
+      - name: Detect the default Conan profile
+        run: conan profile detect --force
+
       - name: Install Ninja (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y ninja-build
@@ -298,25 +307,29 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           name="mcode-${version}-${{ matrix.name }}"
-          mkdir -p dist
           binary="build/Release/bin/mcode"
           [ -f "$binary" ] || binary="build/Release/bin/mcode.exe"
 
+          # Stage everything the archive should contain, then archive the
+          # directory. Two `-C` flags in one tar invocation is a trap: the
+          # relative paths silently produce a tarball with the wrong layout.
+          rm -rf stage dist
+          mkdir -p stage dist
+          cp README.md THIRD-PARTY-NOTICES.md stage/
+
           if [ "${{ runner.os }}" = "Windows" ]; then
-            # a zip, because Windows unpacks it without a tar binary
-            cp "$binary" dist/mcode.exe
-            cp README.md THIRD-PARTY-NOTICES.md dist/ 2>/dev/null || true
-            ( cd dist && 7z a -tzip "${name}.zip" mcode.exe README.md THIRD-PARTY-NOTICES.md > /dev/null )
-            rm -f dist/mcode.exe dist/README.md dist/THIRD-PARTY-NOTICES.md
+            # `mcode.exe` inside, because that is the name the installer looks for
+            cp "$binary" stage/mcode.exe
+            # a zip, because Windows unpacks it without needing a tar binary
+            ( cd stage && 7z a -tzip "../dist/${name}.zip" . > /dev/null )
           else
-            cp "$binary" dist/mcode
-            chmod +x dist/mcode
-            # the licence files ride along; the Luau attribution is a release obligation
-            tar -czf "dist/${name}.tar.gz" -C dist mcode -C "$PWD" README.md THIRD-PARTY-NOTICES.md 2>/dev/null \
-              || tar -czf "dist/${name}.tar.gz" -C dist mcode
-            rm -f dist/mcode
+            # `mcode` inside, because that is the name the installer looks for
+            cp "$binary" stage/mcode
+            chmod +x stage/mcode
+            tar -czf "dist/${name}.tar.gz" -C stage .
           fi
 
+          rm -rf stage
           ls -la dist/
 
       - name: Upload the archive
@@ -348,12 +361,22 @@ jobs:
       # One checksum file over every asset. The installers fetch it and verify
       # the download before it is ever executed, so a tampered mirror or a
       # truncated transfer fails closed rather than installing.
+      #
+      # Bare filenames, no `./` prefix: the installers match the entry by
+      # `grep " <name>$"`, and `sha256sum ./*` writes `./<name>`, which that
+      # pattern does not match. That mismatch would have looked like a missing
+      # entry on every install.
       - name: Write SHA256SUMS
         run: |
           cd dist
+          : > SHA256SUMS
+          for archive in *.tar.gz *.zip; do
+            [ -f "$archive" ] || continue
+            sha256sum "$archive" >> SHA256SUMS
+          done
           ls -la
-          sha256sum ./*.tar.gz ./*.zip > SHA256SUMS 2>/dev/null || sha256sum ./* > SHA256SUMS
           cat SHA256SUMS
+          [ -s SHA256SUMS ] || { echo "no archives to checksum"; exit 1; }
 
       - name: Publish
         env:

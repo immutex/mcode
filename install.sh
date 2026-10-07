@@ -250,7 +250,12 @@ main( ) {
 	fetch "$sums_url" "$work/SHA256SUMS" \
 		|| die "could not fetch SHA256SUMS, so the download cannot be verified"
 
-	expected=$(grep " ${archive}\$" "$work/SHA256SUMS" | head -n1 | cut -d' ' -f1)
+	# Tolerant of a `./` prefix and of the `*` binary marker, so the parse does
+	# not depend on how the checksum file was generated.
+	expected=$(awk -v want="$archive" '
+		{ name = $2; sub( /^\*/, "", name ); sub( /^\.\//, "", name ); if ( name == want ) { print $1; exit } }
+	' "$work/SHA256SUMS" | head -n1)
+
 	[ -n "$expected" ] || die "SHA256SUMS has no entry for ${archive}"
 
 	actual=$(sha256_of "$work/$archive") \
@@ -266,8 +271,16 @@ main( ) {
 
 	step "unpacking"
 	tar -xzf "$work/$archive" -C "$work" || die "could not unpack ${archive}"
-	[ -f "$work/mcode" ] || die "the archive does not contain an mcode binary"
-	chmod +x "$work/mcode"
+
+	# The archive holds `mcode` at its root. Search as a fallback so a change to
+	# the packaging layout cannot silently produce "no binary in the archive".
+	binary="$work/mcode"
+	if [ ! -f "$binary" ]; then
+		binary=$(find "$work" -type f -name mcode -print 2>/dev/null | head -n1)
+	fi
+
+	[ -n "$binary" ] && [ -f "$binary" ] || die "the archive does not contain an mcode binary"
+	chmod +x "$binary"
 
 	prefix=$(choose_prefix)
 	mkdir -p "$prefix" || die "could not create ${prefix}"
@@ -275,7 +288,7 @@ main( ) {
 	step "installing to ${bold}${prefix}${reset}"
 	# Install beside the destination and rename, so a running mcode is replaced
 	# atomically rather than truncated under itself.
-	cp "$work/mcode" "${prefix}/.mcode.new" || die "could not write to ${prefix}"
+	cp "$binary" "${prefix}/.mcode.new" || die "could not write to ${prefix}"
 	mv -f "${prefix}/.mcode.new" "${prefix}/mcode" || die "could not replace ${prefix}/mcode"
 	chmod +x "${prefix}/mcode"
 	ok "installed ${prefix}/mcode"

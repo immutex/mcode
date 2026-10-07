@@ -266,7 +266,17 @@ checksum mismatch for $archive
 		$extract = Join-Path $work 'extract'
 		Expand-Archive -Path $archivePath -DestinationPath $extract -Force
 
+		# The archive holds `mcode.exe` at its root. Search as a fallback so a
+		# change to the packaging layout cannot silently produce "no binary".
 		$binary = Join-Path $extract 'mcode.exe'
+		if ( -not ( Test-Path $binary ) ) {
+			$found = Get-ChildItem -Path $extract -Filter 'mcode.exe' -Recurse -File |
+				Select-Object -First 1
+			if ( $found ) {
+				$binary = $found.FullName
+			}
+		}
+
 		if ( -not ( Test-Path $binary ) ) {
 			Write-Fail 'the archive does not contain mcode.exe'
 		}
