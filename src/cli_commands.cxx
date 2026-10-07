@@ -161,8 +161,28 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		? std::filesystem::current_path( )
 		: std::filesystem::path{ parsed->working_directory };
 
+	// A worktree is created before anything else resolves the root, so every path the run
+	// touches - the workspace, the instruction chain, the tools - points into it.
+	auto effective_workspace = workspace_path;
+
+	if ( parsed->worktree ) {
+		auto created = mcode::cli::create_worktree( workspace_path, parsed->worktree_name );
+
+		if ( !created ) {
+			std::fprintf( stderr, "mcode: %s\n", created.error( ).msg.c_str( ) );
+			stream.emit_run_end( mcode::cli::exit_code_for( created.error( ).code ),
+				created.error( ).msg );
+
+			return mcode::cli::to_int( mcode::cli::exit_code_for( created.error( ).code ) );
+		}
+
+		effective_workspace = *created;
+
+		std::fprintf( stderr, "mcode: worktree %s\n", effective_workspace.string( ).c_str( ) );
+	}
+
 	auto skills_options = mcode::skills::session_context_options{ };
-	skills_options.workspace = workspace_path;
+	skills_options.workspace = effective_workspace;
 
 	const auto data_directory = mcode::platform::app_data_path(
 		mcode::platform::data_kind::config );
@@ -193,7 +213,7 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	auto extension_servers = mcode::ext::mcp_server_store{ };
 
 	// Opened before the loader: the surface's `fs.*` entries use this same context.
-	auto space = mcode::workspace::open( workspace_path );
+	auto space = mcode::workspace::open( effective_workspace );
 
 	if ( !space ) {
 		std::fprintf( stderr, "mcode: %s\n", space.error( ).msg.c_str( ) );
@@ -220,7 +240,7 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 				.config = &*config, .space = &*space, .reads = &reads,
 				.permissions = &engine } );
 
-		auto roots = mcode::ext::default_roots( workspace_path );
+		auto roots = mcode::ext::default_roots( effective_workspace );
 
 		if ( bundled_directory ) {
 			roots.push_back( *bundled_directory / "extensions" );

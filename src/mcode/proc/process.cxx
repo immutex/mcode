@@ -7,6 +7,7 @@
 #include <boost/process/v2/environment.hpp>
 #include <boost/process/v2/exit_code.hpp>
 #include <boost/process/v2/process.hpp>
+#include <boost/process/v2/start_dir.hpp>
 #include <boost/process/v2/stdio.hpp>
 
 #include <algorithm>
@@ -112,6 +113,23 @@ namespace mcode {
 			return platform::sandbox_posix_initializer{ profile };
 		}
 #endif
+
+		// boost's launcher inherits the parent's directory unless one is passed as an
+		// initializer, and an empty path would make the child's chdir fail. "No working
+		// directory given" means "where the harness is", so that is what it becomes.
+		[[nodiscard]] auto child_directory( const process_options& options )
+			-> std::filesystem::path {
+			if ( !options.working_directory.empty( ) ) {
+				return std::filesystem::path{ options.working_directory };
+			}
+
+			auto current = std::filesystem::path{ };
+			auto error = std::error_code{ };
+
+			current = std::filesystem::current_path( error );
+
+			return error ? std::filesystem::path{ } : current;
+		}
 
 	}
 
@@ -261,12 +279,14 @@ namespace mcode {
 				platform::sandbox_windows_close_pipes( *raw_pipes );
 			} else {
 				child.emplace( context, options.executable, options.args,
-					process::process_stdio{ in, out.pipe, err.pipe }, environment );
+					process::process_stdio{ in, out.pipe, err.pipe }, environment,
+					boost::process::v2::process_start_dir{ child_directory( options ) } );
 			}
 #else
 			auto child = std::optional< process::process >{ };
 			child.emplace( context, options.executable, options.args,
 				process::process_stdio{ in, out.pipe, err.pipe }, environment,
+				boost::process::v2::process_start_dir{ child_directory( options ) },
 				sandbox_initializer( sandbox_state, options.sandbox ) );
 #endif
 

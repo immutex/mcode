@@ -744,3 +744,29 @@ TEST_CASE( "the session flags parse like every other value flag", "[cli][session
 	CHECK( usage.find( "--resume" ) != std::string::npos );
 	CHECK( usage.find( "--sessions" ) != std::string::npos );
 }
+
+TEST_CASE( "the worktree flag takes an optional name and never swallows the next flag",
+	"[cli][worktree]" ) {
+	// No name: the next token is a flag, so it must not be consumed as a branch label.
+	auto bare = cli::parse_exec_options( { "--worktree", "--json" } );
+	REQUIRE( static_cast< bool >( bare ) );
+	CHECK( bare->worktree );
+	CHECK( bare->worktree_name.empty( ) );
+	CHECK( bare->json );
+
+	// Short form, with a name.
+	auto named = cli::parse_exec_options( { "-w", "feature-x" } );
+	REQUIRE( static_cast< bool >( named ) );
+	CHECK( named->worktree );
+	CHECK( named->worktree_name == "feature-x" );
+
+	// Long form with a name.
+	auto long_named = cli::parse_exec_options( { "--worktree", "probe" } );
+	REQUIRE( static_cast< bool >( long_named ) );
+	CHECK( long_named->worktree_name == "probe" );
+
+	// Off unless asked for.
+	auto plain = cli::parse_exec_options( { "do the thing" } );
+	REQUIRE( static_cast< bool >( plain ) );
+	CHECK_FALSE( plain->worktree );
+}

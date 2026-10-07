@@ -61,6 +61,11 @@ namespace mcode::cli {
 		// --sessions prints the workspace's sessions and exits without running a turn.
 		bool list_sessions = false;
 
+		// --worktree runs the session in a fresh git worktree instead of the checkout, so an
+		// unattended run cannot touch the user's working tree and `git checkout` undoes it.
+		bool worktree = false;
+		std::string worktree_name;
+
 		// `never` | `on-request` | `always`, from --approval or the merged
 		// config's sandbox.approval. Empty means "not set", so the config
 		// value can win.
@@ -128,6 +133,12 @@ namespace mcode::cli {
 	// usage error when the state directory cannot be resolved.
 	[[nodiscard]] auto print_sessions( const std::filesystem::path& workspace_root )
 		-> exit_code;
+
+	// Creates a detached git worktree under `<workspace>/.mcode/worktrees/` and returns its
+	// path. Fails when git is missing or the directory is not a repository, with git's own
+	// message rather than a generic one.
+	[[nodiscard]] auto create_worktree( const std::filesystem::path& workspace_root,
+		std::string_view name ) -> result< std::filesystem::path >;
 
 	// The `exec --json` stream. One JSON object per line on stdout;
 	// diagnostics go to stderr.

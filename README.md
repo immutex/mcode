@@ -321,7 +321,7 @@ Each of these cost real time to discover, and they live here rather than in code
 comments. Docs cite them by number.
 
 <details>
-<summary><strong>115 constraints</strong> — expand</summary>
+<summary><strong>117 constraints</strong> — expand</summary>
 
 1. **No standalone Asio.** `docs/14` lists standalone Asio *and* Boost, but Beast
    and Boost.Process v2 are both written against `boost::asio`. Taking both would
@@ -1245,6 +1245,18 @@ comments. Docs cite them by number.
     permission incident is otherwise uninverifiable: the recorded output says what
     happened, not what ran. `tool.command` is appended after the permission check
     so it reflects what was approved.
+
+116. **A child process starts in `process_options::working_directory`, and that is
+    passed explicitly on every spawn path.** Boost.Process inherits the parent's
+    directory unless given a start directory, so an unsandboxed spawn silently ran
+    in the harness's own directory rather than the workspace root — invisible while
+    the two coincided, wrong the moment they did not. The POSIX sandbox launcher
+    dropped the field entirely.
+
+117. **`--worktree` refuses a workspace that is not the repository root.** `git
+    worktree add` walks up to an enclosing repository, so a plain directory inside
+    one would check out the *wrong project* and appear to succeed. The root is
+    confirmed against `git rev-parse --show-toplevel` before anything is created.
 
 </details>
 

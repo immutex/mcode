@@ -115,6 +115,8 @@ oldest retained row. Scrolling never writes to the terminal — it moves an offs
 
 **Session persistence.** Every run writes an append-only JSONL event log under the per-user data directory, in a `sessions/` subdirectory, named by a session id derived from the workspace root so two workspaces do not collide. `--continue` reopens the newest session for the current workspace; `--resume <id>` names one; `--sessions` lists them (id, start time, size) and exits without running a turn. An unknown id is a hard error, never a silent fresh start — a resume that quietly begins a new session is worse than one that fails.
 
+**`--worktree` is the cheapest blast-radius limit.** The run happens in a detached git worktree under `<workspace>/.mcode/worktrees/`, so an unattended session cannot touch the user's checkout, and the rollback is `git worktree remove` rather than a snapshot store. It is created before anything resolves the workspace root, so the instruction chain, the tools and the session all point into it. A missing git, or a directory that is not a repository, fails with git's own message rather than a generic one.
+
 ### Theme spec
 
 Named tokens; each resolves per color depth. **Ship the token names and the fallback rule now; choose the actual values during implementation against real terminals.** Pixel-exact hex values for an unrendered UI are unfalsifiable, and they churn the moment anyone sees them on a real screen. The structure below is the durable part.
