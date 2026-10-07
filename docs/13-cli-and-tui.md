@@ -117,6 +117,8 @@ oldest retained row. Scrolling never writes to the terminal — it moves an offs
 
 **`--worktree` is the cheapest blast-radius limit.** The run happens in a detached git worktree under `<workspace>/.mcode/worktrees/`, so an unattended session cannot touch the user's checkout, and the rollback is `git worktree remove` rather than a snapshot store. It is created before anything resolves the workspace root, so the instruction chain, the tools and the session all point into it. A missing git, or a directory that is not a repository, fails with git's own message rather than a generic one.
 
+**`mcode setup` is a subcommand, not an installer script.** The one-line installers (`install.sh`, `install.ps1`) fetch and verify the binary and then hand off to it, so the interactive part exists once. It is interactive on a terminal and flag-driven otherwise, which means the same binary serves a provisioning script. Colours resolve through the shipped `theme_table`, so the wizard cannot drift from the TUI palette. Verification runs a real turn (`mcode exec --json`) with the key in the child's environment, which proves the descriptor, the credential and the streaming parser agree; the key never reaches disk and never appears in the process arguments.
+
 ### Theme spec
 
 Named tokens; each resolves per color depth. **Ship the token names and the fallback rule now; choose the actual values during implementation against real terminals.** Pixel-exact hex values for an unrendered UI are unfalsifiable, and they churn the moment anyone sees them on a real screen. The structure below is the durable part.
