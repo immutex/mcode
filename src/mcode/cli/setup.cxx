@@ -767,7 +767,7 @@ namespace mcode::cli {
 				}
 			}
 
-			write_line( "wrote " + path.string( ) );
+			write_line( brush.good( "wrote" ) + " " + path.string( ) );
 
 			return 0;
 		}
@@ -981,9 +981,14 @@ namespace mcode::cli {
 					{ "", "" }, 0 );
 
 				if ( !keep || *keep == 1 ) {
-					// Restore exactly what was there, including nothing.
+					// Restore exactly what was there, including nothing. A failed
+					// restore is reported rather than swallowed: the file is then
+					// half-configured and the user has to be told.
 					if ( previous ) {
-						write_text_file( path, *previous );
+						if ( !write_text_file( path, *previous ) ) {
+							write_line( "  " + brush.bad( "could not restore "
+								+ path.string( ) ) );
+						}
 					} else {
 						std::error_code ignored;
 						std::filesystem::remove( path, ignored );

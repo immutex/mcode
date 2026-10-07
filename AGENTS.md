@@ -14,7 +14,8 @@ mcode — C++23 coding-agent harness. Luau is the extension layer.
 | `cmake/` | Warning set, per-platform target config |
 | `conan/profiles/` | Per-platform Conan profiles |
 | `conan/recipes/luau/` | Private Luau recipe — upstream ships CMake, so this is a thin wrapper |
-| `scripts/` | `bootstrap.ps1` / `bootstrap.sh` |
+| `scripts/` | `bootstrap.ps1` / `bootstrap.sh` — dev setup, builds from source |
+| `install.sh`, `install.ps1` | The one-line installers: download, verify, install, hand off to `mcode setup` |
 | `.github/workflows/ci.yml` | Three-platform CI matrix |
 
 Dependencies point downward only, from `agent/` toward `core/`.

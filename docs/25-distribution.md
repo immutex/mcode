@@ -187,6 +187,25 @@ observed during development, not theorised.
 and `--yes` take the scripted path, so CI and provisioning never wait on a prompt.
 No terminal at all is the same path rather than an error.
 
+### Releasing
+
+The tag is the trigger. Nothing else has to be run by hand.
+
+```bash
+git tag v0.0.2 && git push origin v0.0.2
+```
+
+`package` builds all three platforms and writes
+`mcode-<version>-<platform>.{tar.gz,zip}`, then `release` collects them, writes one
+`SHA256SUMS` over every asset, and publishes a GitHub Release with generated
+notes. The installers resolve `releases/latest` by following its redirect rather
+than calling the JSON API, so a rate-limited or unauthenticated fetch still
+works, and `MCODE_VERSION=x.y.z` pins one explicitly.
+
+macOS is ad-hoc signed in `package` (`codesign --sign -`). That satisfies
+Gatekeeper on the machine that built it and not on a user's; a Developer ID plus
+notarization is the step that changes that, and it is not wired up.
+
 ### Licence obligations
 
 mcode is Apache-2.0. The one embedded component with an attribution request is **Luau** (MIT, plus a request that user-facing documentation credit the language and link to <https://luau.org/>). Satisfied by the Licence section of `README.md` and `THIRD-PARTY-NOTICES.md`; the full texts also ship inside the Conan package under `licenses/`.
