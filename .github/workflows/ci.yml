@@ -5,6 +5,10 @@ on:
     # `master` is the default branch; `main` is listed so a rename does not
     # silently stop CI from running, which is exactly what happened once already.
     branches: [master, main]
+
+    # A bare `branches:` filter excludes tags, so pushing `v0.0.1` started
+    # nothing and the release never ran. Tags have to be listed explicitly.
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
     inputs:
