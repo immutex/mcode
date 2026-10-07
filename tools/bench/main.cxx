@@ -9,6 +9,7 @@
 
 #include <cstring>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -19,6 +20,10 @@
 #include <windows.h>
 
 #include <psapi.h>
+#elif defined( __APPLE__ )
+#include <sys/sysctl.h>
+#include <sys/time.h>
+#include <unistd.h>
 #else
 #include <unistd.h>
 #endif
@@ -70,6 +75,29 @@ namespace {
 
 		// FILETIME is 100-nanosecond intervals, so the difference is 100ns units.
 		return static_cast< double >( now_ticks.QuadPart - created_ticks.QuadPart ) / 10'000.0;
+	#elif defined( __APPLE__ )
+		// No /proc on macOS. `sysctl` gives the process's start timeval directly, so no
+		// system-uptime subtraction is needed and no clock-tick conversion is involved.
+		auto info = kinfo_proc{ };
+		auto size = sizeof( info );
+		auto name = std::array< int, 4 >{ CTL_KERN, KERN_PROC, KERN_PROC_PID, ::getpid( ) };
+
+		if ( ::sysctl( name.data( ), name.size( ), &info, &size, nullptr, 0 ) != 0 ) {
+			return -1.0;
+		}
+
+		auto now = timeval{ };
+
+		if ( ::gettimeofday( &now, nullptr ) != 0 ) {
+			return -1.0;
+		}
+
+		const auto started = static_cast< double >( info.kp_proc.p_starttime.tv_sec ) +
+			static_cast< double >( info.kp_proc.p_starttime.tv_usec ) / 1'000'000.0;
+		const auto current = static_cast< double >( now.tv_sec ) +
+			static_cast< double >( now.tv_usec ) / 1'000'000.0;
+
+		return ( current - started ) * 1000.0;
 	#else
 		auto* file = std::fopen( "/proc/self/stat", "r" );
 
