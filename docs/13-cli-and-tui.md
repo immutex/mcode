@@ -141,7 +141,7 @@ Spacing/glyph rules:
 - Indent: 2 spaces for nested content; block gap = 1 blank line between message groups, 0 within.
 - Gutters: diff `+`/`-`/space, tool output `│` in `muted`, 1-char wide, always padded so copy-paste strips predictably.
 - No emoji in chrome; status glyphs restricted to `✓ ✗ ⠿ ▸ ⋯ │` (all single-width, no VS16 dependency — deliberately avoids the emoji-width trap).
-- Ambiguous-width policy: configurable, default 1. `MCODE_AMBIGUOUS_WIDTH=2` declares that the terminal renders the East Asian Ambiguous glyphs `│`, `─`, `•` and `…` two columns wide; unset, `1`, or any other value means one. The value is clamped to exactly {1, 2} — an unknown value is not an error and is not logged. It is probed once at startup into `capabilities::ambiguous_width`, and the frame builder, the commit wrap and the caret all measure with that one value, so a terminal that renders them two columns wide cannot desynchronise the grid. See `README.md` §Non-obvious constraints 96.
+- Ambiguous-width policy: configurable, default 1. `MCODE_AMBIGUOUS_WIDTH=2` declares that the terminal renders the East Asian Ambiguous glyphs `│`, `─`, `•` and `…` two columns wide; unset, `1`, or any other value means one. The value is clamped to exactly {1, 2} — an unknown value is not an error and is not logged. It is probed once at startup into `capabilities::ambiguous_width`, and the frame builder, the commit wrap and the caret all measure with that one value, so a terminal that renders them two columns wide cannot desynchronise the grid. See `docs/40-non-obvious-constraints.md` 96.
 - Every emitted string goes through one width function: grapheme-segment → cluster width → truncate on cluster boundaries, never mid-cluster.
 
 ## Traps

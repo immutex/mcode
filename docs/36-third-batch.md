@@ -133,7 +133,7 @@ Small this batch, because A owns `cli_commands.cxx`:
 
 1. Reconcile the three `CMakeLists.txt` blocks.
 2. `docs/00-index.md` — mark the batch shipped.
-3. `README.md` §Non-obvious constraints — the deviations and traps each slice
+3. `docs/40-non-obvious-constraints.md` — the deviations and traps each slice
    produces.
 4. The batch acceptance run, below.
 

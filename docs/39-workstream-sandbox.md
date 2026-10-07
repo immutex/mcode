@@ -137,7 +137,7 @@ false claim, and this slice exists to remove those.
 Three places must agree, and a test should assert the first two:
 
 1. `sandbox_capability_level()` / `sandbox_mechanism()` — what is enforced
-2. `--yolo`'s help text and `README` §Non-obvious constraints — what the flag
+2. `--yolo`'s help text and `docs/40-non-obvious-constraints.md` — what the flag
    means now that a sandbox exists
 3. The docs that describe the boundary
 

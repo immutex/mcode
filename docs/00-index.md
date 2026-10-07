@@ -91,6 +91,10 @@ three places the plan was wrong.
 39. `38-workstream-lua-api.md` — the missing entry points, permissions, `/reload`.
 40. `39-workstream-sandbox.md` — Low-integrity token, Landlock, Seatbelt, egress deny.
 
+**Reference.** Read by number, never end to end.
+
+41. `40-non-obvious-constraints.md` — the 117 traps that cost real time to find, numbered and stable. Docs and `AGENTS.md` cite them by number.
+
 **If you only read three:** `01`, `03`, `21`.
 
 > **Three batches have shipped.** `26-first-batch.md`, `32-second-batch.md` and
@@ -100,7 +104,7 @@ three places the plan was wrong.
 > owning doc before changing either.
 >
 > The deviations a reader would otherwise get wrong are in
-> `README.md` §Non-obvious constraints (items 48–67): workspace writes are
+> [`docs/40`](40-non-obvious-constraints.md) (items 48–67): workspace writes are
 > `allow` by default, `--yolo` skips questions but not the hard-deny floor, and
 > `--yolo` is not a sandbox.
 
@@ -185,8 +189,9 @@ three places the plan was wrong.
 
 | Area | State |
 |---|---|
-| Docs `00`–`25` | Written |
-| Code | Not started — this directory is design-only by intent |
+| Docs `00`–`40` | Written. `40-non-obvious-constraints.md` is the numbered trap reference. |
+| Code | Three batches shipped: agent loop, permissions, skills, MCP, TUI, Lua API, sandbox, sessions. |
+| Not built | Memory, subagents, OSC 52 clipboard |
 
 ## Open questions (cross-cutting)
 

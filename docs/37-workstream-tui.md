@@ -355,7 +355,7 @@ with `@` and opens the picker).
 `ESC` sets an atomic flag; the event-bus subscriber stops consuming further
 deltas, the turn finishes cleanly on what arrived, partial text stays in the
 transcript, `interrupted` is committed as a warning and the process exits 130.
-This is **cooperative only** — see `README.md` §Non-obvious constraints 98 for
+This is **cooperative only** — see `docs/40-non-obvious-constraints.md` 98 for
 why a cancellation seam was not built and why the two obvious alternatives were
 rejected.
 

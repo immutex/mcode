@@ -7,7 +7,7 @@ mcode — C++23 coding-agent harness. Luau is the extension layer.
 
 | Path | Contents |
 |---|---|
-| `docs/` | 27 design + research docs — the authoritative spec |
+| `docs/` | 41 design, research and workstream docs — the authoritative spec |
 | `src/mcode/` | Library sources: `core/` `support/` `ext/` `fs/` `net/` `proc/` `agent/` |
 | `src/main.cxx` | Startup smoke test; exit code = number of failed checks |
 | `tests/` | Catch2 unit tests |
@@ -23,7 +23,7 @@ No agent behaviour yet: no model client, no tool implementations, no TUI.
 ## Rules
 
 1. **Docs and code move together.** Changing a decision, budget or interface means updating the doc that owns it.
-2. **Deviations go in `README.md` §Non-obvious constraints** — never only in a code comment.
+2. **Deviations go in `docs/40-non-obvious-constraints.md`** — never only in a code comment.
 3. **Every claim needs a source or an explicit `[UNVERIFIED]`.** Never invent a benchmark, API name or URL.
 4. **Terse.** Tables and bullets over prose. No filler, no marketing, no restating the request.
 5. **Decisions are stated as decisions** — "we chose X because Y". If evidence is split, show both sides and pick one.
@@ -170,6 +170,7 @@ MSVC is only on `PATH` inside a developer prompt. A MinGW `link.exe` on the same
 | Providers and cost | `docs/15-model-layer.md` |
 | Milestones, risks | `docs/16-roadmap.md` |
 | **Current work plan — read before starting** | `docs/26-first-batch.md` |
+| **Traps and deviations — cited by number** | `docs/40-non-obvious-constraints.md` |
 | Extension runtime, API, lifecycle | `docs/17-lua-runtime.md` … `docs/23-first-party-extensions.md` |
 | Cross-platform, packaging | `docs/24-cross-platform.md`, `docs/25-distribution.md` |
 
