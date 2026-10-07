@@ -104,6 +104,13 @@ Rules only apply to file descriptors opened **after** `restrict_self` — pre-op
 
 **Linux ships a static musl tarball** (x86_64 + aarch64) as the primary artifact — this is the specific fix for glibc skew, and musl static has no external dependencies even for DNS. AppImage buys a CLI nothing and drags in a `libfuse2` dependency Ubuntu stopped shipping.
 
+> **Not yet true.** The tag-triggered release pipeline currently packages the
+> **glibc** build from `conan/profiles/linux-gcc`, so the tarball is
+> dynamically linked and carries the skew this section warns about. The
+> `linux-gcc` profile says as much in its own comment. A musl profile and a
+> static release build are outstanding work; until they land, the Linux artifact
+> is built on `ubuntu-24.04` and will not run on an older glibc.
+
 **macOS ships arm64-only.** Universal binaries double size (~5–9 MB → ~10–18 MB), and Intel macOS is being wound down by Homebrew from Sept 2026. An optional x86_64 tarball covers stragglers.
 
 ## The static-linking correction
