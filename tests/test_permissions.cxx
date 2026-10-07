@@ -221,7 +221,7 @@ namespace permission_test {
 		CHECK( setup.approval.asks( ) == 0 );
 	}
 
-	TEST_CASE( "--ask and --plan parse as boolean flags and --ask beats --yolo",
+	TEST_CASE( "the ask and plan flags parse as booleans and ask beats yolo",
 		"[perm][argv]" ) {
 		auto plan = cli::parse_exec_options( { "--plan" } );
 		REQUIRE( plan.has_value( ) );
