@@ -7,6 +7,7 @@
 #include <boost/process/v2/popen.hpp>
 #include <boost/process/v2/process.hpp>
 #include <boost/process/v2/process_handle.hpp>
+#include <boost/process/v2/start_dir.hpp>
 #include <boost/process/v2/stdio.hpp>
 
 #include <array>
@@ -44,6 +45,20 @@ namespace mcode::proc {
 			}
 
 			ring.append( data, std::min( length, SESSION_STDERR_RING_BYTES ) );
+		}
+
+		// same contract as process.cxx: the launcher inherits the parent's directory unless
+		// one is passed, and an empty path would make the child's chdir fail
+		[[nodiscard]] auto session_directory( const session_options& options )
+			-> std::filesystem::path {
+			if ( !options.working_directory.empty( ) ) {
+				return std::filesystem::path{ options.working_directory };
+			}
+
+			auto error = std::error_code{ };
+			auto current = std::filesystem::current_path( error );
+
+			return error ? std::filesystem::path{ } : current;
 		}
 
 	}
@@ -148,24 +163,28 @@ namespace mcode::proc {
 					options.args,
 					process::process_stdio{ owned.state_->stdin_pipe, owned.state_->stdout_pipe,
 						stderr_pipe },
+					boost::process::v2::process_start_dir{ session_directory( options ) },
 					initializer );
 			} else {
 				child = process::default_process_launcher( )( context, options.executable,
 					options.args,
 					process::process_stdio{ owned.state_->stdin_pipe, owned.state_->stdout_pipe,
-						stderr_pipe } );
+						stderr_pipe },
+					boost::process::v2::process_start_dir{ session_directory( options ) } );
 			}
 #elif defined( __linux__ ) || defined( __APPLE__ )
 			child = process::default_process_launcher( )( context, options.executable,
 				options.args,
 				process::process_stdio{ owned.state_->stdin_pipe, owned.state_->stdout_pipe,
 					stderr_pipe },
+				boost::process::v2::process_start_dir{ session_directory( options ) },
 				platform::sandbox_posix_initializer{ options.sandbox } );
 #else
 			child = process::default_process_launcher( )( context, options.executable,
 				options.args,
 				process::process_stdio{ owned.state_->stdin_pipe, owned.state_->stdout_pipe,
-					stderr_pipe } );
+					stderr_pipe },
+				boost::process::v2::process_start_dir{ session_directory( options ) } );
 #endif
 		} catch ( const boost::system::system_error& exception ) {
 			return std::unexpected(
