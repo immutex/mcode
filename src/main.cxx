@@ -447,7 +447,7 @@ auto run_smoke( ) -> int {
 
 		auto ok = loop.execute( { std::string{ }, "read", R"({"path":"README.md"})" } );
 		check( ok.ok, "dispatched the real read tool" );
-		check( ok.content.find( "Non-obvious constraints" ) != std::string::npos,
+		check( ok.content.find( "coding-agent harness" ) != std::string::npos,
 			"read returned actual file content, not a placeholder" );
 		check( log.size( ) == 2, "logged both the call and the result" );
 
