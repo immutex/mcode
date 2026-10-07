@@ -193,7 +193,42 @@ your money at the same rate. mcode accounts for both, per turn.
 
 ## Quick start
 
-mcode builds from source. It is a C++23 project, so you need a compiler and
+One command downloads the binary for your platform, verifies its SHA-256, puts
+it on your PATH, and starts a setup wizard. No compiler, no Python, no Conan.
+
+**Windows** (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/immutex/mcode/master/install.ps1 | iex
+```
+
+**Linux / macOS**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/immutex/mcode/master/install.sh | sh
+```
+
+The wizard picks a provider, takes an API key, and verifies the endpoint with a
+real turn before it writes anything. It writes exactly one file:
+`mcode config`'s path, which it prints.
+
+Then, from your project:
+
+```bash
+mcode                    # interactive session
+mcode "fix the failing test"   # one task, then exit
+mcode exec --json "…"    # machine-readable event stream
+```
+
+> [!TIP]
+> Run `mcode --help` for the flag surface, and `/help` inside a session for the
+> command palette. `--yolo` skips approval prompts. It does **not** disable the
+> hard-deny floor.
+
+<details>
+<summary><strong>Build from source instead</strong></summary>
+
+mcode is a C++23 project, so this route needs a compiler and
 [Conan 2](https://conan.io/). The bootstrap script does the three things that are
 easy to get wrong by hand: it activates the MSVC developer environment, builds the
 private Luau package, and selects the right Conan profile.
@@ -218,18 +253,7 @@ ctest --preset linux-gcc        # or macos-clang
 ./build/Release/bin/mcode
 ```
 
-Then, from your project:
-
-```bash
-mcode                    # interactive session
-mcode "fix the failing test"   # one task, then exit
-mcode exec --json "…"    # machine-readable event stream
-```
-
-> [!TIP]
-> Run `mcode --help` for the flag surface, and `/help` inside a session for the
-> command palette. `--yolo` skips approval prompts. It does **not** disable the
-> hard-deny floor.
+</details>
 
 ## Docs
 

@@ -250,6 +250,17 @@ namespace mcode::tui {
 				static_cast< std::size_t >( count ) }, state, events, false );
 
 			for ( const auto& event : events ) {
+				if ( event.type == key_event::kind::interrupt
+					|| event.type == key_event::kind::exit ) {
+					// Ctrl-C abandons the read. Returning the partial line would
+					// hand the caller an empty answer, which a prompt that treats
+					// empty as "skip" would act on -- so an interrupt must be
+					// distinguishable from an empty line, and `nullopt` is that.
+					write( "\r\n" );
+
+					return std::nullopt;
+				}
+
 				if ( event.type == key_event::kind::enter ) {
 					// The caller advances its own row, so the key itself only
 					// returns the cursor to column zero.

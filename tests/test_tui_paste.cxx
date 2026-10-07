@@ -331,3 +331,24 @@ TEST_CASE( "a decoded paste feeds the editor without submitting",
 	REQUIRE( submission.has_value( ) );
 	CHECK( *submission == "line one\nline two" );
 }
+
+TEST_CASE( "ctrl-c decodes to an interrupt, not a character", "[tui][keys]" ) {
+	// The regression this guards: `read_line` had no interrupt case, so Ctrl-C
+	// at a prompt that treats an empty answer as "skip" silently accepted the
+	// empty string and carried on. Ctrl-C has to be distinguishable from an
+	// empty line before any caller can act on it.
+	auto state = decode_state{ };
+
+	const auto events = feed( state, "\x03" );
+
+	REQUIRE( events.size( ) == 1 );
+	CHECK( events.front( ).type == key_event::kind::interrupt );
+	CHECK( count_of( events, key_event::kind::character ) == 0 );
+
+	// Ctrl-D is the exit key and is a different event.
+	auto exit_state = decode_state{ };
+	const auto exit_events = feed( exit_state, "\x04" );
+
+	REQUIRE( exit_events.size( ) == 1 );
+	CHECK( exit_events.front( ).type == key_event::kind::exit );
+}

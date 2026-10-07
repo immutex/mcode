@@ -251,6 +251,17 @@ namespace mcode::tui {
 			// screen unless the session writes it back. Only accepted keys are
 			// echoed, so a read that times out leaves the display untouched.
 			for ( const auto& event : events ) {
+				if ( event.type == key_event::kind::interrupt
+					|| event.type == key_event::kind::exit ) {
+					// Ctrl-C abandons the read. Returning the partial line would
+					// hand the caller an empty answer, which a prompt that treats
+					// empty as "skip" would act on -- so an interrupt must be
+					// distinguishable from an empty line, and `nullopt` is that.
+					write( "\r\n" );
+
+					return std::nullopt;
+				}
+
 				if ( event.type == key_event::kind::enter ) {
 					// The caller advances its own row, so the key itself only
 					// returns the cursor to column zero.

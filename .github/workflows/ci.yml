@@ -286,11 +286,76 @@ jobs:
           size=$(stat -c %s "$executable" 2>/dev/null || stat -f %z "$executable")
           echo "binary: $((size / 1024 / 1024)) MiB ($size bytes)"
 
-      - name: Upload binary
+      # The install scripts predict this name from the tag and the detected
+      # platform, so it is a contract: `mcode-<version>-<platform>.<ext>`, with
+      # the same three platform tokens the `matrix.name` values carry.
+      - name: Package the archive
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          name="mcode-${version}-${{ matrix.name }}"
+          mkdir -p dist
+          binary="build/Release/bin/mcode"
+          [ -f "$binary" ] || binary="build/Release/bin/mcode.exe"
+
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            # a zip, because Windows unpacks it without a tar binary
+            cp "$binary" dist/mcode.exe
+            cp README.md THIRD-PARTY-NOTICES.md dist/ 2>/dev/null || true
+            ( cd dist && 7z a -tzip "${name}.zip" mcode.exe README.md THIRD-PARTY-NOTICES.md > /dev/null )
+            rm -f dist/mcode.exe dist/README.md dist/THIRD-PARTY-NOTICES.md
+          else
+            cp "$binary" dist/mcode
+            chmod +x dist/mcode
+            # the licence files ride along; the Luau attribution is a release obligation
+            tar -czf "dist/${name}.tar.gz" -C dist mcode -C "$PWD" README.md THIRD-PARTY-NOTICES.md 2>/dev/null \
+              || tar -czf "dist/${name}.tar.gz" -C dist mcode
+            rm -f dist/mcode
+          fi
+
+          ls -la dist/
+
+      - name: Upload the archive
         uses: actions/upload-artifact@v4
         with:
-          name: mcode-${{ matrix.name }}
-          path: |
-            build/Release/bin/mcode
-            build/Release/bin/mcode.exe
+          name: dist-${{ matrix.name }}
+          path: dist/*
           if-no-files-found: error
+
+  release:
+    name: Publish the release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Collect the archives
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: dist-*
+          merge-multiple: true
+
+      # One checksum file over every asset. The installers fetch it and verify
+      # the download before it is ever executed, so a tampered mirror or a
+      # truncated transfer fails closed rather than installing.
+      - name: Write SHA256SUMS
+        run: |
+          cd dist
+          ls -la
+          sha256sum ./*.tar.gz ./*.zip > SHA256SUMS 2>/dev/null || sha256sum ./* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "mcode $GITHUB_REF_NAME" \
+            --generate-notes \
+            dist/*.tar.gz dist/*.zip dist/SHA256SUMS

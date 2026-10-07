@@ -16,6 +16,7 @@
 
 #include "mcode/agent/loop.hxx"
 #include "mcode/cli/exec.hxx"
+#include "mcode/cli/setup.hxx"
 #include "mcode/core/error.hxx"
 #include "mcode/platform/seams.hxx"
 #include "mcode/support/config.hxx"
@@ -769,4 +770,102 @@ TEST_CASE( "the worktree flag takes an optional name and never swallows the next
 	auto plain = cli::parse_exec_options( { "do the thing" } );
 	REQUIRE( static_cast< bool >( plain ) );
 	CHECK_FALSE( plain->worktree );
+}
+
+TEST_CASE( "setup replaces the model section and leaves the rest of the config alone",
+	"[cli][setup]" ) {
+	const auto provider = "openai-chat-completions";
+	const auto model = "gpt-5";
+	const auto base_url = "https://api.openai.com/v1/chat/completions";
+	const auto key_env = "OPENAI_API_KEY";
+
+	SECTION( "a CRLF config keeps one model section, not two" ) {
+		// The regression: a CRLF file whose section header was not recognised
+		// gained a second `[model]`, which the loader rejects as a duplicate.
+		const auto existing =
+			"# note\r\n\r\n[model]\r\nprovider = \"old\"\r\nmodel = \"old-model\"\r\n"
+			"\r\n[models.\"x\"]\r\nprice_input = 1.0\r\n";
+
+		const auto updated = cli::splice_model_section( existing, provider, model,
+			base_url, key_env );
+
+		CHECK( updated.find( "model = \"old-model\"" ) == std::string::npos );
+		CHECK( updated.find( "provider = \"old\"" ) == std::string::npos );
+
+		// Exactly one `[model]` header.
+		auto count = std::size_t{ 0 };
+		auto position = updated.find( "[model]" );
+
+		while ( position != std::string::npos ) {
+			++count;
+			position = updated.find( "[model]", position + 1 );
+		}
+
+		CHECK( count == 1 );
+
+		// The pricing block and the leading comment survive.
+		CHECK( updated.find( "[models.\"x\"]" ) != std::string::npos );
+		CHECK( updated.find( "price_input = 1.0" ) != std::string::npos );
+		CHECK( updated.find( "# note" ) != std::string::npos );
+
+		// The file keeps its own line endings.
+		CHECK( updated.find( "\r\n" ) != std::string::npos );
+
+		// The new values are present.
+		CHECK( updated.find( "model = \"gpt-5\"" ) != std::string::npos );
+		CHECK( updated.find( "api_key_env = \"OPENAI_API_KEY\"" ) != std::string::npos );
+	}
+
+	SECTION( "an LF config is replaced in place too" ) {
+		const auto existing =
+			"[model]\nprovider = \"old\"\nmodel = \"old-model\"\n\n[ui]\ntheme = \"dark\"\n";
+
+		const auto updated = cli::splice_model_section( existing, provider, model,
+			base_url, key_env );
+
+		CHECK( updated.find( "old-model" ) == std::string::npos );
+		CHECK( updated.find( "model = \"gpt-5\"" ) != std::string::npos );
+		CHECK( updated.find( "[ui]" ) != std::string::npos );
+		CHECK( updated.find( "theme = \"dark\"" ) != std::string::npos );
+		CHECK( updated.find( "\r\n" ) == std::string::npos );
+	}
+
+	SECTION( "a config with no model section gains one" ) {
+		const auto existing = "[ui]\ntheme = \"dark\"\n";
+
+		const auto updated = cli::splice_model_section( existing, provider, model,
+			base_url, key_env );
+
+		CHECK( updated.find( "[model]" ) != std::string::npos );
+		CHECK( updated.find( "model = \"gpt-5\"" ) != std::string::npos );
+		CHECK( updated.find( "[ui]" ) != std::string::npos );
+	}
+
+	SECTION( "an empty config produces just the section" ) {
+		const auto updated = cli::splice_model_section( "", provider, model,
+			base_url, key_env );
+
+		CHECK( updated.find( "[model]" ) != std::string::npos );
+		CHECK( updated.find( "provider = \"openai-chat-completions\"" ) != std::string::npos );
+	}
+
+	SECTION( "a model id containing a quote cannot break the file" ) {
+		const auto updated = cli::splice_model_section( "", provider, "we\"ird",
+			base_url, key_env );
+
+		CHECK( updated.find( "model = \"we\\\"ird\"" ) != std::string::npos );
+	}
+
+	SECTION( "a models pricing block is not mistaken for the model section" ) {
+		const auto existing =
+			"[models.\"combo/x\"]\nprice_input = 0.15\nprice_output = 0.6\n";
+
+		const auto updated = cli::splice_model_section( existing, provider, model,
+			base_url, key_env );
+
+		// The pricing block is untouched and a real `[model]` was added.
+		CHECK( updated.find( "[models.\"combo/x\"]" ) != std::string::npos );
+		CHECK( updated.find( "price_output = 0.6" ) != std::string::npos );
+		CHECK( updated.find( "\n[model]\n" ) != std::string::npos );
+	}
 }

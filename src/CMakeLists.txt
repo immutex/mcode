@@ -137,6 +137,7 @@ add_library(mcode_core STATIC
     mcode/tui/transcript.cxx
 
     mcode/cli/repl.cxx
+    mcode/cli/setup.cxx
     mcode/cli/slash.cxx
 )
 

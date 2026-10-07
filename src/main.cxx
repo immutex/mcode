@@ -11,6 +11,7 @@
 #include "mcode/agent/loop.hxx"
 #include "mcode/cli/exec.hxx"
 #include "mcode/cli/repl.hxx"
+#include "mcode/cli/setup.hxx"
 #include "mcode/cli/skill_command.hxx"
 #include "mcode/events/bus.hxx"
 #include "mcode/eval/suite.hxx"
@@ -76,6 +77,10 @@ auto main( int argument_count, char** arguments ) -> int {
 
 	if ( !argv.empty( ) && argv.front( ) == "skill" ) {
 		return mcode::cli::run_skill( { argv.begin( ) + 1, argv.end( ) } );
+	}
+
+	if ( !argv.empty( ) && argv.front( ) == "setup" ) {
+		return mcode::cli::run_setup( { argv.begin( ) + 1, argv.end( ) } );
 	}
 
 	if ( !argv.empty( ) && argv.front( ) == "eval" ) {

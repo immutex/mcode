@@ -115,6 +115,78 @@ Per-platform artifacts and signing are specified in `24`:
 
 Distribution channels: GitHub Releases first; Homebrew formula (not cask — no notarization required), winget manifest, and a scoop bucket. `curl | sh` and a tarball remain the universal fallback.
 
+### The install scripts
+
+Two scripts in the repository root, both served straight from `master`:
+
+```
+Windows   irm https://raw.githubusercontent.com/immutex/mcode/master/install.ps1 | iex
+Linux     curl -fsSL https://raw.githubusercontent.com/immutex/mcode/master/install.sh | sh
+macOS     curl -fsSL https://raw.githubusercontent.com/immutex/mcode/master/install.sh | sh
+```
+
+They download a release archive, **verify its SHA-256 against the release's
+`SHA256SUMS`, and install** — in that order, and a missing checksum file is a hard
+failure rather than a skipped check, because an unverified binary is the one thing
+the step exists to prevent. Then they add the install directory to the user PATH
+and hand off to `mcode setup`.
+
+Design constraints, each of which the script has to respect:
+
+| Constraint | Why |
+|---|---|
+| **POSIX `sh`, not bash** | `curl \| sh` runs under whatever `/bin/sh` is: dash on Debian and Ubuntu. No arrays, no `[[ ]]`, no `local` in the outer scope |
+| **No elevation** | `/usr/local/bin` when it is already writable, `${HOME}/.local/bin` otherwise; Windows uses `%LOCALAPPDATA%` and the user-scope PATH |
+| **Colour is opt-out and auto-off** | `NO_COLOR`, plus a non-tty stdout, so a piped log gets clean text |
+| **Idempotent** | Re-running installs the new binary and never appends a second PATH entry or a second `[model]` section |
+| **Predictable artifact names** | `mcode-<version>-<platform>.<ext>` is a contract between the packaging job and the scripts |
+
+### `mcode setup`
+
+The interactive part is a **subcommand of the binary**, not the installer script.
+A wizard written in `sh` and another in PowerShell would drift, and the packaged
+build would be the one that diverges.
+
+```
+$ mcode setup
+  mcode setup
+  Choose a provider. Writes one file: ~/.config/mcode/config.toml
+
+  Provider
+   > [OI]                           platform.openai.com
+     Anthropic                      console.anthropic.com
+     [OI]-compatible endpoint       any /v1/chat/completions gateway
+
+  Model
+   > gpt-5                          recommended
+     gpt-5-mini
+```
+
+Arrow keys move, a digit jumps, Enter accepts. Colours resolve through the shipped
+`theme_table`, so the wizard cannot drift from the TUI palette, and it degrades to
+plain text on a 16-colour terminal and on `NO_COLOR`.
+
+**Verification runs a real turn.** After writing the config, the wizard spawns its
+own binary as `mcode exec --json "Reply with the single word: ready"` with the key
+in the child's environment. A hand-rolled HTTP request would prove the endpoint
+answers but not that the descriptor, credential and streaming parser agree; the
+real path proves the thing the user is about to run. The key never reaches disk and
+never appears in the process arguments. On failure the wizard offers to undo, and
+restores the previous file byte for byte.
+
+**The config is edited as text, not parsed and re-serialised.** There is no TOML
+writer in the tree, and a round-trip would drop the `[models."…"]` pricing blocks
+and the comments that carry their rationale. The `[model]` section is replaced in
+place and everything else is preserved. The edit is **line-based** rather than
+offset-based: a config edited on Windows carries CRLF, and a check for a bare `\n`
+after the header misses it and appends a *second* `[model]` — which the loader
+rejects as a duplicate on the user's next start rather than at setup time. That was
+observed during development, not theorised.
+
+`--provider`, `--model`, `--base-url`, `--api-key-env`, `--api-key`, `--no-verify`
+and `--yes` take the scripted path, so CI and provisioning never wait on a prompt.
+No terminal at all is the same path rather than an error.
+
 ### Licence obligations
 
 mcode is Apache-2.0. The one embedded component with an attribution request is **Luau** (MIT, plus a request that user-facing documentation credit the language and link to <https://luau.org/>). Satisfied by the Licence section of `README.md` and `THIRD-PARTY-NOTICES.md`; the full texts also ship inside the Conan package under `licenses/`.
@@ -123,6 +195,11 @@ Every release artifact must carry both files. Conan packages resolve their own l
 
 ## Traps
 
+- **A wizard written twice.** An `sh` wizard and a PowerShell wizard drift, and the packaged build is the one that diverges. The interactive part is a subcommand of the binary; the scripts only fetch, verify and hand off.
+- **Installing without verifying.** A missing `SHA256SUMS` is a hard failure, never a skipped check. An unverified binary is exactly what the step exists to prevent.
+- **A CRLF config and an offset-based section edit.** The header check misses, a second `[model]` is appended, and the loader rejects the duplicate on the user's *next* start. Line-based, and covered by a test.
+- **Re-serialising the config.** There is no TOML writer, and a round-trip would drop the `[models."…"]` pricing blocks and their rationale. Edit the section as text.
+- **`bash` in a `curl | sh` script.** Debian and Ubuntu run it under dash.
 - **Building artifact hosting before there is demand.** The index model is strictly cheaper and the ecosystem has not needed hosting yet.
 - **Review-gating.** Weeks of queue latency, defeated by invisible Unicode. Automate screening; keep the runtime gate authoritative.
 - **Auto-update.** Repeatedly implicated in real compromises. Explicit command, diff shown, confirmation required.
