@@ -16,8 +16,8 @@
 namespace mcode::tui {
 
 	// The region's floor: prompt + status. The palette and tool rows add to it,
-	// so the height is dynamic.
-	inline constexpr std::size_t LIVE_REGION_ROWS = 6;
+	// so the height is dynamic and the painted height is tracked separately.
+	inline constexpr std::size_t LIVE_REGION_MIN_ROWS = 2;
 
 	// Ceiling, so a runaway list cannot push the transcript off the screen.
 	inline constexpr std::size_t LIVE_REGION_MAX_ROWS = 16;
@@ -179,12 +179,16 @@ namespace mcode::tui {
 		// The SCREEN's geometry. The region's height is derived per frame.
 		auto resize( std::size_t screen_rows, std::size_t screen_columns ) -> void;
 
-		// Emitted once at startup: scrolls the region into existence.
-		[[nodiscard]] auto reserve( ) const -> std::string;
-
 		// Puts the cursor back on the region's last row. Every other movement
 		// is relative to it.
 		[[nodiscard]] auto park( ) const -> std::string;
+
+		// The rows the region currently covers, for a caller that must erase
+		// it after the last flush -- the teardown clear, which cannot assume
+		// the floor because tool and palette rows make the height dynamic.
+		[[nodiscard]] auto painted_height( ) const noexcept -> std::size_t {
+			return painted_rows_;
+		}
 
 		// Forgets the tracked frame, so the next flush repaints every row.
 		// Anything writing to the console outside `flush` must call this.
@@ -273,7 +277,12 @@ namespace mcode::tui {
 		cell_buffer current_;
 		std::size_t screen_rows_ = 24;
 		std::size_t screen_columns_ = 80;
-		std::size_t painted_rows_ = LIVE_REGION_ROWS;
+
+		// The rows the region occupies on screen. Nothing is painted until the
+		// first flush, so it starts at the floor: a taller default made
+		// `commit` erase and scroll rows the region never covered, which is
+		// what left the opening screen's gap.
+		std::size_t painted_rows_ = LIVE_REGION_MIN_ROWS;
 
 		// True once any row has been queued, so the first group is not preceded
 		// by a blank line.

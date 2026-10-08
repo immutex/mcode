@@ -131,7 +131,7 @@ namespace mcode::tui {
 	}
 
 	render_coordinator::render_coordinator( )
-		: previous_( LIVE_REGION_ROWS, 80 ), current_( LIVE_REGION_ROWS, 80 ) { }
+		: previous_( LIVE_REGION_MIN_ROWS, 80 ), current_( LIVE_REGION_MIN_ROWS, 80 ) { }
 
 	auto render_coordinator::set_capabilities( const capabilities& value ) -> void {
 		caps_ = value;
@@ -170,22 +170,6 @@ namespace mcode::tui {
 	auto render_coordinator::invalidate( ) -> void {
 		previous_.clear( );
 		repaint_all_ = true;
-	}
-
-	auto render_coordinator::reserve( ) const -> std::string {
-		if ( screen_rows_ <= 1 ) {
-			return { };
-		}
-
-		// Scroll until the cursor is on the last row, so the region sits at the
-		// bottom rather than the top.
-		auto out = std::string{ };
-
-		for ( auto index = std::size_t{ 0 }; index + 1 < screen_rows_; ++index ) {
-			out += '\n';
-		}
-
-		return out;
 	}
 
 	auto render_coordinator::set_prompt( std::string text, const std::size_t cursor_byte ) -> void {
@@ -437,7 +421,7 @@ namespace mcode::tui {
 
 		// Bounded by the terminal and by the spec's budget.
 		const auto ceiling = std::max( std::min( LIVE_REGION_MAX_ROWS,
-			screen_rows > 1 ? screen_rows - 1 : std::size_t{ 1 } ), std::size_t{ 2 } );
+			screen_rows > 1 ? screen_rows - 1 : std::size_t{ 1 } ), LIVE_REGION_MIN_ROWS );
 
 		// The history viewport is a pager rather than the live region: it is
 		// grown to the whole available height, so a screenful of history is
@@ -447,7 +431,7 @@ namespace mcode::tui {
 		}
 
 		// prompt + status
-		auto rows = std::size_t{ 2 };
+		auto rows = LIVE_REGION_MIN_ROWS;
 
 		if ( state.palette.open && !state.palette.matches.empty( ) ) {
 			rows += state.palette.matches.size( );
@@ -458,7 +442,7 @@ namespace mcode::tui {
 
 		rows += state.tools.size( );
 
-		return std::clamp( rows, std::size_t{ 2 }, ceiling );
+		return std::clamp( rows, LIVE_REGION_MIN_ROWS, ceiling );
 	}
 
 	auto build_frame( const render_state& state, const std::size_t row_count,

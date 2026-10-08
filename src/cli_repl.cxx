@@ -263,11 +263,10 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 	{
 		const auto held = std::lock_guard< std::mutex >{ render_gate };
 
-		// The header is committed before the region is reserved, so it lands in
-		// scrollback as the first thing in the session rather than scrolling away
-		// with the first turn. It also fills the rows that `reserve` would
-		// otherwise leave blank: pushing the region to the bottom with bare
-		// newlines is what made the opening screen read as empty space.
+		// Committed here rather than by the first turn's flush, so the banner
+		// opens the session. `flush` both commits it and paints the region, and
+		// `commit` already scrolls what it writes clear of the region -- so
+		// anything that scrolls afterwards pushes the banner back off screen.
 		auto banner = std::vector< mcode::tui::styled_line >{ };
 
 		const auto banner_line = [ & ]( const std::string_view text,
@@ -302,7 +301,6 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 		coordinator.queue_block( std::move( banner ) );
 
 		session_tty->write( coordinator.flush( ) );
-		session_tty->write( coordinator.reserve( ) );
 	}
 
 	show_prompt( );
@@ -655,7 +653,7 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 	if ( exiting ) {
 		// Clear before the destructor restores the console, or the shell's prompt lands on it.
 		const auto cleared = mcode::tui::ansi_emitter{ session_tty->caps( ) }
-			.clear_region( mcode::tui::LIVE_REGION_ROWS );
+			.clear_region( coordinator.painted_height( ) );
 
 		session_tty->write( cleared );
 	}

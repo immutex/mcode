@@ -940,3 +940,18 @@ Read the number you were sent to, not the whole file. Each entry states the cons
     worktree add` walks up to an enclosing repository, so a plain directory inside
     one would check out the *wrong project* and appear to succeed. The root is
     confirmed against `git rev-parse --show-toplevel` before anything is created.
+
+118. **The live region's painted height is tracked, never assumed.** The height is
+    dynamic — prompt + status at the floor, plus palette, thought and tool rows —
+    so the coordinator stores what is actually on screen (`painted_rows_`) and
+    starts it at the floor. A larger initial value made `commit` erase and scroll
+    rows the region had never covered, and the first screen opened with a five-row
+    gap under the header. **Nothing may scroll the screen after a commit.**
+    `commit` already scrolls what it wrote clear of the region; any further scroll
+    pushes the committed block back off the top, which is how the startup banner
+    vanished entirely while the code looked correct. The `reserve()` that emitted
+    `screen_rows - 1` newlines is gone for that reason: the region is positioned
+    absolutely by `park`, so it needs no scroll to sit at the bottom, and the
+    cursor is already on the last row when `reserve` would have run. A caller that
+    must erase the region after the last flush asks for `painted_height()` rather
+    than assuming the floor.
