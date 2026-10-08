@@ -1,4 +1,5 @@
 #include "mcode/cli/setup.hxx"
+#include "setup_terminal.hxx"
 #include "setup_detail.hxx"
 
 #include <algorithm>
@@ -21,243 +22,9 @@ namespace mcode::cli {
 
 	namespace {
 
-		using tui::token;
 
 		// A verification turn that never returns is worse than a failed one.
-		inline constexpr std::uint32_t SETUP_READ_TIMEOUT_MS = 300'000;
 		inline constexpr std::int64_t VERIFY_TIMEOUT_MS = 90'000;
-
-		inline constexpr std::size_t RULE_WIDTH = 62;
-		inline constexpr std::size_t MAX_DIGIT_CHOICE = 9;
-
-		// -------------------------------------------------------------------
-		// Presentation. Every colour comes from the shipped theme, resolved at
-		// the depth this terminal supports, so the wizard cannot drift from the
-		// TUI palette and still reads on a 16-colour terminal.
-		// -------------------------------------------------------------------
-
-		class painter {
-		public:
-			explicit painter( const tui::capabilities& caps ) : caps_( caps ) { }
-
-			[[nodiscard]] auto paint( const token colour, const std::string_view text,
-				const bool bold = false ) const -> std::string {
-				const auto code = tui::token_color( colour, caps_.depth );
-
-				if ( code.empty( ) ) {
-					return std::string{ text };
-				}
-
-				auto out = std::string{ "\x1b[0" };
-
-				if ( bold ) {
-					out += ";1";
-				}
-
-				out += ';';
-				out += code;
-				out += 'm';
-				out += text;
-				out += "\x1b[0m";
-
-				return out;
-			}
-
-			[[nodiscard]] auto dim( const std::string_view text ) const -> std::string {
-				return paint( token::muted, text );
-			}
-
-			[[nodiscard]] auto strong( const std::string_view text ) const -> std::string {
-				return paint( token::text, text, true );
-			}
-
-			[[nodiscard]] auto good( const std::string_view text ) const -> std::string {
-				return paint( token::success, text );
-			}
-
-			[[nodiscard]] auto bad( const std::string_view text ) const -> std::string {
-				return paint( token::error, text );
-			}
-
-			[[nodiscard]] auto mark( const std::string_view text ) const -> std::string {
-				return paint( token::accent, text, true );
-			}
-
-			[[nodiscard]] auto accent( const std::string_view text ) const -> std::string {
-				return paint( token::accent, text );
-			}
-
-		private:
-			tui::capabilities caps_;
-		};
-
-		auto write_line( const std::string& text ) -> void {
-			std::fputs( text.c_str( ), stdout );
-			std::fputc( '\n', stdout );
-			std::fflush( stdout );
-		}
-
-		auto blank( ) -> void {
-			std::fputc( '\n', stdout );
-			std::fflush( stdout );
-		}
-
-		// -------------------------------------------------------------------
-		// Input. One reader, so the interactive and scripted paths behave the
-		// same and a closed stdin is reported rather than read as empty.
-		// -------------------------------------------------------------------
-
-		class reader {
-		public:
-			explicit reader( tui::tty_session& terminal ) : terminal_( terminal ) { }
-
-			[[nodiscard]] auto line( const std::string& prompt ) -> std::optional< std::string > {
-				std::fputs( prompt.c_str( ), stdout );
-				std::fflush( stdout );
-
-				auto value = terminal_.read_line( SETUP_READ_TIMEOUT_MS );
-
-				if ( !value ) {
-					blank( );
-				}
-
-				return value;
-			}
-
-			// An arrow-key menu. The highlight starts on `preselected`, so Enter
-			// takes the recommended answer, and a digit jumps straight to a row.
-			[[nodiscard]] auto choose( const std::string& title,
-				const std::vector< std::string >& options,
-				const std::vector< std::string >& notes, const std::size_t preselected )
-				-> std::optional< std::size_t > {
-				auto selected = std::min( preselected, options.size( ) - 1 );
-
-				write_line( title );
-				blank( );
-
-				const auto draw = [&]( ) -> void {
-					for ( auto index = std::size_t{ 0 }; index < options.size( ); ++index ) {
-						const auto active = index == selected;
-						auto row = std::string{ "   " };
-
-						row += active ? accent( ">" ) : " ";
-						row += ' ';
-						row += active ? strong( options[ index ] ) : options[ index ];
-
-						if ( index < notes.size( ) && !notes[ index ].empty( ) ) {
-							row += "  ";
-							row += dim( notes[ index ] );
-						}
-
-						write_line( row );
-					}
-				};
-
-				draw( );
-
-				const auto drawn = options.size( );
-
-				for ( ;; ) {
-					const auto key = terminal_.read_key( SETUP_READ_TIMEOUT_MS );
-
-					if ( key.type == tui::key_event::kind::exit
-						|| key.type == tui::key_event::kind::interrupt ) {
-						return std::nullopt;
-					}
-
-					if ( key.type == tui::key_event::kind::enter ) {
-						return selected;
-					}
-
-					if ( key.type == tui::key_event::kind::timeout ) {
-						continue;
-					}
-
-					if ( key.type == tui::key_event::kind::up ) {
-						if ( selected == 0 ) {
-							continue;
-						}
-
-						--selected;
-					} else if ( key.type == tui::key_event::kind::down ) {
-						if ( selected + 1 >= options.size( ) ) {
-							continue;
-						}
-
-						++selected;
-					} else if ( key.type == tui::key_event::kind::character
-						&& !key.text.empty( ) ) {
-						const auto digit = key.text.front( );
-						const auto limit = static_cast< char >( '0' + MAX_DIGIT_CHOICE );
-
-						if ( digit < '1' || digit > limit ) {
-							continue;
-						}
-
-						const auto index = static_cast< std::size_t >( digit - '1' );
-
-						if ( index >= options.size( ) || index == selected ) {
-							continue;
-						}
-
-						selected = index;
-					} else {
-						continue;
-					}
-
-					// Move back over the menu and repaint it, rather than clearing
-					// the screen, so the banner stays visible.
-					std::fprintf( stdout, "\x1b[%zuA", drawn );
-					std::fflush( stdout );
-
-					draw( );
-				}
-			}
-
-			// A secret is read the same way and simply never echoed back.
-			[[nodiscard]] auto secret( const std::string& prompt )
-				-> std::optional< std::string > {
-				return line( prompt );
-			}
-
-		private:
-			[[nodiscard]] auto styled( const token colour, const std::string_view text,
-				const bool bold ) const -> std::string {
-				const auto code = tui::token_color( colour, terminal_.caps( ).depth );
-
-				if ( code.empty( ) ) {
-					return std::string{ text };
-				}
-
-				auto out = std::string{ "\x1b[0" };
-
-				if ( bold ) {
-					out += ";1";
-				}
-
-				out += ';';
-				out += code;
-				out += 'm';
-				out += text;
-				out += "\x1b[0m";
-
-				return out;
-			}
-
-			[[nodiscard]] auto strong( const std::string_view text ) const -> std::string {
-				return styled( token::text, text, true );
-			}
-
-			[[nodiscard]] auto dim( const std::string_view text ) const -> std::string {
-				return styled( token::muted, text, false );
-			}
-
-			[[nodiscard]] auto accent( const std::string_view text ) const -> std::string {
-				return styled( token::accent, text, true );
-			}
-
-			tui::tty_session& terminal_;
-		};
 
 		// -------------------------------------------------------------------
 		// The provider catalogue. Endpoints and key names mirror the shipped
@@ -328,47 +95,47 @@ namespace mcode::cli {
 		}
 
 		// -------------------------------------------------------------------
-		auto print_banner( const painter& brush, const std::filesystem::path& path ) -> void {
-			blank( );
-			write_line( "  " + brush.mark( "mcode setup" ) );
-			write_line( "  " + brush.dim( "Choose a provider. Writes one file: "
+		auto print_banner( const detail::painter& brush, const std::filesystem::path& path ) -> void {
+			detail::blank( );
+			detail::write_line( "  " + brush.mark( "mcode setup" ) );
+			detail::write_line( "  " + brush.dim( "Choose a provider. Writes one file: "
 				+ path.string( ) ) );
-			blank( );
+			detail::blank( );
 		}
 
-		[[nodiscard]] auto finish( const painter& brush, const detail::model_settings& settings,
+		[[nodiscard]] auto finish( const detail::painter& brush, const detail::model_settings& settings,
 			const std::filesystem::path& path, const bool verified,
 			const bool have_key ) -> int {
-			blank( );
-			write_line( "  " + brush.dim( std::string( RULE_WIDTH, '-' ) ) );
-			blank( );
-			write_line( "  " + brush.good( "wrote" ) + "  " + path.string( ) );
-			write_line( "  " + brush.dim( "provider  " ) + settings.provider );
-			write_line( "  " + brush.dim( "model     " ) + settings.model );
+			detail::blank( );
+			detail::write_line( "  " + brush.dim( std::string( detail::RULE_WIDTH, '-' ) ) );
+			detail::blank( );
+			detail::write_line( "  " + brush.good( "wrote" ) + "  " + path.string( ) );
+			detail::write_line( "  " + brush.dim( "provider  " ) + settings.provider );
+			detail::write_line( "  " + brush.dim( "model     " ) + settings.model );
 
 			if ( !settings.base_url.empty( ) ) {
-				write_line( "  " + brush.dim( "endpoint  " ) + settings.base_url );
+				detail::write_line( "  " + brush.dim( "endpoint  " ) + settings.base_url );
 			}
 
-			write_line( "  " + brush.dim( "key from  " ) + settings.api_key_env
+			detail::write_line( "  " + brush.dim( "key from  " ) + settings.api_key_env
 				+ ( verified ? brush.good( "  verified" ) : std::string{ } ) );
-			blank( );
+			detail::blank( );
 
 			if ( !have_key ) {
-				write_line( "  " + brush.strong( "Next" ) + "  export "
+				detail::write_line( "  " + brush.strong( "Next" ) + "  export "
 					+ brush.accent( settings.api_key_env ) + "=your-key" );
 			}
 
-			write_line( "  " + brush.strong( "Next" ) + "  run " + brush.mark( "mcode" ) );
-			blank( );
+			detail::write_line( "  " + brush.strong( "Next" ) + "  run " + brush.mark( "mcode" ) );
+			detail::blank( );
 
 			return 0;
 		}
 
-		[[nodiscard]] auto cancelled( const painter& brush ) -> int {
-			blank( );
-			write_line( "  " + brush.dim( "cancelled; nothing was written" ) );
-			blank( );
+		[[nodiscard]] auto cancelled( const detail::painter& brush ) -> int {
+			detail::blank( );
+			detail::write_line( "  " + brush.dim( "cancelled; nothing was written" ) );
+			detail::blank( );
 
 			return 1;
 		}
@@ -376,7 +143,7 @@ namespace mcode::cli {
 		// Scripted: every value comes from a flag, and a missing one is a hard
 		// failure rather than a silent default.
 		[[nodiscard]] auto run_scripted( const std::vector< std::string >& arguments,
-			const painter& brush ) -> int {
+			const detail::painter& brush ) -> int {
 			auto provider = std::string{ };
 			auto model = std::string{ };
 			auto base_url = std::string{ };
@@ -465,7 +232,7 @@ namespace mcode::cli {
 				}
 			}
 
-			write_line( brush.good( "wrote" ) + " " + path.string( ) );
+			detail::write_line( brush.good( "wrote" ) + " " + path.string( ) );
 
 			return 0;
 		}
@@ -508,12 +275,12 @@ namespace mcode::cli {
 			auto plain = tui::capabilities{ };
 			plain.depth = tui::capabilities::color_depth::none;
 
-			const auto brush = painter{ plain };
+			const auto brush = detail::painter{ plain };
 
 			return run_scripted( arguments, brush );
 		}
 
-		const auto brush = painter{ terminal->caps( ) };
+		const auto brush = detail::painter{ terminal->caps( ) };
 
 		// An explicit flag also takes the scripted path, so a setup script never
 		// waits on a prompt it cannot answer.
@@ -523,12 +290,12 @@ namespace mcode::cli {
 			}
 		}
 
-		auto input = reader{ *terminal };
+		auto input = detail::reader{ *terminal };
 
 		const auto path = detail::config_path( );
 
 		if ( path.empty( ) ) {
-			write_line( brush.bad( "  no configuration directory is available" ) );
+			detail::write_line( brush.bad( "  no configuration directory is available" ) );
 
 			return 2;
 		}
@@ -550,7 +317,7 @@ namespace mcode::cli {
 		}
 
 		const auto& entry = detail::PROVIDERS[ *chosen ];
-		blank( );
+		detail::blank( );
 
 		auto base_url = std::string{ entry.base_url };
 
@@ -567,9 +334,9 @@ namespace mcode::cli {
 		}
 
 		if ( base_url.empty( ) ) {
-			blank( );
-			write_line( "  " + brush.bad( "a base URL is required for this provider" ) );
-			blank( );
+			detail::blank( );
+			detail::write_line( "  " + brush.bad( "a base URL is required for this provider" ) );
+			detail::blank( );
 
 			return 2;
 		}
@@ -586,9 +353,9 @@ namespace mcode::cli {
 			}
 
 			if ( entered->empty( ) ) {
-				blank( );
-				write_line( "  " + brush.bad( "a model id is required" ) );
-				blank( );
+				detail::blank( );
+				detail::write_line( "  " + brush.bad( "a model id is required" ) );
+				detail::blank( );
 
 				return 2;
 			}
@@ -611,7 +378,7 @@ namespace mcode::cli {
 			model = models[ *picked ];
 		}
 
-		blank( );
+		detail::blank( );
 
 		const auto key_env = std::string{ entry.api_key_env };
 		auto api_key = std::string{ };
@@ -620,10 +387,10 @@ namespace mcode::cli {
 		if ( from_environment != nullptr && *from_environment != '\0' ) {
 			api_key = from_environment;
 
-			write_line( "  " + brush.strong( "API key" ) + "  "
+			detail::write_line( "  " + brush.strong( "API key" ) + "  "
 				+ brush.good( "found " + key_env + " in the environment" ) );
 		} else {
-			write_line( "  " + brush.strong( "API key" ) + "  "
+			detail::write_line( "  " + brush.strong( "API key" ) + "  "
 				+ brush.dim( "read from " + key_env + ", never written to disk" ) );
 
 			const auto entered = input.secret( "  " + brush.dim( "paste it to verify now, "
@@ -638,7 +405,7 @@ namespace mcode::cli {
 			api_key = *entered;
 		}
 
-		blank( );
+		detail::blank( );
 
 		const auto settings = detail::model_settings{ std::string{ entry.descriptor }, model,
 			base_url, key_env };
@@ -649,9 +416,9 @@ namespace mcode::cli {
 
 		if ( !detail::write_text_file( path, detail::splice_section( previous.value_or( std::string{ } ),
 			detail::render_section( settings ) ) ) ) {
-			blank( );
-			write_line( "  " + brush.bad( "could not write " + path.string( ) ) );
-			blank( );
+			detail::blank( );
+			detail::write_line( "  " + brush.bad( "could not write " + path.string( ) ) );
+			detail::blank( );
 
 			return 2;
 		}
@@ -659,20 +426,20 @@ namespace mcode::cli {
 		auto verified = false;
 
 		if ( api_key.empty( ) ) {
-			write_line( "  " + brush.dim( "skipped verification; " + key_env
+			detail::write_line( "  " + brush.dim( "skipped verification; " + key_env
 				+ " is not set" ) );
 		} else {
-			write_line( "  " + brush.dim( "checking the provider with a real turn..." ) );
+			detail::write_line( "  " + brush.dim( "checking the provider with a real turn..." ) );
 
 			const auto checked = verify( settings, api_key );
 
 			if ( checked.ok ) {
 				verified = true;
 
-				write_line( "  " + brush.good( "ok" ) + "  the provider answered" );
+				detail::write_line( "  " + brush.good( "ok" ) + "  the provider answered" );
 			} else {
-				write_line( "  " + brush.bad( "failed" ) + "  " + checked.detail );
-				blank( );
+				detail::write_line( "  " + brush.bad( "failed" ) + "  " + checked.detail );
+				detail::blank( );
 
 				const auto keep = input.choose( "  " + brush.strong( "Keep the config?" ),
 					{ "Keep it and fix the key later", "Undo and start over" },
@@ -684,7 +451,7 @@ namespace mcode::cli {
 					// half-configured and the user has to be told.
 					if ( previous ) {
 						if ( !detail::write_text_file( path, *previous ) ) {
-							write_line( "  " + brush.bad( "could not restore "
+							detail::write_line( "  " + brush.bad( "could not restore "
 								+ path.string( ) ) );
 						}
 					} else {
