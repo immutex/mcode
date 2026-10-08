@@ -147,6 +147,7 @@ add_library(mcode_core STATIC
     mcode/cli/setup.cxx
     mcode/cli/setup_detail.cxx
     mcode/cli/slash.cxx
+    mcode/cli/slash_palette.cxx
 )
 
 target_include_directories(mcode_core
