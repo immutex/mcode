@@ -121,6 +121,7 @@ add_library(mcode_core STATIC
 
     mcode/agent/event_log.cxx
     mcode/agent/loop.cxx
+    mcode/agent/loop_dispatch.cxx
     mcode/agent/loop_tools.cxx
     mcode/agent/loop_context.cxx
     mcode/agent/message_json.cxx
