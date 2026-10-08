@@ -244,17 +244,6 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 			engine_options.yolo = false;
 		}
 
-		// The permissive default is only defensible if the user is told what still holds. The
-		// disclaimer names the real boundary - the hard-deny floor and the deny rules, which
-		// are decided ahead of the approval mode - rather than claiming the mode is safe.
-		if ( interactive && engine_options.approval == "never" && !parsed.plan ) {
-			std::fputs(
-				"mcode: approval = never: edits and commands run without prompting. "
-				"The hard-deny floor and permissions.deny still apply. "
-				"Use --ask to be prompted, --plan to stay read-only.\n",
-				stderr );
-		}
-
 		parts->engine->set_options( engine_options );
 
 		// The engine's null-source path denies every ask, which would refuse every tool call.

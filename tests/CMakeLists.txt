@@ -23,6 +23,8 @@ add_executable(mcode_tests
     test_config_and_platform.cxx
     test_mcp_config.cxx
     test_event_log.cxx
+    test_repetition_guard.cxx
+    test_message_json.cxx
     test_loop.cxx
     test_loop_history.cxx
     test_loop_events.cxx

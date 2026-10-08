@@ -10,6 +10,7 @@
 #include <string>
 
 #include "mcode/agent/loop.hxx"
+#include "mcode/agent/message_json.hxx"
 #include "mcode/fs/workspace.hxx"
 #include "mcode/platform/seams.hxx"
 #include "mcode/proc/process.hxx"
@@ -551,6 +552,8 @@ namespace mcode::cli {
 		-> std::string {
 		// Read before the marker is appended: this is what was on disk, not what this run adds.
 		const auto restored_events = resumed ? log.size( ) : std::size_t{ 0 };
+		const auto restored_messages = resumed ? restore_transcript( log ).size( )
+			: std::size_t{ 0 };
 
 		auto payload = std::string{ "{\"id\":\"" };
 		json::append_escaped( payload, session.id );
@@ -560,6 +563,8 @@ namespace mcode::cli {
 		payload += resumed ? "true" : "false";
 		payload += ",\"restored_events\":";
 		payload += std::to_string( restored_events );
+		payload += ",\"restored_messages\":";
+		payload += std::to_string( restored_messages );
 		payload += "}";
 
 		log.append( std::string{ resumed ? SESSION_RESUME_EVENT : SESSION_START_EVENT },
@@ -576,14 +581,85 @@ namespace mcode::cli {
 			return report;
 		}
 
-		// The one thing a resume cannot carry is spelled out here: the log holds tool
-		// activity, so the model's own transcript is not in it and the turn starts empty.
 		report += " resumed with ";
 		report += std::to_string( restored_events );
-		report += " recorded events; the event log is restored, the model's conversation "
-			"history is not, so this turn starts from an empty transcript\n";
+		report += " recorded events and ";
+		report += std::to_string( restored_messages );
+		report += restored_messages == 0
+			? " messages; this session predates transcript recording, so the turn starts "
+				"from an empty history\n"
+			: " messages; the transcript is carried into this turn\n";
 
 		return report;
+	}
+
+	// Rebuilds the conversation from a session log. Only the events that carry a
+	// message or a tool output contribute; the activity events (`tool.call`,
+	// `run.end`, `session.*`) are diagnostics and are not part of the transcript.
+	//
+	// A tool output is attached to the assistant message that requested it, which
+	// is where the model expects it: the loop records the assistant message
+	// before dispatch, so the outputs follow it in the log.
+	[[nodiscard]] auto restore_transcript( const event_log& log )
+		-> std::vector< model::message > {
+		auto history = std::vector< model::message >{ };
+
+		for ( const auto& recorded : log.events( ) ) {
+			if ( recorded.kind == mcode::agent::MESSAGE_USER_EVENT
+				|| recorded.kind == mcode::agent::MESSAGE_ASSISTANT_EVENT ) {
+				auto message = mcode::agent::message_from_json( recorded.payload_json );
+
+				if ( message ) {
+					history.push_back( std::move( *message ) );
+				}
+
+				continue;
+			}
+
+			if ( recorded.kind != mcode::agent::TOOL_RESULT_EVENT ) {
+				continue;
+			}
+
+			auto document = json::document::parse( recorded.payload_json );
+
+			if ( !document ) {
+				continue;
+			}
+
+			auto content = document->get_string( "content" );
+
+			if ( !content ) {
+				continue;
+			}
+
+			// The result rides on the last assistant message, as a tool block
+			// carrying the id the call used.
+			if ( history.empty( ) ) {
+				continue;
+			}
+
+			auto& last = history.back( );
+
+			if ( last.speaker != model::role::assistant ) {
+				continue;
+			}
+
+			for ( auto& block : last.blocks ) {
+				if ( block.kind != model::block_kind::tool_call ) {
+					continue;
+				}
+
+				auto result = model::block{ };
+				result.kind = model::block_kind::tool_result;
+				result.tool_call_id = block.tool_call_id;
+				result.result_json = *content;
+				last.blocks.push_back( std::move( result ) );
+
+				break;
+			}
+		}
+
+		return history;
 	}
 
 	// Creates a git worktree beside the checkout and returns its path. The worktree is the

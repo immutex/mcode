@@ -128,6 +128,12 @@ namespace mcode::cli {
 	auto start_session_log( event_log& log, const session_ref& session, bool resumed )
 		-> std::string;
 
+	// Rebuilds the conversation from a session log, for `--continue`, `--resume`
+	// and `/resume`. Events that carry no message (tool calls, run markers) are
+	// diagnostics and contribute nothing.
+	[[nodiscard]] auto restore_transcript( const event_log& log )
+		-> std::vector< model::message >;
+
 	// One line per known session (id, start time, size) on stdout, ending in a
 	// `resume with` hint. Exits 0 even when the workspace has no sessions yet; a
 	// usage error when the state directory cannot be resolved.

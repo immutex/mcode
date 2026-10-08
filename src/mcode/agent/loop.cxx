@@ -1,6 +1,7 @@
 #include "mcode/agent/loop.hxx"
 
 #include "mcode/agent/loop_internal.hxx"
+#include "mcode/agent/message_json.hxx"
 
 #include <algorithm>
 #include <atomic>
@@ -8,6 +9,7 @@
 #include <fstream>
 #include <map>
 
+#include "mcode/perm/permission.hxx"
 #include "mcode/support/json.hxx"
 #include "mcode/support/time.hxx"
 #include "mcode/tools/tool_args.hxx"
@@ -190,6 +192,11 @@ namespace mcode {
 		auto assistant = model::message{ };
 		assistant.speaker = model::role::assistant;
 
+		// Kept before the local is moved out: the repetition guard reads the
+		// prose of this response, and the whole message is discarded if it turns
+		// out to be a loop.
+		last_response_text_ = text;
+
 		if ( !text.empty( ) ) {
 			auto block = model::block{ };
 			block.kind = model::block_kind::text;
@@ -226,7 +233,56 @@ namespace mcode {
 
 		history_.push_back( std::move( assistant ) );
 
+		if ( log_ != nullptr ) {
+			log_->append( std::string{ agent::MESSAGE_ASSISTANT_EVENT }, agent::message_to_json( history_.back( ) ) );
+		}
+
 		return !calls.empty( );
+	}
+
+	// A response that repeated itself is discarded and re-asked with a corrective
+	// steer, rather than finishing the run. Stopping on a thinking loop throws
+	// away a task the model was usually one step from completing; the loop is a
+	// symptom, and a short action-oriented nudge breaks it far more cheaply than
+	// a restart.
+	//
+	// The steer budget is hard. Once it is spent this returns false and the
+	// caller takes its normal path, so the guard cannot itself become a loop.
+	auto agent_loop::steer_repetition( const agent::repetition_verdict& verdict ) -> bool {
+		if ( repetition_steers_ >= agent::MAX_REPETITION_STEERS ) {
+			return false;
+		}
+
+		++repetition_steers_;
+
+		// The looping assistant message is dropped, not kept: it is the exact
+		// context that caused the loop, and re-sending it invites the same
+		// output. This is the one place the harness removes history it produced.
+		if ( !history_.empty( ) && history_.back( ).speaker == model::role::assistant ) {
+			history_.pop_back( );
+		}
+
+		auto steer = model::message{ };
+		steer.speaker = model::role::user;
+
+		auto block = model::block{ };
+		block.kind = model::block_kind::text;
+		block.text = std::string{ agent::REPETITION_STEER };
+		steer.blocks.push_back( std::move( block ) );
+
+		history_.push_back( std::move( steer ) );
+
+		auto payload = std::string{ "{\"repeated_characters\":" };
+		payload += std::to_string( verdict.repeated_characters );
+		payload += ",\"steer\":";
+		payload += std::to_string( repetition_steers_ );
+		payload += ",\"of\":";
+		payload += std::to_string( agent::MAX_REPETITION_STEERS );
+		payload += "}";
+
+		publish( events::kind::assistant_thinking, std::move( payload ) );
+
+		return true;
 	}
 
 	auto agent_loop::dispatch_pending( ) -> void {
@@ -355,6 +411,17 @@ namespace mcode {
 		}
 	}
 
+	// A restored transcript replaces the history outright. It is not appended to:
+	// a resumed session continues one conversation, and merging two would send
+	// the model a transcript it never produced.
+	auto agent_loop::seed_history( std::vector< model::message > restored ) -> void {
+		history_ = std::move( restored );
+	}
+
+	auto agent_loop::approval_mode( ) const noexcept -> std::string_view {
+		return permissions_ != nullptr ? permissions_->approval_mode( ) : std::string_view{ };
+	}
+
 	auto agent_loop::run( const std::string_view user_task ) -> result< turn_outcome > {
 		user_task_ = std::string{ user_task };
 		visited_.clear( );
@@ -376,6 +443,9 @@ namespace mcode {
 		run_usage_ = model::usage{ };
 		replan_count_ = 0;
 		last_failure_repeats_ = 0;
+		previous_texts_.clear( );
+		repetition_steers_ = 0;
+		last_response_text_.clear( );
 
 		// A fresh capture group per run, so /undo undoes this run and not the previous one.
 		mint_run_id( );
@@ -389,6 +459,13 @@ namespace mcode {
 		task_message.blocks.push_back( std::move( task_block ) );
 
 		history_.push_back( std::move( task_message ) );
+
+		// The conversation is what makes a session resumable, so it is recorded.
+		// Without this the log says a tool ran but never what was asked or
+		// answered, and `--continue` restores a sequence number, not a session.
+		if ( log_ != nullptr && !history_.empty( ) ) {
+			log_->append( std::string{ agent::MESSAGE_USER_EVENT }, agent::message_to_json( history_.back( ) ) );
+		}
 
 		return run_state_machine( );
 	}
@@ -474,6 +551,22 @@ namespace mcode {
 						state_ = loop_state::handoff;
 
 						break;
+					}
+
+					// A thinking loop is checked before the response is used. The
+					// guard discards the looping message and re-asks with a short
+					// steer, so the run continues instead of ending on a symptom.
+					// When the steer budget is spent the verdict is ignored and the
+					// response is processed normally.
+					if ( const auto verdict = agent::detect_repetition( last_response_text_,
+						previous_texts_ ); verdict.looped ) {
+						if ( steer_repetition( verdict ) ) {
+							break;
+						}
+					}
+
+					if ( !last_response_text_.empty( ) ) {
+						previous_texts_.push_back( last_response_text_ );
 					}
 
 					if ( *acted ) {

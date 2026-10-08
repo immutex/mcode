@@ -120,6 +120,8 @@ add_library(mcode_core STATIC
     mcode/agent/loop.cxx
     mcode/agent/loop_tools.cxx
     mcode/agent/loop_context.cxx
+    mcode/agent/message_json.cxx
+    mcode/agent/repetition_guard.cxx
 
     mcode/tui/cell.cxx
     mcode/tui/tty.cxx

@@ -1,5 +1,7 @@
 #include "mcode/agent/loop.hxx"
 
+#include "mcode/agent/message_json.hxx"
+
 #include <chrono>
 #include <filesystem>
 #include <string>
@@ -370,13 +372,21 @@ namespace mcode {
 		permission_denied_ = false;
 
 		{
-			auto payload = std::string{ "{\"ok\":true,\"tool\":\"" };
-			json::append_escaped( payload, call.name );
-			payload += "\",\"source\":\"";
-			payload += to_string( definition->source );
-			payload += "\"}";
+			// One session record, carrying the output: a resumed session needs what
+			// the tool returned, not only that it succeeded. The stream payload is
+			// unchanged, because `exec --json` consumers and the eval suite parse
+			// that shape and a session record is not a stream event.
+			auto recorded = std::string{ "{\"ok\":true,\"tool\":\"" };
+			json::append_escaped( recorded, call.name );
+			recorded += "\",\"source\":\"";
+			recorded += to_string( definition->source );
+			recorded += "\",\"content\":\"";
+			json::append_escaped( recorded, outcome.content );
+			recorded += "\"}";
 
-			log_->append( "tool.result", payload );
+			auto payload = recorded;
+
+			log_->append( std::string{ agent::TOOL_RESULT_EVENT }, std::move( recorded ) );
 			publish( events::kind::tool_result, std::move( payload ) );
 		}
 

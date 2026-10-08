@@ -139,11 +139,14 @@ C++23 mapping: state machine as a plain `enum class` + `switch` in one function 
 
 ## Traps
 
+- **Stopping on a thinking loop instead of breaking it.** A model that repeats itself is usually one step from finishing, so aborting the run throws the task away and a restart re-pays for the whole context. The loop is a symptom; a short action-oriented steer breaks it far more cheaply. mcode discards the looping message, appends `"You repeated yourself without making progress. Stop describing the next step and do it now."`, and re-asks — twice at most, then the normal failure path. Detection is exact contiguous repetition (a periodic tail) or a near-duplicate of the previous turn; both are conservative because a false positive discards a good answer.
+- **A fuzzy loop signal.** An early-warning threshold — shingle novelty, block repeat, fractional period — false-triggers on legitimate long structured thinking, where exact contiguous repetition never does. pi-repetition-guard shipped a two-stage design, measured every early signal against real content, and collapsed it to the single exact one. Do not add a fuzzy pre-stage back.
 - **Reflection loops**: Reflect→Act→same failure→Reflect… Without the "same failure 2× → Replan" edge, reflection becomes the thrash. Cap reflection per failure class, not just per run.
 - **Context rot from full history**: SWE-agent's full-history ablation lost 3pp. Summarize or window observations; never let tool output exceed a per-event token cap.
 - **Self-generated tests as ground truth**: 16% false-positive rate (Reflexion/MBPP). Generated tests rank candidates; repo tests decide.
 - **Goodhart against your own verifier**: best-of-N against an LLM judge over-optimizes the judge, not correctness (arXiv:2210.10760). Cap judge rounds; prefer mechanical signals.
 - **Silent budget death**: killing the loop at max_turns without emitting partial state loses all work. Always land in Handoff with a resumable event log.
+- **A log that records activity but not conversation.** mcode's first session log held tool names and pass/fail flags, so `--continue` restored a sequence number and the model started from an empty history. A resumable session needs the messages themselves.
 - **Plan churn**: re-planning every k steps lets the model undo committed work. Re-plan only on guard triggers, and diff new plan against old — reject plans that revisit completed steps.
 - **Over-parallel loops**: ToT-style branching in the main loop costs 5–100× tokens for gains only when intermediate states are verifiable. Keep search in the optional selection phase.
 - **Reasoning-model double-think**: DeepSeek-R1-class models already emit self-verification internally; layering a harness-side Reflect state on them doubles cost for ~no gain. Gate Reflect off when the provider reports `reasoning_content`.
@@ -175,3 +178,5 @@ C++23 mapping: state machine as a plain `enum class` + `switch` in one function 
 - ReWOO — https://arxiv.org/abs/2305.18323 (abstract fetched)
 - mini-SWE-agent — https://github.com/swe-agent/mini-swe-agent; https://www.swebench.com/ (fetched)
 - Claude Code agent loop docs — https://code.claude.com/docs/en/agent-sdk/agent-loop (search-verified)
+- pi-repetition-guard — https://pi.dev/packages/@capdiem/pi-repetition-guard (fetched). The two-stage-to-single-signal collapse, the action-oriented steer wording, the retry budget of 2, and the measured root cause (a long-context tracking failure, not a sampling bug) all come from this package's README.
+- Infinite Agentic Loops in LLM Agents — https://arxiv.org/html/2607.01641v1 (HTML full text fetched). IALs as feedback paths without an effective bound; the case for a bound that covers the path rather than merely existing near it.

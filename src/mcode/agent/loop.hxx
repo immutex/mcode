@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "mcode/agent/repetition_guard.hxx"
 #include "mcode/core/error.hxx"
 #include "mcode/core/registry.hxx"
 #include "mcode/events/bus.hxx"
@@ -403,6 +404,15 @@ namespace mcode {
 			return history_;
 		}
 
+		// Replaces the conversation with a restored one, for `--continue` and
+		// `/resume`. The transcript is carried into the next turn so the model
+		// continues the work rather than starting from an empty history.
+		auto seed_history( std::vector< model::message > restored ) -> void;
+
+		// The approval mode the engine is running under (`never`, `on-request`,
+		// `always`), for a UI that has to state it. Empty when no engine is wired.
+		[[nodiscard]] auto approval_mode( ) const noexcept -> std::string_view;
+
 		// The project instruction chain the session loaded; empty when none was found.
 		[[nodiscard]] auto instruction_chain( ) const noexcept -> std::string_view {
 			return instruction_chain_;
@@ -486,6 +496,20 @@ namespace mcode {
 		std::string last_failure_;
 		std::string last_failure_class_;
 		std::string end_reason_;
+
+		// Repetition-loop guard. `previous_texts_` is the assistant prose of this
+		// run, used for the cross-turn comparison; it is cleared with the run.
+		std::vector< std::string > previous_texts_;
+		std::size_t repetition_steers_ = 0;
+
+		// The assistant text of the response that was just folded, before the
+		// guard possibly discards it.
+		std::string last_response_text_;
+
+		// Discards the last assistant message and re-asks with a corrective
+		// steer. Returns false when the steer budget is spent, so the caller
+		// falls through to its normal failure handling rather than looping.
+		[[nodiscard]] auto steer_repetition( const agent::repetition_verdict& verdict ) -> bool;
 
 		// the provider's own finish reason for the last response, and whether it means cut off.
 		std::string stop_reason_;

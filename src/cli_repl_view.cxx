@@ -18,8 +18,14 @@ namespace {
 
 	// The verb reflects what the turn is doing right now, read from the same
 	// state the frame is built from. The renderer appends the ellipsis.
-	[[nodiscard]] auto activity_verb( const mcode::tui::render_coordinator& coordinator )
-		-> std::string {
+	//
+	// The last case is the one that makes the harness feel alive: between
+	// submitting and the first delta the model is thinking but nothing has
+	// arrived, and every other signal is empty. Reporting nothing there left a
+	// silent gap that reads as a hang, so the turn is asked whether it is still
+	// running and the answer is `Waiting`.
+	[[nodiscard]] auto activity_verb( const mcode::tui::render_coordinator& coordinator,
+		const bool turn_running ) -> std::string {
 		const auto& state = coordinator.state( );
 
 		if ( !state.tools.empty( ) ) {
@@ -32,6 +38,10 @@ namespace {
 
 		if ( !state.thinking_text.empty( ) ) {
 			return "Thinking";
+		}
+
+		if ( turn_running ) {
+			return "Waiting";
 		}
 
 		return { };
@@ -52,7 +62,13 @@ auto refresh( mcode::tui::render_coordinator& coordinator, const mcode::agent_lo
 	coordinator.set_meter( std::string{ loop.model_name( ) }, budget.tokens_used,
 		budget.usd_used, elapsed );
 	coordinator.set_context( loop.context_used( ), loop.context_capacity( ) );
-	coordinator.set_activity( activity_verb( coordinator ) );
+
+	// A non-default start time is exactly "a turn is in flight": the REPL sets it
+	// when it submits and clears it when the turn settles, so no extra state is
+	// needed to tell a quiet moment from a busy one.
+	const auto turn_running = turn_started != std::chrono::steady_clock::time_point{ };
+
+	coordinator.set_activity( activity_verb( coordinator, turn_running ) );
 }
 
 auto key_scroll_rows( const mcode::tui::tty_session& session_tty,

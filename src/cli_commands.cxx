@@ -372,17 +372,6 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 			engine_options.yolo = false;
 		}
 
-		// The permissive default is only defensible if the user is told what still holds. The
-		// disclaimer names the real boundary - the hard-deny floor and the deny rules, which
-		// are decided ahead of the approval mode - rather than claiming the mode is safe.
-		if ( interactive && engine_options.approval == "never" && !parsed->plan ) {
-			std::fputs(
-				"mcode: approval = never: edits and commands run without prompting. "
-				"The hard-deny floor and permissions.deny still apply. "
-				"Use --ask to be prompted, --plan to stay read-only.\n",
-				stderr );
-		}
-
 		engine.set_options( engine_options );
 		engine.set_approval_source( interactive
 			? static_cast< mcode::perm::approval_source* >( &terminal_source )
@@ -519,6 +508,21 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	auto mcp_servers = mcode::mcp::server_set{ };
 
 	auto loop = mcode::agent_loop{ dependencies };
+
+	// A resumed session continues its conversation. The transcript is rebuilt from
+	// the log and seeded before the turn runs, so the model picks up where it left
+	// off instead of starting from an empty history.
+	if ( resumed ) {
+		auto restored = mcode::cli::restore_transcript( log );
+
+		if ( !restored.empty( ) ) {
+			const auto carried = restored.size( );
+
+			loop.seed_history( std::move( restored ) );
+
+			std::fprintf( stderr, "mcode: carried %zu message(s) into this turn\n", carried );
+		}
+	}
 
 	for ( auto& [ name, handler ] : sink.take( ) ) {
 		loop.register_handler( name, std::move( handler ) );

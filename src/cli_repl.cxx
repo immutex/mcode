@@ -8,6 +8,7 @@
 #include "cli_session.hxx"
 #include "mcode/cli/repl.hxx"
 #include "mcode/core/registry.hxx"
+#include "mcode/core/version.hxx"
 #include "mcode/events/bus.hxx"
 #include "mcode/ext/hooks.hxx"
 #include "mcode/ext/loader.hxx"
@@ -262,6 +263,45 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 	{
 		const auto held = std::lock_guard< std::mutex >{ render_gate };
 
+		// The header is committed before the region is reserved, so it lands in
+		// scrollback as the first thing in the session rather than scrolling away
+		// with the first turn. It also fills the rows that `reserve` would
+		// otherwise leave blank: pushing the region to the bottom with bare
+		// newlines is what made the opening screen read as empty space.
+		auto banner = std::vector< mcode::tui::styled_line >{ };
+
+		const auto banner_line = [ & ]( const std::string_view text,
+			const mcode::tui::token color ) {
+			auto line = mcode::tui::styled_line{ };
+			line.push_back( { std::string{ text }, color, mcode::tui::token::none,
+				false, false, false } );
+			banner.push_back( std::move( line ) );
+		};
+
+		banner_line( "", mcode::tui::token::none );
+		banner_line( "   mcode " + std::string{ mcode::VERSION },
+			mcode::tui::token::accent );
+		banner_line( "   " + std::string{ mcode::PLATFORM } + ", "
+			+ std::string{ mcode::COMPILER }, mcode::tui::token::muted );
+		banner_line( "", mcode::tui::token::none );
+
+		// The approval boundary is stated here rather than on stderr before the
+		// session starts, where it scrolled out of sight. A permissive default is
+		// only defensible if what still holds is visible while it holds.
+		if ( loop.approval_mode( ) == "never" ) {
+			banner_line( "   edits and commands run without prompting", mcode::tui::token::warn );
+			banner_line( "   the hard-deny floor and permissions.deny still apply",
+				mcode::tui::token::muted );
+		}
+
+		banner_line( "", mcode::tui::token::none );
+		banner_line( "   /help for commands, @ to mention a file, Ctrl+C to interrupt",
+			mcode::tui::token::muted );
+		banner_line( "", mcode::tui::token::none );
+
+		coordinator.queue_block( std::move( banner ) );
+
+		session_tty->write( coordinator.flush( ) );
 		session_tty->write( coordinator.reserve( ) );
 	}
 

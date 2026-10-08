@@ -112,6 +112,11 @@ namespace mcode::perm {
 		auto set_approval_source( approval_source* source ) -> void;
 		auto set_options( const options& value ) -> void;
 
+		// The mode the engine is running under, for a UI that has to state it.
+		[[nodiscard]] auto approval_mode( ) const noexcept -> std::string_view {
+			return options_.approval;
+		}
+
 		// project scope can only add ask/deny, enforced at merge, so this is honoured as written.
 		auto add_config_rules( const rule_scope scope,
 			const std::vector< std::string >& deny,
