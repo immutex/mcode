@@ -251,6 +251,25 @@ namespace mcode::cli {
 		return detail::splice_section( existing, detail::render_section( settings ) );
 	}
 
+	// The flag set `run_setup` accepts. One list, so the interactive and
+	// scripted paths cannot disagree about what is known.
+	[[nodiscard]] auto is_setup_flag( const std::string_view argument ) -> bool {
+		for ( const auto* known : { "--provider", "--model", "--base-url",
+			"--api-key-env", "--api-key", "--no-verify", "--yes" } ) {
+			if ( argument == known ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	[[nodiscard]] auto setup_flag_takes_value( const std::string_view argument ) -> bool {
+		return argument == "--provider" || argument == "--model"
+			|| argument == "--base-url" || argument == "--api-key-env"
+			|| argument == "--api-key";
+	}
+
 	auto setup_usage_text( ) -> std::string {
 		auto out = std::string{ "usage: mcode setup [options]\n\n" };
 		out += "With no options, runs an interactive wizard.\n\n";
@@ -281,6 +300,28 @@ namespace mcode::cli {
 		}
 
 		const auto brush = detail::painter{ terminal->caps( ) };
+
+		// Every flag is checked before the path is chosen, so an unrecognised one
+		// is refused on a terminal too. It used to be dropped here and reported
+		// only when stdout was redirected, which made `mcode setup --bogus` a
+		// usage error in a script and a silent no-op interactively.
+		for ( auto index = std::size_t{ 0 }; index < arguments.size( ); ++index ) {
+			const auto& argument = arguments[ index ];
+
+			if ( !is_setup_flag( argument ) ) {
+				std::fprintf( stderr, "mcode: unknown setup option '%s'\n\n",
+					argument.c_str( ) );
+				std::fputs( setup_usage_text( ).c_str( ), stderr );
+
+				return 2;
+			}
+
+			// The value of a flag that takes one is not itself a flag, so it is
+			// stepped over rather than tested against the set.
+			if ( setup_flag_takes_value( argument ) ) {
+				++index;
+			}
+		}
 
 		// An explicit flag also takes the scripted path, so a setup script never
 		// waits on a prompt it cannot answer.
