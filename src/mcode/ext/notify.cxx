@@ -39,7 +39,7 @@ namespace mcode::ext {
 
 		auto level = std::string{ "info" };
 
-		if ( lua_type( state, 2 ) != LUA_TNIL ) {
+		if ( !argument_absent( state, 2 ) ) {
 			if ( lua_type( state, 2 ) != LUA_TSTRING ) {
 				lua_pushliteral( state, "mcode.notify: the level must be a string or "
 					"nil" );

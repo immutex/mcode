@@ -162,7 +162,7 @@ namespace mcode::ext {
 			lua_error( state );
 		}
 
-		if ( lua_type( state, 3 ) != LUA_TNIL && lua_type( state, 3 ) != LUA_TTABLE ) {
+		if ( !argument_absent( state, 3 ) && lua_type( state, 3 ) != LUA_TTABLE ) {
 			lua_pushliteral( state, "mcode.cmd.register: opts must be a table or nil" );
 			lua_error( state );
 		}
