@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <cctype>
 #include <string>
 #include <vector>
 
@@ -101,6 +102,23 @@ TEST_CASE( "the cross-turn signal ignores short and distinct turns", "[agent][gu
 
 		CHECK_FALSE( detect_repetition( second, { first } ).looped );
 	}
+}
+
+// The cross-turn signal compares two normalized strings. Comparing a normalized
+// one against a raw one made it dead: a verbatim repeat that differed only in
+// whitespace and case measured 0.885 against a 0.90 threshold and never fired.
+TEST_CASE( "a repeat that differs only in spacing and case still fires",
+	"[agent][guard]" ) {
+	const auto first = ordinary_thinking( );
+	auto second = std::string{ };
+
+	for ( const auto character : first ) {
+		// Same words, different whitespace and case.
+		second.push_back( character == ' ' ? '\n' : static_cast< char >( std::toupper(
+			static_cast< unsigned char >( character ) ) ) );
+	}
+
+	CHECK( detect_repetition( second, { first } ).looped );
 }
 
 TEST_CASE( "normalization collapses whitespace and case only", "[agent][guard]" ) {

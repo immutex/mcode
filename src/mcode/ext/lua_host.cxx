@@ -464,13 +464,32 @@ namespace mcode {
 
 	lua_host::budget_scope::budget_scope( lua_host* host ) noexcept
 		: host_( host ) {
-		if ( host_ != nullptr ) {
+		if ( host_ == nullptr || host_->watchdog_ == nullptr ) {
+			return;
+		}
+
+		// Only the outermost scope arms: an inner dispatch keeps the deadline
+		// the outer one set rather than restarting the budget.
+		if ( host_->watchdog_->depth == 0 ) {
 			host_->arm_watchdog( );
 		}
+
+		++host_->watchdog_->depth;
 	}
 
 	lua_host::budget_scope::~budget_scope( ) {
-		if ( host_ != nullptr ) {
+		if ( host_ == nullptr || host_->watchdog_ == nullptr ) {
+			return;
+		}
+
+		if ( host_->watchdog_->depth > 0 ) {
+			--host_->watchdog_->depth;
+		}
+
+		// Disarming from an inner scope would leave the rest of the outer
+		// handler running with no interrupt, so a loop after a nested dispatch
+		// would hang the thread.
+		if ( host_->watchdog_->depth == 0 ) {
 			host_->disarm_watchdog( );
 		}
 	}

@@ -64,6 +64,13 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 		mcode::ext::load_result extensions;
 		mcode::ext::mcp_server_store extension_servers;
 		mcode::mcp::server_set mcp_servers;
+
+		// The extension surface borrows `skills`, and the surfaces live on in
+		// `extensions` and are invoked on every later turn -- so the report has to
+		// outlive this function. It was a plain local, and every other field that
+		// must outlive the returned loop was already parked here for that reason.
+		mcode::skills::session_context skills_context;
+
 		mcode::net::http_client transport;
 		mcode::model::http_model_client client;
 		mcode::event_log log;
@@ -146,7 +153,9 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 		skills_options.extension_roots = { *bundled_directory / "extensions" };
 	}
 
-	auto skills_context = mcode::skills::assemble_session_context( skills_options );
+	parts->skills_context = mcode::skills::assemble_session_context( skills_options );
+
+	auto& skills_context = parts->skills_context;
 
 	// Built before the loader so the extension surface's `fs.*` entries share this context.
 	auto space = mcode::workspace::open( workspace_path );

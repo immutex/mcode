@@ -32,6 +32,11 @@ namespace mcode {
 			bool armed = false;
 			bool expired = false;
 			std::uint64_t breaches = 0;
+
+			// Open `budget_scope`s. A dispatch can nest -- a hook handler that
+			// emits, a tool that calls back in -- and the inner scope must not
+			// disarm the deadline the outer one still owns.
+			std::size_t depth = 0;
 		};
 
 	}

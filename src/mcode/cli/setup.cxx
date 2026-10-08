@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -21,9 +22,9 @@ namespace mcode::cli {
 
 		using tui::token;
 
-		// The `[model]` section this writes. One place, so the header it looks
-		// for and the header it writes cannot drift apart.
-		inline constexpr std::string_view SECTION_HEADER = "[model]";
+		// The `[model]` section this writes, as its bare name. One place, so the
+		// header it looks for and the header it writes cannot drift apart.
+		inline constexpr std::string_view SECTION_NAME = "model";
 		inline constexpr std::string_view CONFIG_FILE_NAME = "config.toml";
 
 		// A verification turn that never returns is worse than a failed one.
@@ -334,7 +335,9 @@ namespace mcode::cli {
 
 		[[nodiscard]] auto render_section( const model_settings& settings ) -> std::string {
 			auto out = std::string{ };
-			out += SECTION_HEADER;
+			out += '[';
+			out += SECTION_NAME;
+			out += ']';
 			out += "\nprovider = \"";
 			out += escape_toml( settings.provider );
 			out += "\"\nmodel = \"";
@@ -415,13 +418,48 @@ namespace mcode::cli {
 				section_cursor = next + 1;
 			}
 
-			const auto is_header = []( const std::string& line ) -> bool {
-				return !line.empty( ) && line.front( ) == '[' && line.back( ) == ']';
+			// A TOML table header, ignoring the indentation, trailing space and
+			// trailing comment that TOML allows. Exact equality missed
+			// `[model] # my provider`, so the append branch ran and wrote a
+			// SECOND `[model]` -- which the loader then rejects as a duplicate
+			// key, leaving the user's config unreadable until they hand-edit it.
+			const auto header_name = []( const std::string& text )
+				-> std::optional< std::string > {
+				auto cursor = std::size_t{ 0 };
+
+				while ( cursor < text.size( ) &&
+					( text[ cursor ] == ' ' || text[ cursor ] == '\t' ) ) {
+					++cursor;
+				}
+
+				if ( cursor >= text.size( ) || text[ cursor ] != '[' ) {
+					return std::nullopt;
+				}
+
+				const auto close = text.find( ']', cursor + 1 );
+
+				if ( close == std::string::npos ) {
+					return std::nullopt;
+				}
+
+				const auto after = text.find_first_not_of( " \t", close + 1 );
+
+				if ( after != std::string::npos && text[ after ] != '#' ) {
+					return std::nullopt;
+				}
+
+				return text.substr( cursor + 1, close - cursor - 1 );
+			};
+
+			const auto is_header = [ & ]( const std::string& line ) -> bool {
+				return header_name( line ).has_value( );
 			};
 
 			const auto start = [&]( ) -> std::size_t {
 				for ( auto index = std::size_t{ 0 }; index < lines.size( ); ++index ) {
-					if ( lines[ index ] == SECTION_HEADER ) {
+					const auto name = header_name( lines[ index ] );
+
+					if ( name.has_value( ) && *name == SECTION_NAME ) {
 						return index;
 					}
 				}

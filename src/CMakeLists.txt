@@ -41,6 +41,9 @@ add_library(mcode_core STATIC
     mcode/events/bus.cxx
 
     mcode/cli/exec.cxx
+    mcode/cli/exec_internal.cxx
+    mcode/cli/exec_transcript.cxx
+    mcode/cli/exec_worktree.cxx
     mcode/cli/skill_command.cxx
 
     mcode/skills/frontmatter.cxx
@@ -134,6 +137,7 @@ add_library(mcode_core STATIC
     mcode/tui/approval_tui.cxx
     mcode/tui/palette.cxx
     mcode/tui/mention.cxx
+    mcode/tui/opening.cxx
     mcode/tui/render.cxx
     mcode/tui/render_view.cxx
     mcode/tui/transcript.cxx

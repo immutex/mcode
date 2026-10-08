@@ -955,3 +955,32 @@ Read the number you were sent to, not the whole file. Each entry states the cons
     cursor is already on the last row when `reserve` would have run. A caller that
     must erase the region after the last flush asks for `painted_height()` rather
     than assuming the floor.
+
+119. **Landlock cannot express a deny path, so the Linux sandbox ignores
+    `sandbox_profile::deny_paths`.** Landlock is an allowlist: a rule grants
+    access beneath a path, and a more specific rule only ever *adds*. The
+    workspace root is granted read-write, so `.git/hooks` and `.mcode/` beneath
+    it stay writable by a spawned command even though the Windows backend marks
+    both MEDIUM_IL to block a Low-IL child. The profile still carries the field
+    and the Windows backend still honours it, so this is a **platform gap, not a
+    bug in the shared type** — but it is real, and it is stated rather than
+    assumed. Closing it means granting the workspace's children individually
+    instead of the root, which is a behavioural change that needs a Linux host to
+    verify. **Nothing on Windows or macOS depends on it.**
+
+120. **A tool result must be logged under `TOOL_RESULT_EVENT` and carry its call
+    id.** `restore_transcript` reads `tool.output` records and matches each to
+    the call it answers. A failure was logged under the literal `"tool.result"`
+    — the *event name*, not the log kind — so it never matched, and a resumed
+    session silently lost every failed call's result. Without the id, one
+    assistant message carrying two calls got two results stamped with call #1
+    and left call #2 unanswered, which is a transcript no provider accepts.
+
+121. **`std::regex` cannot be time-bounded, so a grep pattern is refused before it
+    runs.** The line cap does not bound backtracking: a nested quantifier such as
+    `(a+)+` is exponential in the line length, measured at 13 s inside one
+    `regex_search` on a 26-character line, and the matcher offers no way to
+    interrupt it. `has_nested_quantifier` rejects the exponential shapes up
+    front, and a wall-clock budget bounds the scan between lines. The refusal is
+    honest — a silent 13-second stall reads as a hang — and the hint says the
+    scan is incomplete, so a short result is never taken as proof of absence.

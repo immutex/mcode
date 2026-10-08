@@ -445,6 +445,12 @@ TEST_CASE( "a handoff that is neither a budget stop nor a denial still fails", "
 
 	REQUIRE( cli::exit_code_for_run( failed, false, false ) == cli::exit_code::provider_error );
 
+	// The loop's Plan state reports a spent budget as `failed`, so the flag has to
+	// win over the state: a resumable budget stop must not be reported as a
+	// provider error, which is what `docs/22`'s exit-code table reserves for 3.
+	REQUIRE( cli::exit_code_for_run( failed, true, false )
+		== cli::exit_code::budget_exhausted );
+
 	auto done = turn_outcome{ };
 	done.final_state = loop_state::done;
 
@@ -814,6 +820,34 @@ TEST_CASE( "setup replaces the model section and leaves the rest of the config a
 		// The new values are present.
 		CHECK( updated.find( "model = \"gpt-5\"" ) != std::string::npos );
 		CHECK( updated.find( "api_key_env = \"OPENAI_API_KEY\"" ) != std::string::npos );
+	}
+
+	SECTION( "a header with a trailing comment is still the same section" ) {
+		// TOML allows `[model] # comment` and leading indentation. Exact line
+		// equality missed both, so the append branch ran and wrote a SECOND
+		// `[model]` -- which the loader rejects as a duplicate key.
+		for ( const auto* header : { "[model] # my provider", "[model] ", "  [model]" } ) {
+			const auto existing = std::string{ "# note\n" } + header
+				+ "\nprovider = \"old\"\nmodel = \"old-model\"\n";
+
+			const auto updated = cli::splice_model_section( existing, provider, model,
+				base_url, key_env );
+
+			INFO( "header: " << header );
+
+			auto count = std::size_t{ 0 };
+			auto position = updated.find( "[model]" );
+
+			while ( position != std::string::npos ) {
+				++count;
+				position = updated.find( "[model]", position + 1 );
+			}
+
+			CHECK( count == 1 );
+			CHECK( updated.find( "model = \"old-model\"" ) == std::string::npos );
+			CHECK( updated.find( "# note" ) != std::string::npos );
+			CHECK( updated.find( "model = \"gpt-5\"" ) != std::string::npos );
+		}
 	}
 
 	SECTION( "an LF config is replaced in place too" ) {

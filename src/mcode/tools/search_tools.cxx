@@ -1,6 +1,7 @@
 #include "mcode/tools/search_tools.hxx"
 
 #include <algorithm>
+#include <chrono>
 #include <fstream>
 #include <regex>
 #include <set>
@@ -27,6 +28,89 @@ namespace mcode::tools {
 
 		// lines longer than this are skipped: matching inside them is where backtracking lives
 		inline constexpr std::size_t GREP_LINE_BYTES = 8u * 1024u;
+
+		// The line cap does not bound backtracking: `(a+)+$` against a full line
+		// is exponential in its length. This is the wall-clock bound on one call.
+		inline constexpr auto GREP_SCAN_BUDGET = std::chrono::milliseconds{ 2'000 };
+
+		// A quantifier applied to a group that contains a quantifier: `(a+)+`,
+		// `(a*)*`, `(a+){2,}`, `([ab]+)*`. Those are the shapes whose match cost
+		// is exponential in the input, and `std::regex` offers no way to bound a
+		// single `regex_search`, so they are refused rather than run.
+		[[nodiscard]] auto has_nested_quantifier( const std::string_view pattern ) -> bool {
+			auto depth = std::size_t{ 0 };
+			auto quantified_inside = false;
+			auto escaped = false;
+			auto in_class = false;
+
+			for ( auto index = std::size_t{ 0 }; index < pattern.size( ); ++index ) {
+				const auto character = pattern[ index ];
+
+				if ( escaped ) {
+					escaped = false;
+
+					continue;
+				}
+
+				if ( character == '\\' ) {
+					escaped = true;
+
+					continue;
+				}
+
+				// A character class is not a group: `[+*]` is literals.
+				if ( character == '[' ) {
+					in_class = true;
+
+					continue;
+				}
+
+				if ( character == ']' && in_class ) {
+					in_class = false;
+
+					continue;
+				}
+
+				if ( in_class ) {
+					continue;
+				}
+
+				if ( character == '(' ) {
+					++depth;
+
+					if ( depth == 1 ) {
+						quantified_inside = false;
+					}
+
+					continue;
+				}
+
+				if ( character == ')' ) {
+					if ( depth > 0 ) {
+						--depth;
+					}
+
+					// The group just closed. If it held a quantifier, a quantifier
+					// on the group itself is the exponential shape.
+					if ( depth == 0 && quantified_inside ) {
+						const auto next = index + 1 < pattern.size( ) ? pattern[ index + 1 ]
+							: '\0';
+
+						if ( next == '*' || next == '+' || next == '{' ) {
+							return true;
+						}
+					}
+
+					continue;
+				}
+
+				if ( depth > 0 && ( character == '*' || character == '+' ) ) {
+					quantified_inside = true;
+				}
+			}
+
+			return false;
+		}
 
 		inline constexpr std::size_t GREP_CONTEXT_CHARS = 120;
 
@@ -288,6 +372,21 @@ namespace mcode::tools {
 				MAX_GREP_MATCHES ) );
 		}
 
+		// `std::regex` cannot be interrupted mid-match, so a wall-clock budget
+		// between lines does not help: the measured cost was 13 s inside ONE
+		// `regex_search` on a 26-character line, and the line cap does not bound
+		// that. The only bound available at this seam is to refuse the pattern
+		// shapes whose cost is exponential -- a quantifier applied to a group
+		// that itself contains a quantifier, which is the classic `(a+)+$`.
+		// Refusing is honest: a silent 13-second stall reads as a hang.
+		if ( has_nested_quantifier( *pattern ) ) {
+			return error_result( "regex rejected: nested quantifiers backtrack "
+				"exponentially and cannot be time-bounded here",
+				"rewrite without a quantifier inside a quantified group -- `(a+)+` "
+				"becomes `a+` when the intent is one-or-more",
+				false );
+		}
+
 		auto compiled = std::optional< std::regex >{ };
 
 		try {
@@ -368,10 +467,21 @@ namespace mcode::tools {
 		auto files_skipped = std::size_t{ 0 };
 		auto first = true;
 		auto reached_cap = false;
+		auto timed_out = false;
+
+		// One budget for the whole call, not per file: a per-file reset lets a
+		// scan over many files each burn the full budget.
+		const auto deadline = std::chrono::steady_clock::now( ) + GREP_SCAN_BUDGET;
 
 		for ( const auto& relative : candidates ) {
 			if ( count >= max_matches ) {
 				reached_cap = true;
+
+				break;
+			}
+
+			if ( std::chrono::steady_clock::now( ) >= deadline ) {
+				timed_out = true;
 
 				break;
 			}
@@ -421,6 +531,17 @@ namespace mcode::tools {
 			auto start = std::size_t{ 0 };
 
 			while ( start < safe.size( ) && count < max_matches ) {
+				// `std::regex` backtracks, and the line cap does not bound that:
+				// a pattern like `(a+)+$` against 8 KiB of `a` is exponential in
+				// the line length, measured at seconds for a 26-character line.
+				// The budget is wall clock rather than a step count because the
+				// matcher gives no way to interrupt it mid-call.
+				if ( std::chrono::steady_clock::now( ) >= deadline ) {
+					timed_out = true;
+
+					break;
+				}
+
 				const auto newline = safe.find( '\n', start );
 				const auto end = ( newline == std::string::npos ) ? safe.size( ) : newline;
 				const auto line = safe.substr( start, end - start );
@@ -460,6 +581,15 @@ namespace mcode::tools {
 				" matches reached; narrow the pattern, set path to a subdirectory, "
 				"or raise max_matches (max " +
 				std::to_string( MAX_GREP_MATCHES ) + ") to see more\"";
+		}
+
+		// The scan stopped early, so an empty or short result is not evidence of
+		// absence -- which is what the pattern's own backtracking cost caused.
+		if ( timed_out ) {
+			out += ",\"hint\":\"the scan hit its " +
+				std::to_string( GREP_SCAN_BUDGET.count( ) ) +
+				"ms budget and is INCOMPLETE; a backtracking pattern is the usual "
+				"cause, so simplify it or narrow path\"";
 		}
 
 		out += ",\"files_scanned\":" + std::to_string( files_scanned );

@@ -1,4 +1,5 @@
 #include "mcode/cli/exec.hxx"
+#include "exec_internal.hxx"
 
 #include <algorithm>
 #include <array>
@@ -19,204 +20,6 @@
 #include "mcode/support/time.hxx"
 
 namespace mcode::cli {
-
-	namespace {
-
-		// The state directory's subdirectory, and the suffix every session file carries.
-		inline constexpr std::string_view SESSION_DIRECTORY_NAME = "sessions";
-		inline constexpr std::string_view SESSION_FILE_SUFFIX = ".jsonl";
-
-		// `git worktree add` copies the tree, so it is slower than a status call but bounded.
-		inline constexpr std::int64_t WORKTREE_COMMAND_TIMEOUT_MS = 120'000;
-
-		// The label used when the caller names no worktree.
-		inline constexpr std::string_view DEFAULT_WORKTREE_NAME = "run";
-
-		// workspace digest, '-', epoch milliseconds padded to 13 digits.
-		inline constexpr std::size_t SESSION_DIGEST_LENGTH = 16;
-		inline constexpr std::size_t SESSION_STAMP_LENGTH = 13;
-		inline constexpr std::size_t SESSION_ID_LENGTH =
-			SESSION_DIGEST_LENGTH + 1 + SESSION_STAMP_LENGTH;
-
-		inline constexpr std::string_view SESSION_START_EVENT = "session.start";
-		inline constexpr std::string_view SESSION_RESUME_EVENT = "session.resume";
-
-		auto write_line( const std::string_view text ) -> void {
-			std::fwrite( text.data( ), 1, text.size( ), stdout );
-			std::fputc( '\n', stdout );
-		}
-
-		// u8string, not string: a non-ASCII workspace path must not be narrowed to the
-		// system code page before it is hashed.
-		auto to_utf8( const std::filesystem::path& path ) -> std::string {
-			const auto text = path.generic_u8string( );
-
-			return std::string{ reinterpret_cast< const char* >( text.data( ) ), text.size( ) };
-		}
-
-		// FNV-1a over the canonical root's UTF-8 bytes, so two workspaces cannot collide
-		// on one session id.
-		auto workspace_digest( const std::filesystem::path& canonical_root ) -> std::string {
-			return mcode::hash_bytes( to_utf8( canonical_root ) );
-		}
-
-		// The canonical root when it resolves, the normalized absolute path otherwise. Every
-		// entry point derives the digest through here, so `list`, `resolve` and the run that
-		// writes the file can never disagree about which workspace a session belongs to.
-		auto root_for_digest( const std::filesystem::path& workspace_root )
-			-> std::filesystem::path {
-			auto canonical = platform::canonicalize( workspace_root );
-
-			if ( canonical ) {
-				return *canonical;
-			}
-
-			auto error = std::error_code{ };
-			auto absolute = std::filesystem::absolute( workspace_root, error );
-
-			if ( error ) {
-				return workspace_root.lexically_normal( );
-			}
-
-			return absolute.lexically_normal( );
-		}
-
-		auto session_file_name( const std::string_view id ) -> std::string {
-			return std::string{ id } + std::string{ SESSION_FILE_SUFFIX };
-		}
-
-		// Zero-padded, so a lexical sort of the names is a chronological sort.
-		auto padded_stamp( const std::int64_t start_ms ) -> std::string {
-			auto text = std::to_string( start_ms );
-
-			if ( text.size( ) < SESSION_STAMP_LENGTH ) {
-				text.insert( 0, SESSION_STAMP_LENGTH - text.size( ), '0' );
-			}
-
-			return text;
-		}
-
-		// An id is a hex digest, a dash, and a decimal stamp -- nothing else. A user-supplied
-		// id is refused before it is joined to a path, so `../` cannot leave the directory.
-		auto is_session_id( const std::string_view id ) -> bool {
-			if ( id.size( ) != SESSION_ID_LENGTH || id[ SESSION_DIGEST_LENGTH ] != '-' ) {
-				return false;
-			}
-
-			for ( auto index = std::size_t{ 0 }; index < id.size( ); ++index ) {
-				if ( index == SESSION_DIGEST_LENGTH ) {
-					continue;
-				}
-
-				const auto character = id[ index ];
-				const auto is_hex = ( character >= '0' && character <= '9' )
-					|| ( character >= 'a' && character <= 'f' );
-
-				if ( !is_hex ) {
-					return false;
-				}
-			}
-
-			return true;
-		}
-
-		// The epoch-milliseconds stamp the id ends with, or 0 when it is not one.
-		auto stamp_of_session_id( const std::string_view id ) -> std::int64_t {
-			const auto digits = id.substr( SESSION_DIGEST_LENGTH + 1 );
-			auto value = std::int64_t{ 0 };
-			const auto parsed = std::from_chars( digits.data( ), digits.data( ) + digits.size( ),
-				value );
-
-			if ( parsed.ec != std::errc{ } ) {
-				return 0;
-			}
-
-			return value;
-		}
-
-		// Every well-formed session file in `directory`, newest first. The workspace digest
-		// filter belongs to the caller: resolving an id has to see a session from another
-		// workspace in order to name it, rather than report that no such session exists.
-		auto scan_sessions( const std::filesystem::path& directory )
-			-> result< std::vector< session_ref > > {
-			auto out = std::vector< session_ref >{ };
-			auto error = std::error_code{ };
-
-			// A workspace with no session yet is the normal first run, not a failure.
-			if ( !std::filesystem::is_directory( directory, error ) || error ) {
-				return out;
-			}
-
-			auto iterator = std::filesystem::directory_iterator{ directory, error };
-
-			if ( error ) {
-				return std::unexpected( fail( errc::io,
-					"could not read " + directory.string( ) + ": " + error.message( ) ) );
-			}
-
-			for ( const auto& entry : iterator ) {
-				// A fresh code per call: a stale one would skip every later entry.
-				auto entry_error = std::error_code{ };
-
-				if ( !entry.is_regular_file( entry_error ) || entry_error ) {
-					continue;
-				}
-
-				const auto name = to_utf8( entry.path( ).filename( ) );
-
-				if ( !name.ends_with( SESSION_FILE_SUFFIX ) ) {
-					continue;
-				}
-
-				const auto id = name.substr( 0, name.size( ) - SESSION_FILE_SUFFIX.size( ) );
-
-				if ( !is_session_id( id ) ) {
-					continue;
-				}
-
-				auto session = session_ref{ };
-				session.path = entry.path( );
-				session.id = id;
-				session.started_ms = stamp_of_session_id( id );
-
-				const auto size = std::filesystem::file_size( session.path, entry_error );
-
-				session.size_bytes = entry_error ? 0 : size;
-
-				out.push_back( std::move( session ) );
-			}
-
-			// Newest first: the id carries the start time, so the ordering is deterministic
-			// even when two runs land in the same millisecond.
-			std::sort( out.begin( ), out.end( ),
-				[]( const session_ref& left, const session_ref& right ) {
-					if ( left.started_ms != right.started_ms ) {
-						return left.started_ms > right.started_ms;
-					}
-
-					return left.id > right.id;
-				} );
-
-			return out;
-		}
-
-		auto format_utc( const std::int64_t milliseconds ) -> std::string {
-			const auto seconds = static_cast< std::time_t >( milliseconds / 1000 );
-			auto utc = std::tm{ };
-
-		#if defined( _WIN32 )
-			gmtime_s( &utc, &seconds );
-		#else
-			gmtime_r( &seconds, &utc );
-		#endif
-
-			auto buffer = std::array< char, 32 >{ };
-			std::strftime( buffer.data( ), buffer.size( ), "%Y-%m-%dT%H:%M:%SZ", &utc );
-
-			return buffer.data( );
-		}
-
-	}
 
 	auto to_int( const exit_code code ) noexcept -> int {
 		return static_cast< int >( code );
@@ -243,17 +46,21 @@ namespace mcode::cli {
 
 	auto exit_code_for_run( const mcode::turn_outcome& outcome, const bool budget_exhausted,
 		const bool permission_denied ) -> exit_code {
+		// A spent budget is its own exit whatever state ended the run. The loop's
+		// plan state reports a spent budget as `failed`, so checking the state
+		// first classified it as a provider error -- and in an interactive session
+		// the step count is cumulative, so the NEXT turn would exit 4 having done
+		// nothing at all.
+		if ( budget_exhausted ) {
+			return exit_code::budget_exhausted;
+		}
+
 		if ( outcome.final_state == mcode::loop_state::failed ) {
 			return exit_code::provider_error;
 		}
 
 		if ( outcome.final_state != mcode::loop_state::handoff ) {
 			return exit_code::success;
-		}
-
-		// Budget before denial: a run that ran out of steps and was denied is a budget exit.
-		if ( budget_exhausted ) {
-			return exit_code::budget_exhausted;
 		}
 
 		if ( permission_denied ) {
@@ -426,14 +233,14 @@ namespace mcode::cli {
 			return std::unexpected( state.error( ) );
 		}
 
-		return *state / std::string{ SESSION_DIRECTORY_NAME };
+		return *state / std::string{ detail::SESSION_DIRECTORY_NAME };
 	}
 
 	auto session_id_for( const std::filesystem::path& workspace_root,
 		const std::int64_t started_ms ) -> std::string {
-		auto id = workspace_digest( root_for_digest( workspace_root ) );
+		auto id = detail::workspace_digest( detail::root_for_digest( workspace_root ) );
 		id += '-';
-		id += padded_stamp( started_ms );
+		id += detail::padded_stamp( started_ms );
 
 		return id;
 	}
@@ -446,13 +253,13 @@ namespace mcode::cli {
 			return std::unexpected( directory.error( ) );
 		}
 
-		auto sessions = scan_sessions( *directory );
+		auto sessions = detail::scan_sessions( *directory );
 
 		if ( !sessions ) {
 			return std::unexpected( sessions.error( ) );
 		}
 
-		const auto digest = workspace_digest( root_for_digest( workspace_root ) );
+		const auto digest = detail::workspace_digest( detail::root_for_digest( workspace_root ) );
 
 		std::erase_if( *sessions, [ &digest ]( const session_ref& session ) {
 			return !session.id.starts_with( digest );
@@ -472,21 +279,21 @@ namespace mcode::cli {
 		if ( !id.empty( ) ) {
 			// The id embeds the workspace digest, so a well-formed id still has to belong
 			// to this workspace; a foreign one is refused by name rather than reopened.
-			if ( !is_session_id( id ) ) {
+			if ( !detail::is_session_id( id ) ) {
 				return std::unexpected( fail( errc::config,
 					"no session named '" + std::string{ id } + "': a session id is 16 hex "
 					"digits, a dash, and the start time in milliseconds" ) );
 			}
 
-			if ( !id.starts_with( workspace_digest( root_for_digest( workspace_root ) ) ) ) {
+			if ( !id.starts_with( detail::workspace_digest( detail::root_for_digest( workspace_root ) ) ) ) {
 				return std::unexpected( fail( errc::config,
 					"no session named '" + std::string{ id } + "' for this workspace" ) );
 			}
 
 			auto session = session_ref{ };
 			session.id = std::string{ id };
-			session.path = *directory / session_file_name( id );
-			session.started_ms = stamp_of_session_id( id );
+			session.path = *directory / detail::session_file_name( id );
+			session.started_ms = detail::stamp_of_session_id( id );
 
 			auto error = std::error_code{ };
 
@@ -543,7 +350,7 @@ namespace mcode::cli {
 		auto session = session_ref{ };
 		session.started_ms = support::epoch_milliseconds( );
 		session.id = session_id_for( workspace_root, session.started_ms );
-		session.path = *directory / session_file_name( session.id );
+		session.path = *directory / detail::session_file_name( session.id );
 
 		return session;
 	}
@@ -567,7 +374,7 @@ namespace mcode::cli {
 		payload += std::to_string( restored_messages );
 		payload += "}";
 
-		log.append( std::string{ resumed ? SESSION_RESUME_EVENT : SESSION_START_EVENT },
+		log.append( std::string{ resumed ? detail::SESSION_RESUME_EVENT : detail::SESSION_START_EVENT },
 			std::move( payload ) );
 
 		auto report = std::string{ "mcode: session " };
@@ -593,165 +400,6 @@ namespace mcode::cli {
 		return report;
 	}
 
-	// Rebuilds the conversation from a session log. Only the events that carry a
-	// message or a tool output contribute; the activity events (`tool.call`,
-	// `run.end`, `session.*`) are diagnostics and are not part of the transcript.
-	//
-	// A tool output is attached to the assistant message that requested it, which
-	// is where the model expects it: the loop records the assistant message
-	// before dispatch, so the outputs follow it in the log.
-	[[nodiscard]] auto restore_transcript( const event_log& log )
-		-> std::vector< model::message > {
-		auto history = std::vector< model::message >{ };
-
-		for ( const auto& recorded : log.events( ) ) {
-			if ( recorded.kind == mcode::agent::MESSAGE_USER_EVENT
-				|| recorded.kind == mcode::agent::MESSAGE_ASSISTANT_EVENT ) {
-				auto message = mcode::agent::message_from_json( recorded.payload_json );
-
-				if ( message ) {
-					history.push_back( std::move( *message ) );
-				}
-
-				continue;
-			}
-
-			if ( recorded.kind != mcode::agent::TOOL_RESULT_EVENT ) {
-				continue;
-			}
-
-			auto document = json::document::parse( recorded.payload_json );
-
-			if ( !document ) {
-				continue;
-			}
-
-			auto content = document->get_string( "content" );
-
-			if ( !content ) {
-				continue;
-			}
-
-			// The result rides on the last assistant message, as a tool block
-			// carrying the id the call used.
-			if ( history.empty( ) ) {
-				continue;
-			}
-
-			auto& last = history.back( );
-
-			if ( last.speaker != model::role::assistant ) {
-				continue;
-			}
-
-			for ( auto& block : last.blocks ) {
-				if ( block.kind != model::block_kind::tool_call ) {
-					continue;
-				}
-
-				auto result = model::block{ };
-				result.kind = model::block_kind::tool_result;
-				result.tool_call_id = block.tool_call_id;
-				result.result_json = *content;
-				last.blocks.push_back( std::move( result ) );
-
-				break;
-			}
-		}
-
-		return history;
-	}
-
-	// Creates a git worktree beside the checkout and returns its path. The worktree is the
-	// blast-radius limit: an unattended run cannot touch the user's working tree, and the
-	// rollback is `git worktree remove` rather than a snapshot store.
-	auto create_worktree( const std::filesystem::path& workspace_root,
-		const std::string_view name ) -> result< std::filesystem::path > {
-		auto git = mcode::find_executable( "git" );
-
-		if ( !git ) {
-			return std::unexpected( fail( errc::config,
-				"--worktree needs git on PATH: " + git.error( ).msg ) );
-		}
-
-		// The workspace root must be the repository root itself. `git worktree add` walks up
-		// to an enclosing repository, so a directory that merely sits inside one would
-		// silently check out the WRONG project - and in a plain directory under a repository
-		// it would appear to succeed. Asking for the top level and comparing refuses both.
-		auto top = mcode::process_options{ };
-		top.executable = *git;
-		top.args = { "rev-parse", "--show-toplevel" };
-		top.working_directory = workspace_root.string( );
-		top.environment = mcode::minimal_environment( );
-		top.timeout = std::chrono::milliseconds{ WORKTREE_COMMAND_TIMEOUT_MS };
-
-		auto probe = mcode::run_process( top );
-
-		if ( !probe || probe->exit_code != 0 ) {
-			return std::unexpected( fail( errc::config,
-				"--worktree needs the workspace to be a git repository root, but " +
-				workspace_root.string( ) + " is not inside one" ) );
-		}
-
-		auto reported = probe->stdout_text;
-
-		while ( !reported.empty( ) && ( reported.back( ) == '\n' || reported.back( ) == '\r' ) ) {
-			reported.pop_back( );
-		}
-
-		const auto canonical_root = platform::canonicalize( workspace_root );
-		const auto canonical_top = platform::canonicalize( std::filesystem::path{ reported } );
-
-		if ( !canonical_root || !canonical_top || *canonical_root != *canonical_top ) {
-			return std::unexpected( fail( errc::config,
-				"--worktree needs the workspace to be the repository root; the enclosing "
-				"repository is " + reported + ", so a worktree of it would be the wrong "
-				"project" ) );
-		}
-
-		// A short unique suffix keeps two runs from colliding without requiring the caller
-		// to name each one.
-		auto label = std::string{ name };
-
-		if ( label.empty( ) ) {
-			label = std::string{ DEFAULT_WORKTREE_NAME };
-		}
-
-		label += "-";
-		label += std::to_string( mcode::support::epoch_milliseconds( ) );
-
-		const auto target = workspace_root / ".mcode" / "worktrees" / label;
-
-		auto options = mcode::process_options{ };
-		options.executable = *git;
-		options.args = { "worktree", "add", "--detach", target.string( ) };
-		options.working_directory = workspace_root.string( );
-		options.environment = mcode::minimal_environment( );
-		options.timeout = std::chrono::milliseconds{ WORKTREE_COMMAND_TIMEOUT_MS };
-
-		auto ran = mcode::run_process( options );
-
-		if ( !ran ) {
-			return std::unexpected( fail( errc::config,
-				"could not create a worktree: " + ran.error( ).msg ) );
-		}
-
-		// A non-zero exit means git refused, and its stderr says why. Surfacing it verbatim
-		// is the only way the caller learns the directory is not a repository.
-		if ( ran->exit_code != 0 ) {
-			auto detail = ran->stderr_text;
-
-			while ( !detail.empty( ) && ( detail.back( ) == '\n' || detail.back( ) == '\r' ) ) {
-				detail.pop_back( );
-			}
-
-			return std::unexpected( fail( errc::config,
-				"git worktree add failed: " + ( detail.empty( ) ? ran->stdout_text : detail ) ) );
-		}
-
-		return target;
-	}
-
 	auto print_sessions( const std::filesystem::path& workspace_root ) -> exit_code {
 		auto sessions = list_sessions( workspace_root );
 		if ( !sessions ) {
@@ -765,10 +413,10 @@ namespace mcode::cli {
 		header += canonical ? canonical->string( ) : workspace_root.string( );
 		header += ":";
 
-		write_line( header );
+		detail::write_line( header );
 
 		if ( sessions->empty( ) ) {
-			write_line( "  (none)" );
+			detail::write_line( "  (none)" );
 
 			return exit_code::success;
 		}
@@ -779,7 +427,7 @@ namespace mcode::cli {
 			line += "  ";
 
 			if ( session.started_ms > 0 ) {
-				line += format_utc( session.started_ms );
+				line += detail::format_utc( session.started_ms );
 			} else {
 				line += "unknown start time";
 			}
@@ -788,13 +436,13 @@ namespace mcode::cli {
 			line += std::to_string( session.size_bytes );
 			line += " bytes";
 
-			write_line( line );
+			detail::write_line( line );
 		}
 
 		auto hint = std::string{ "resume with: mcode exec --resume " };
 		hint += sessions->front( ).id;
 
-		write_line( hint );
+		detail::write_line( hint );
 
 		return exit_code::success;
 	}
@@ -814,7 +462,7 @@ namespace mcode::cli {
 		mcode::json::append_escaped( line, prompt );
 		line += "\"}";
 
-		write_line( line );
+		detail::write_line( line );
 		++lines_;
 		flush( );
 	}
@@ -837,7 +485,7 @@ namespace mcode::cli {
 		line += value.payload_json.empty( ) ? "{}" : value.payload_json;
 		line += "}";
 
-		write_line( line );
+		detail::write_line( line );
 		++lines_;
 		flush( );
 	}
@@ -863,7 +511,7 @@ namespace mcode::cli {
 		mcode::json::append_escaped( line, summary );
 		line += "\"}";
 
-		write_line( line );
+		detail::write_line( line );
 		++lines_;
 		run_end_emitted_ = true;
 		flush( );

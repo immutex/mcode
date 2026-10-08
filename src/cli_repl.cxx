@@ -9,6 +9,7 @@
 #include "mcode/cli/repl.hxx"
 #include "mcode/core/registry.hxx"
 #include "mcode/core/version.hxx"
+#include "mcode/tui/opening.hxx"
 #include "mcode/events/bus.hxx"
 #include "mcode/ext/hooks.hxx"
 #include "mcode/ext/loader.hxx"
@@ -118,10 +119,13 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 	auto& loop = *built;
 	auto turn = mcode::cli::session{ loop };
 
-	// Set by Esc while a turn runs and read by the delta subscriber on the
-	// loop thread: after it is set, the rest of the response is dropped rather
-	// than appended to the answer the user chose to keep.
+	// Set by Esc or Ctrl+C while a turn runs, and read on two sides: the delta
+	// subscriber on the loop thread drops the rest of the response rather than
+	// appending to the answer the user chose to keep, and the loop itself reads
+	// it at its next step boundary and stops the turn.
 	auto interrupted = std::atomic< bool >{ false };
+
+	loop.set_cancel_source( &interrupted );
 
 	auto subscriptions = subscribe_event_feed( loop.bus( ), queue, interrupted );
 
@@ -263,44 +267,13 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 	{
 		const auto held = std::lock_guard< std::mutex >{ render_gate };
 
-		// Committed here rather than by the first turn's flush, so the banner
-		// opens the session. `flush` both commits it and paints the region, and
-		// `commit` already scrolls what it writes clear of the region -- so
-		// anything that scrolls afterwards pushes the banner back off screen.
-		auto banner = std::vector< mcode::tui::styled_line >{ };
+		auto opening = mcode::tui::session_opening{ };
+		opening.version = mcode::VERSION;
+		opening.platform = mcode::PLATFORM;
+		opening.compiler = mcode::COMPILER;
+		opening.permissive = loop.approval_mode( ) == "never";
 
-		const auto banner_line = [ & ]( const std::string_view text,
-			const mcode::tui::token color ) {
-			auto line = mcode::tui::styled_line{ };
-			line.push_back( { std::string{ text }, color, mcode::tui::token::none,
-				false, false, false } );
-			banner.push_back( std::move( line ) );
-		};
-
-		banner_line( "", mcode::tui::token::none );
-		banner_line( "   mcode " + std::string{ mcode::VERSION },
-			mcode::tui::token::accent );
-		banner_line( "   " + std::string{ mcode::PLATFORM } + ", "
-			+ std::string{ mcode::COMPILER }, mcode::tui::token::muted );
-		banner_line( "", mcode::tui::token::none );
-
-		// The approval boundary is stated here rather than on stderr before the
-		// session starts, where it scrolled out of sight. A permissive default is
-		// only defensible if what still holds is visible while it holds.
-		if ( loop.approval_mode( ) == "never" ) {
-			banner_line( "   edits and commands run without prompting", mcode::tui::token::warn );
-			banner_line( "   the hard-deny floor and permissions.deny still apply",
-				mcode::tui::token::muted );
-		}
-
-		banner_line( "", mcode::tui::token::none );
-		banner_line( "   /help for commands, @ to mention a file, Ctrl+C to interrupt",
-			mcode::tui::token::muted );
-		banner_line( "", mcode::tui::token::none );
-
-		coordinator.queue_block( std::move( banner ) );
-
-		session_tty->write( coordinator.flush( ) );
+		session_tty->write( mcode::tui::emit_opening( coordinator, opening ) );
 	}
 
 	show_prompt( );
@@ -640,10 +613,6 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 		}
 
 		show_prompt( );
-
-		if ( last_code == mcode::cli::exit_code::interrupted ) {
-			continue;
-		}
 	}
 
 	// The destructor restores the console, but the wheel must be handed back

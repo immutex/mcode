@@ -232,7 +232,13 @@ TEST_CASE( "the session exit code is the last turn's code", "[tui][repl]" ) {
 			return std::move( loop );
 		} );
 
-	CHECK( code == mcode::cli::to_int( mcode::cli::exit_code::provider_error ) );
+	// The second turn runs with the step budget already spent, so the documented
+	// exit is 3 (budget exhausted), not 4. `docs/22` states it: "3 | Budget
+	// exhausted (steps/tokens/USD) — partial state preserved, resumable". The
+	// loop reports a spent budget from its Plan state as `failed`, and checking
+	// the state before the flag classified it as a provider error -- so a
+	// resumable budget stop told a CI script the provider had broken.
+	CHECK( code == mcode::cli::to_int( mcode::cli::exit_code::budget_exhausted ) );
 }
 
 TEST_CASE( "the ui approval source keeps the engine's semantics", "[tui][approval]" ) {

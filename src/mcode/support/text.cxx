@@ -135,18 +135,33 @@ namespace mcode::text {
 			const auto lead = static_cast< unsigned char >( input[ index ] );
 			const auto length = sequence_length( lead );
 
-			auto valid = ( length > 0 ) && ( index + length <= input.size( ) );
+			// The bytes the sequence actually covers: the lead plus the
+			// continuation bytes that really followed it, whether the sequence
+			// was cut short by a non-continuation or by the end of the input.
+			//
+			// Advancing by the lead byte's CLAIMED length instead was wrong in
+			// both cases: `caf\xe9 x` swallowed the " x" after a lone Latin-1
+			// lead, and a sequence truncated at the end of the input
+			// (`\xf0\x9f` + "A") advanced past the end and dropped the "A".
+			// This feeds the model the file it anchors an edit on, so the loss
+			// was silent and the edit then failed to match.
+			auto consumed = std::size_t{ 1 };
 
-			if ( valid && length > 1 ) {
+			if ( length > 1 ) {
 				for ( auto continuation = std::size_t{ 1 }; continuation < length;
 					++continuation ) {
-					if ( ( static_cast< unsigned char >(
-						input[ index + continuation ] ) & 0xC0 ) != 0x80 ) {
-						valid = false;
+					if ( index + continuation >= input.size( ) ||
+						( static_cast< unsigned char >(
+							input[ index + continuation ] ) & 0xC0 ) != 0x80 ) {
 						break;
 					}
+
+					consumed = continuation + 1;
 				}
 			}
+
+			auto valid = length > 0 && index + length <= input.size( ) &&
+				consumed == length;
 
 			if ( valid ) {
 				valid = simdutf::validate_utf8( input.data( ) + index, length );
@@ -158,7 +173,7 @@ namespace mcode::text {
 			} else {
 				const auto written = encode_utf8( REPLACEMENT, encoded.data( ) );
 				out.append( encoded.data( ), written );
-				index += ( length > 1 ) ? length : 1;
+				index += consumed;
 			}
 		}
 

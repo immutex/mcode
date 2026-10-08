@@ -42,6 +42,7 @@ add_executable(mcode_tests
     test_instruct_chain.cxx
     test_mcp.cxx
     test_tui_frame.cxx
+    test_tui_opening.cxx
     test_tui_cell.cxx
     test_tui_markdown.cxx
     test_tui_editor.cxx
@@ -86,3 +87,42 @@ include(Catch)
 # Catch2 tags never become ctest labels -- so the step found no tests at all and
 # failed on two of three platforms while the suite itself was green.
 catch_discover_tests(mcode_tests ADD_TAGS_AS_LABELS)
+
+# The ConPTY screen gate: drives the real product under a pty and reads the
+# screen a terminal would show.
+#
+# The unit suite cannot see placement. `visible_text` strips the positioning, so
+# a header that scrolled off the top and a header that stayed produce the same
+# string -- which is how a header that never appeared passed 118 `tui`
+# assertions. The in-process half of this invariant is the screen model asserted
+# by `test_tui_opening.cxx` and the `[screen]` case in `test_tui_commit.cxx`,
+# which run on every platform; this is the half that needs a genuine console
+# (`GetConsoleMode`/`ReadConsoleInputA` only engage on one).
+#
+# Windows only: ConPTY is a Win32 facility and pywinpty does not build
+# elsewhere. The dependencies are Python packages, not Conan ones, so
+# `scripts/bootstrap.ps1` and the Windows CI leg install them. A missing
+# dependency FAILS the test with the install command rather than skipping it: a
+# gate that reports success when it did not run is worse than no gate.
+if(WIN32)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+
+    if(NOT Python3_Interpreter_FOUND)
+        message(WARNING
+            "The tui-screen gate is not registered: no Python 3 interpreter. "
+            "Install Python 3 and re-configure to get the ConPTY screen gate.")
+    else()
+        add_test(
+            NAME tui-screen
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../tools/tui_check/tui_screen.py"
+                --exe "$<TARGET_FILE:mcode>"
+        )
+
+        set_tests_properties(tui-screen PROPERTIES
+            LABELS "platform;tui"
+            TIMEOUT 120
+            ENVIRONMENT "PYTHONUNBUFFERED=1"
+        )
+    endif()
+endif()

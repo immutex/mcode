@@ -29,6 +29,11 @@ namespace mcode::tools {
 		// keeps a file up to the write cap readable a window at a time
 		inline constexpr std::uintmax_t WINDOW_READ_BYTES = 16u * 1024u * 1024u;
 
+		// A single line is unbounded, so one minified file could put its whole
+		// window into the context in one call. A line longer than this is cut,
+		// and the result says so rather than silently dropping the remainder.
+		inline constexpr std::size_t MAX_LINE_BYTES = 8u * 1024u;
+
 		// typo recovery scans the parent directory only, never the tree
 		inline constexpr std::size_t SUGGESTION_LIMIT = 12;
 
@@ -207,11 +212,29 @@ namespace mcode::tools {
 			const auto last = std::min( first + request.limit, total_lines );
 
 			auto rendered = std::string{ };
+			auto cut_a_line = false;
 
 			for ( auto index = first; index < last; ++index ) {
 				rendered += std::to_string( index + 1 );
 				rendered += '\t';
-				rendered.append( lines[ index ] );
+
+				// The window is bounded by LINES, so one minified line put its
+				// whole 16 MiB into the context in a single call -- the case this
+				// tool already detects and flags as generated. A line is cut at a
+				// code-point boundary and says so, rather than being emitted whole.
+				const auto& line = lines[ index ];
+
+				if ( line.size( ) > MAX_LINE_BYTES ) {
+					rendered.append( line.substr( 0, text::truncate_offset( line,
+						MAX_LINE_BYTES ) ) );
+					rendered += " …[line truncated at ";
+					rendered += std::to_string( MAX_LINE_BYTES );
+					rendered += " bytes; re-read with a smaller limit or use grep]";
+					cut_a_line = true;
+				} else {
+					rendered.append( line );
+				}
+
 				rendered += '\n';
 			}
 
@@ -233,6 +256,10 @@ namespace mcode::tools {
 
 			if ( longest_line > MINIFIED_LINE_BYTES ) {
 				notes += "\"generated\":true,";
+			}
+
+			if ( cut_a_line ) {
+				notes += "\"line_truncated\":true,";
 			}
 
 			if ( request.file_size > LARGE_FILE_BYTES || total_lines > LARGE_FILE_LINES ) {

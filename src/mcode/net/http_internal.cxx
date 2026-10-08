@@ -7,6 +7,12 @@
 
 namespace mcode::net::detail {
 
+	// A chunk-size line is hex digits, an optional extension and a CRLF. RFC 9112
+	// puts no bound on it, and the SSE response cap counts DECODED bytes, so a
+	// line that never terminates grows the pending buffer while the cap reads
+	// zero. This is the bound that closes that.
+	inline constexpr std::size_t MAX_CHUNK_SIZE_LINE_BYTES = 4 * 1024;
+
 	auto chunked_decoder::feed( const std::string_view raw ) -> status {
 		pending_.append( raw );
 
@@ -15,6 +21,15 @@ namespace mcode::net::detail {
 				const auto end = pending_.find( '\n' );
 
 				if ( end == std::string::npos ) {
+					// A size line has no bound of its own, and the response cap
+					// counts decoded bytes -- which stay zero while the size line
+					// never terminates. Without this a server could grow the
+					// buffer indefinitely by sending a hex line that never ends.
+					if ( pending_.size( ) > MAX_CHUNK_SIZE_LINE_BYTES ) {
+						return std::unexpected( fail( errc::protocol,
+							"chunk size line exceeded its bound" ) );
+					}
+
 					return { };
 				}
 
@@ -65,6 +80,16 @@ namespace mcode::net::detail {
 
 			if ( pending_.size( ) < 2 ) {
 				return { };
+			}
+
+			// The two bytes are a CRLF. Erasing them unexamined desynchronises
+			// the whole stream when a lenient server terminates a chunk with a
+			// bare LF: the erase eats the LF and the next chunk-size line's
+			// first digit, so every later chunk is mis-sized and the damaged
+			// bytes are handed on as body.
+			if ( pending_[ 0 ] != '\r' || pending_[ 1 ] != '\n' ) {
+				return std::unexpected( fail( errc::protocol,
+					"chunk is not terminated by CRLF" ) );
 			}
 
 			pending_.erase( 0, 2 );

@@ -106,6 +106,20 @@ try {
     }
     Write-Ok 'dependencies installed'
 
+    # The ConPTY screen gate (tests/CMakeLists.txt) is a Python tool with Python
+    # dependencies, so `conan install` does not cover it. Installed here rather
+    # than skipped, because the gate fails on a missing import -- which is the
+    # right behaviour and a confusing one to hit on a first run.
+    Write-Step 'Installing the TUI gate dependencies'
+    & python -m pip install --quiet -r tools/tui_check/requirements.txt
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host '    warning: the tui-screen gate will fail without pywinpty and pyte' -ForegroundColor Yellow
+    }
+    else {
+        Write-Ok 'tui-screen dependencies ready'
+    }
+
     if ($NoConfigure) {
         Write-Host "`nBootstrap complete (configure skipped)." -ForegroundColor Green
         return

@@ -437,10 +437,31 @@ namespace mcode::mcp {
 		auto all = std::vector< server_tool >{ };
 		auto cursor = std::optional< std::string >{ };
 
+		// Bounded, and it must advance. A server that always returns a non-empty
+		// cursor -- buggy or hostile -- otherwise loops forever, one request per
+		// iteration at DEFAULT_LIST_TIMEOUT each, blocking startup and every
+		// restart. A repeated cursor is the same defect in a slower form.
+		auto pages = std::size_t{ 0 };
+		auto previous = std::string{ };
+
 		while ( true ) {
+			if ( pages >= MAX_TOOL_PAGES ) {
+				return std::unexpected( fail( errc::protocol,
+					"tools/list did not terminate within " + std::to_string( MAX_TOOL_PAGES )
+						+ " pages" ) );
+			}
+
+			++pages;
+
 			auto params = std::string{ };
 
 			if ( cursor ) {
+				if ( *cursor == previous ) {
+					return std::unexpected( fail( errc::protocol,
+						"tools/list repeated its cursor, so the listing cannot terminate" ) );
+				}
+
+				previous = *cursor;
 				params = R"({"cursor":)" + json_escape( *cursor ) + "}";
 			}
 

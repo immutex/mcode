@@ -350,10 +350,6 @@ namespace mcode::tui {
 		// the input appear to vanish mid-turn.
 		auto out = std::string{ };
 
-		if ( !state_.pending_commit.empty( ) ) {
-			out += commit( std::move( state_.pending_commit ) );
-		}
-
 		// Sizing reads the streamed rows, so it materialises them first: the
 		// one whole-buffer render a paint costs happens here, however many
 		// deltas landed since the last one.
@@ -365,6 +361,14 @@ namespace mcode::tui {
 		// not blank. Growth then scrolls, or the new rows paint over the
 		// transcript above the region. A resize takes the same path, so a
 		// SHRINK erases at the old height before repainting.
+		//
+		// This runs BEFORE the commit, because `commit` scrolls by the region's
+		// height -- the height it will have once the flush is done, not the one
+		// it had before. Committing first used the stale, taller height: the
+		// block landed that many rows higher than the new region's top, leaving
+		// a blank gap between the answer and the status line that grew with the
+		// region's old height, and a commit that also grew the region emitted
+		// its scroll AFTER the commit, which no scroll may follow.
 		auto scroll = std::string{ };
 
 		if ( rows != painted_rows_ || resize_pending_ ) {
@@ -388,10 +392,15 @@ namespace mcode::tui {
 			resize_pending_ = false;
 		}
 
+		out += scroll;
+
+		if ( !state_.pending_commit.empty( ) ) {
+			out += commit( std::move( state_.pending_commit ) );
+		}
+
 		current_ = build_frame( state_, painted_rows_, screen_columns_, caps_.ambiguous_width );
 
 		auto emitter = ansi_emitter{ caps_ };
-		out += scroll;
 		out += emitter.emit( previous_, current_, repaint_all_ );
 		repaint_all_ = false;
 

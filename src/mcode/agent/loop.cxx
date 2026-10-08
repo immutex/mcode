@@ -262,6 +262,14 @@ namespace mcode {
 			history_.pop_back( );
 		}
 
+		// Its tool calls go with it. `request_and_fold` records both the message
+		// and the calls it carried, so dropping only the message leaves the calls
+		// pending -- and Act dispatches them on the next iteration, running tools
+		// the model asked for in the response the harness just discarded. Their
+		// results then land in the transcript as orphan blocks with no call to
+		// answer, which is a transcript no provider will accept.
+		pending_calls_.clear( );
+
 		auto steer = model::message{ };
 		steer.speaker = model::role::user;
 
@@ -485,6 +493,17 @@ namespace mcode {
 		} const guard{ this };
 
 		while ( true ) {
+			// Checked at the step boundary, which is the honest bound: a request
+			// already in flight is not abandoned mid-stream.
+			if ( cancel_ != nullptr && cancel_->load( ) ) {
+				finish_run( loop_state::handoff, "interrupted" );
+				outcome.final_state = loop_state::handoff;
+				outcome.visited = visited_;
+				outcome.summary_json = "interrupted";
+
+				return outcome;
+			}
+
 			publish( events::kind::step_start, std::string{ "{\"state\":\"" }
 				+ std::string{ to_string( state_ ) } + "\"}" );
 

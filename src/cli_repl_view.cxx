@@ -106,7 +106,12 @@ auto view_scrolled( const mcode::tui::render_coordinator& coordinator,
 auto handle_turn_key( mcode::tui::render_coordinator& coordinator,
 	std::atomic< bool >& interrupted, const mcode::tui::tty_session& session_tty,
 	const mcode::tui::key_event& key ) -> bool {
-	if ( key.type == mcode::tui::key_event::kind::escape ) {
+	// Both keys stop the turn, and the flag is read by the loop at its next step
+	// boundary. Esc was the only one handled, so Ctrl+C -- which the session's
+	// own banner advertises -- fell through to the live-view path and did
+	// nothing, and the turn ran to completion on the worker thread.
+	if ( key.type == mcode::tui::key_event::kind::escape ||
+		key.type == mcode::tui::key_event::kind::interrupt ) {
 		interrupted.store( true );
 
 		return true;

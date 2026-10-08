@@ -353,13 +353,25 @@ namespace mcode {
 			outcome.code = produced.error( ).code;
 			outcome.error_message = produced.error( ).msg;
 
+			// Logged under the same kind as a success, and with the call id: the
+			// reader looks for TOOL_RESULT_EVENT, so a failure written under any
+			// other name simply vanished from a restored transcript -- and the
+			// model then believed a call it had made was never answered.
+			auto recorded = std::string{ "{\"ok\":false,\"tool\":\"" };
+			json::append_escaped( recorded, call.name );
+			recorded += "\",\"call_id\":\"";
+			json::append_escaped( recorded, call.id );
+			recorded += "\",\"content\":\"";
+			json::append_escaped( recorded, produced.error( ).msg );
+			recorded += "\"}";
+
 			auto payload = std::string{ "{\"ok\":false,\"tool\":\"" };
 			json::append_escaped( payload, call.name );
 			payload += "\",\"error\":\"";
 			json::append_escaped( payload, produced.error( ).msg );
 			payload += "\"}";
 
-			log_->append( "tool.result", payload );
+			log_->append( std::string{ agent::TOOL_RESULT_EVENT }, std::move( recorded ) );
 			publish( events::kind::tool_result, std::move( payload ) );
 
 			return finish( );
@@ -374,17 +386,28 @@ namespace mcode {
 		{
 			// One session record, carrying the output: a resumed session needs what
 			// the tool returned, not only that it succeeded. The stream payload is
-			// unchanged, because `exec --json` consumers and the eval suite parse
-			// that shape and a session record is not a stream event.
+			// built separately and without it, because `exec --json` consumers and
+			// the eval suite parse that shape, and a tool output is unbounded -- a
+			// large read would otherwise put megabytes on one JSONL line.
+			//
+			// The call id is recorded too: one assistant message can carry several
+			// calls, and without the id a reader cannot tell which result answers
+			// which call, so every result was attached to the first one.
 			auto recorded = std::string{ "{\"ok\":true,\"tool\":\"" };
 			json::append_escaped( recorded, call.name );
+			recorded += "\",\"call_id\":\"";
+			json::append_escaped( recorded, call.id );
 			recorded += "\",\"source\":\"";
 			recorded += to_string( definition->source );
 			recorded += "\",\"content\":\"";
 			json::append_escaped( recorded, outcome.content );
 			recorded += "\"}";
 
-			auto payload = recorded;
+			auto payload = std::string{ "{\"ok\":true,\"tool\":\"" };
+			json::append_escaped( payload, call.name );
+			payload += "\",\"source\":\"";
+			payload += to_string( definition->source );
+			payload += "\"}";
 
 			log_->append( std::string{ agent::TOOL_RESULT_EVENT }, std::move( recorded ) );
 			publish( events::kind::tool_result, std::move( payload ) );

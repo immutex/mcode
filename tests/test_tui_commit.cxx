@@ -11,6 +11,8 @@
 #include "mcode/tui/transcript.hxx"
 #include "mcode/tui/tty.hxx"
 
+#include "tui_test_helpers.hxx"
+
 using namespace mcode::tui;
 
 namespace {
@@ -250,4 +252,56 @@ TEST_CASE( "a turn end commits the buffer, not the row cache", "[tui][render]" )
 
 	// emphasis survives at depth `none`: the emitter drops only colour, never attributes
 	CHECK( bytes.find( ";1m" ) != std::string::npos );
+}
+
+// A commit shrinks the region: the streamed answer moves into the commit and the
+// rows it occupied are released. The commit scrolls by the region's height, so it
+// must be given the height the flush will END with, not the taller one it had
+// before -- otherwise the block lands above the new region's top and the space
+// between them is a blank gap that grows with the old height.
+TEST_CASE( "a commit that shrinks the region leaves no blank gap above it",
+	"[tui][render][screen]" ) {
+	constexpr auto ROWS = std::size_t{ 30 };
+	constexpr auto COLUMNS = std::size_t{ 100 };
+
+	auto coordinator = render_coordinator{ };
+
+	auto caps = capabilities{ };
+	caps.depth = capabilities::color_depth::none;
+	coordinator.set_capabilities( caps );
+	coordinator.resize( ROWS, COLUMNS );
+
+	auto screen = tui_test::screen_model{ ROWS, COLUMNS };
+	screen.feed( coordinator.flush( ) );
+
+	// A tall streamed answer, so the region is at its ceiling.
+	auto delta = event_queue::item{ };
+	delta.type = event_queue::kind::assistant_delta;
+	delta.text = "one\ntwo\nthree\nfour\nfive\nsix";
+
+	coordinator.apply( delta );
+	screen.feed( coordinator.flush( ) );
+
+	auto end = event_queue::item{ };
+	end.type = event_queue::kind::turn_end;
+	coordinator.apply( end );
+	screen.feed( coordinator.flush( ) );
+
+	const auto answer = screen.find_row( "six" );
+	const auto meter = screen.find_row( "tok" );
+
+	REQUIRE( answer < ROWS );
+	REQUIRE( meter < ROWS );
+
+	// Every row between the committed answer and the meter is part of the layout,
+	// never a residue of the height the region used to have.
+	auto blank = std::size_t{ 0 };
+
+	for ( auto index = answer + 1; index < meter; ++index ) {
+		if ( screen.row( index ).empty( ) ) {
+			++blank;
+		}
+	}
+
+	CHECK( blank <= 1 );
 }

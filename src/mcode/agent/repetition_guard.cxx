@@ -149,7 +149,10 @@ namespace mcode::agent {
 			return verdict;
 		}
 
-		const auto& previous = previous_turns.back( );
+		// Both sides normalized. Comparing a normalized string against a RAW one
+		// made the signal dead: a verbatim repeat measured 0.885 against a 0.90
+		// threshold, because the two sides differed by whitespace and case alone.
+		const auto previous = normalize_for_comparison( previous_turns.back( ) );
 
 		if ( previous.size( ) < REPETITION_MIN_COMPARABLE ) {
 			return verdict;

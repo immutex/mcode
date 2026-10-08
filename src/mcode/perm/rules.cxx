@@ -18,31 +18,48 @@ namespace mcode::perm {
 				: path.substr( slash + 1 );
 		}
 
+		// Windows and macOS file systems are case-insensitive, so a name test
+		// that is not folded lets `.ENV` past a rule written for `.env`.
+		[[nodiscard]] auto fold_case( const std::string_view text ) -> std::string {
+			auto lowered = std::string{ text };
+
+			for ( auto& character : lowered ) {
+				if ( character >= 'A' && character <= 'Z' ) {
+					character = static_cast< char >( character - 'A' + 'a' );
+				}
+			}
+
+			return lowered;
+		}
+
 		// segment-wise, so a sibling directory sharing the prefix is not the credential one.
 		[[nodiscard]] auto has_segment( const std::string_view path,
 			const std::string_view name ) -> bool {
 			const auto segments = support::glob_segments( path );
+			const auto wanted = fold_case( name );
 
 			return std::any_of( segments.begin( ), segments.end( ),
-				[ name ]( const std::string_view segment ) { return segment == name; } );
+				[ &wanted ]( const std::string_view segment ) {
+					return fold_case( segment ) == wanted;
+				} );
 		}
 
-		// case-folded: Windows and macOS file systems are case-insensitive.
 		[[nodiscard]] auto name_matches( const std::string_view path,
 			const std::string_view pattern ) -> bool {
-			const auto fold = []( const std::string_view text ) {
-				auto lowered = std::string{ text };
+			return support::wildcard_match( fold_case( pattern ), fold_case( base_name( path ) ) );
+		}
 
-				for ( auto& character : lowered ) {
-					if ( character >= 'A' && character <= 'Z' ) {
-						character = static_cast< char >( character - 'A' + 'a' );
-					}
-				}
+		// A folded whole-name test: the secret names below are matched as
+		// literal names rather than patterns, so `wildcard_match` would give
+		// their `*` and `?` a meaning they do not have.
+		[[nodiscard]] auto name_is( const std::string_view path,
+			const std::string_view name ) -> bool {
+			return fold_case( base_name( path ) ) == fold_case( name );
+		}
 
-				return lowered;
-			};
-
-			return support::wildcard_match( fold( pattern ), fold( base_name( path ) ) );
+		[[nodiscard]] auto name_starts_with( const std::string_view path,
+			const std::string_view prefix ) -> bool {
+			return fold_case( base_name( path ) ).starts_with( fold_case( prefix ) );
 		}
 
 	}
@@ -68,9 +85,8 @@ namespace mcode::perm {
 
 	auto default_secret_deny( const std::string& canonical_path )
 		-> std::optional< std::string > {
-		const auto name = base_name( canonical_path );
-
-		if ( name == ".env" || name.starts_with( ".env." ) ) {
+		if ( name_is( canonical_path, ".env" ) ||
+			name_starts_with( canonical_path, ".env." ) ) {
 			return "environment variable file";
 		}
 
@@ -79,7 +95,8 @@ namespace mcode::perm {
 			return "key material";
 		}
 
-		if ( name == "id_rsa" || name.starts_with( "id_rsa." ) ) {
+		if ( name_is( canonical_path, "id_rsa" ) ||
+			name_starts_with( canonical_path, "id_rsa." ) ) {
 			return "key material";
 		}
 

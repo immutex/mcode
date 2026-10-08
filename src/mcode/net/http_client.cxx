@@ -424,7 +424,12 @@ namespace mcode::net {
 
 				status_code = static_cast< int >( parser.get( ).result_int( ) );
 
-				if ( parser.get( ).result( ) == http::status::ok ) {
+				// Any 2xx is a success, not only 200: the header documents that
+				// `failure` is filled for a non-2xx response and untouched
+				// otherwise, and a 201/203/206 was rejected as a protocol error
+				// while still filling `failure`, which is the state the header
+				// says cannot happen.
+				if ( status_code >= 200 && status_code < 300 ) {
 					return;
 				}
 

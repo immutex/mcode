@@ -49,66 +49,119 @@ namespace mcode::tools {
 			return out;
 		}
 
-		// each line keeps the ending its ORIGINAL had, so a mixed-ending file stays mixed
+		// the body of a line, with its ending removed
+		[[nodiscard]] auto line_body( const std::string_view line ) -> std::string_view {
+			if ( line.size( ) >= 2 && line.substr( line.size( ) - 2 ) == "\r\n" ) {
+				return line.substr( 0, line.size( ) - 2 );
+			}
+
+			if ( !line.empty( ) && line.back( ) == '\n' ) {
+				return line.substr( 0, line.size( ) - 1 );
+			}
+
+			return line;
+		}
+
+		[[nodiscard]] auto line_ending( const std::string_view line ) -> std::string_view {
+			if ( line.size( ) >= 2 && line.substr( line.size( ) - 2 ) == "\r\n" ) {
+				return line.substr( line.size( ) - 2 );
+			}
+
+			if ( !line.empty( ) && line.back( ) == '\n' ) {
+				return line.substr( line.size( ) - 1 );
+			}
+
+			return { };
+		}
+
+		// The endings are preserved around the edited region: the unchanged lines
+		// before and after it are emitted byte for byte, and a replaced line takes
+		// the ending of the line it replaced, so a CRLF file stays CRLF and an
+		// unterminated final line stays unterminated.
+		//
+		// The region is found by common prefix and suffix, NOT by walking the two
+		// line lists in lockstep by index. A replacement that changes the line
+		// count breaks the index correspondence: with `a\nb\nc\nd`, replacing `b`
+		// with `B1\nB2` left `c` and `d` merged into `cd`, because `c` was spliced
+		// against `d`'s (empty, unterminated) ending. The edit still reported
+		// success, and the read-back hash compares the written bytes against
+		// themselves, so nothing downstream caught it.
 		[[nodiscard]] auto splice_with_original_endings( const std::string_view original,
 			const std::string_view normalised_after )
 			-> std::string {
 			const auto old_lines = split_keepings_endings( original );
-			auto new_lines = split_keepings_endings( normalised_after );
+			const auto new_lines = split_keepings_endings( normalised_after );
+
+			const auto& old = old_lines.lines;
+			const auto& updated = new_lines.lines;
+
+			// The unchanged head and tail, compared on bodies so a line whose
+			// ending the rewrite normalised still counts as unchanged.
+			auto prefix = std::size_t{ 0 };
+
+			while ( prefix < old.size( ) && prefix < updated.size( ) &&
+				diff_line( old[ prefix ] ) == diff_line( updated[ prefix ] ) ) {
+				++prefix;
+			}
+
+			auto suffix = std::size_t{ 0 };
+
+			while ( suffix < old.size( ) - prefix && suffix < updated.size( ) - prefix &&
+				diff_line( old[ old.size( ) - 1 - suffix ] ) ==
+					diff_line( updated[ updated.size( ) - 1 - suffix ] ) ) {
+				++suffix;
+			}
+
+			const auto old_middle = old.size( ) - prefix - suffix;
+			const auto new_middle = updated.size( ) - prefix - suffix;
 
 			auto out = std::string{ };
-			out.reserve( normalised_after.size( ) + new_lines.lines.size( ) );
+			out.reserve( normalised_after.size( ) + updated.size( ) );
 
-			// agreed lines emit the original bytes; a replaced line takes the ending at that index
-			auto old_index = std::size_t{ 0 };
-			auto new_index = std::size_t{ 0 };
+			for ( auto index = std::size_t{ 0 }; index < prefix; ++index ) {
+				out.append( old[ index ] );
+			}
 
-			while ( new_index < new_lines.lines.size( ) ) {
-				auto new_line = std::string_view{ new_lines.lines[ new_index ] };
-				auto new_body = new_line;
-				auto new_ending = std::string_view{ };
+			if ( new_middle > 0 ) {
+				// The ending the replacement region used, so inserted lines match
+				// the file rather than whatever the edit's own text carried.
+				auto style_ending = std::string_view{ };
 
-				if ( new_body.size( ) >= 2 && new_body.substr( new_body.size( ) - 2 ) == "\r\n" ) {
-					new_ending = new_body.substr( new_body.size( ) - 2 );
-					new_body.remove_suffix( 2 );
-				} else if ( !new_body.empty( ) && new_body.back( ) == '\n' ) {
-					new_ending = new_body.substr( new_body.size( ) - 1 );
-					new_body.remove_suffix( 1 );
+				if ( old_middle > 0 ) {
+					style_ending = line_ending( old[ prefix ] );
+
+					if ( style_ending.empty( ) ) {
+						style_ending = "\n";
+					}
 				}
 
-				if ( old_index < old_lines.lines.size( ) ) {
-					const auto& original_line = old_lines.lines[ old_index ];
-					auto original_body = std::string_view{ original_line };
-					auto original_ending = std::string_view{ };
+				// The last inserted line adopts the region's own final ending, so a
+				// replaced unterminated last line stays unterminated.
+				auto tail_ending = std::string_view{ };
 
-					if ( original_body.size( ) >= 2 &&
-						original_body.substr( original_body.size( ) - 2 ) == "\r\n" ) {
-						original_ending = original_body.substr( original_body.size( ) - 2 );
-						original_body.remove_suffix( 2 );
-					} else if ( !original_body.empty( ) && original_body.back( ) == '\n' ) {
-						original_ending = original_body.substr( original_body.size( ) - 1 );
-						original_body.remove_suffix( 1 );
-					}
-
-					if ( original_body == new_body ) {
-						out.append( original_line );
-						++old_index;
-						++new_index;
-
-						continue;
-					}
-
-					out.append( new_body );
-					out.append( original_ending );
-					++old_index;
-					++new_index;
-
-					continue;
+				if ( old_middle > 0 ) {
+					tail_ending = line_ending( old[ prefix + old_middle - 1 ] );
 				}
 
-				out.append( new_body );
-				out.append( new_ending );
-				++new_index;
+				for ( auto index = std::size_t{ 0 }; index < new_middle; ++index ) {
+					const auto& line = updated[ prefix + index ];
+
+					out.append( line_body( line ) );
+
+					if ( index + 1 < new_middle ) {
+						out.append( style_ending );
+					} else if ( old_middle > 0 ) {
+						out.append( tail_ending );
+					} else {
+						// A pure insertion has no replaced line to take an ending
+						// from, so the text's own ending is the only source.
+						out.append( line_ending( line ) );
+					}
+				}
+			}
+
+			for ( auto index = old.size( ) - suffix; index < old.size( ); ++index ) {
+				out.append( old[ index ] );
 			}
 
 			return out;

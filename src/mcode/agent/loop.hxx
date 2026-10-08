@@ -366,6 +366,19 @@ namespace mcode {
 		// a plan response with no tool call is the turn's answer, so Act never re-requests it.
 		[[nodiscard]] auto run( const std::string_view user_task ) -> result< turn_outcome >;
 
+		// A cancel source the caller owns and may set from another thread. The
+		// loop reads it at each step boundary and stops the turn there, which is
+		// the honest bound: a model request already in flight is not abandoned
+		// mid-stream, because the transport has no way to take that back.
+		//
+		// Without this the REPL's Ctrl+C and Esc only stopped *displaying* the
+		// answer -- the turn ran to completion on the worker thread, so the
+		// session looked interrupted and was not, and the committed banner's
+		// "Ctrl+C to interrupt" was false.
+		auto set_cancel_source( const std::atomic< bool >* value ) -> void {
+			cancel_ = value;
+		}
+
 		[[nodiscard]] auto budget( ) const noexcept -> const session_budget& { return budget_; }
 
 		// The loop thread stays the only publisher.
@@ -529,6 +542,7 @@ namespace mcode {
 		std::string instruction_chain_;
 		std::string skill_index_;
 		std::function< void( ) > pump_timers_;
+		const std::atomic< bool >* cancel_ = nullptr;
 		std::vector< tool_call > pending_calls_;
 
 		// the plan response carried no tool call, so Act reuses it as the turn's answer.

@@ -67,6 +67,16 @@ namespace mcode::mcp {
 			return std::unexpected( std::move( caps ).error( ) );
 		}
 
+		// A resources- or prompts-only server is legal and has no obligation to
+		// implement `tools/list`; asking anyway got a -32601, which `call` turns
+		// into a protocol error, so the server was reported as failed to start
+		// and then retried through the restart ladder.
+		if ( !caps->tools ) {
+			tools_.clear( );
+
+			return tools_;
+		}
+
 		auto listed = client_->list_tools( );
 
 		if ( !listed ) {
@@ -186,20 +196,29 @@ namespace mcode::mcp {
 	}
 
 	auto supervisor::pump( const std::chrono::milliseconds window ) -> void {
-		if ( restart_pending_ ) {
-			if ( std::chrono::steady_clock::now( ) < next_attempt_ ) {
-				return;
+		if ( transport_ ) {
+			transport_->pump( window );
+
+			// A child that exits while idle produces no read, so its EOF never
+			// arrives through the transport's own path -- and the call path's
+			// zero-length window issues no read at all. The child's own state is
+			// the only signal available, and without it the next call writes into
+			// a dead pipe and the server stays dead for the rest of the session.
+			if ( !transport_->alive( ) ) {
+				on_transport_eof( );
 			}
+		}
 
-			restart_pending_ = false;
-			attempt_restart( );
-
+		if ( !restart_pending_ ) {
 			return;
 		}
 
-		if ( transport_ ) {
-			transport_->pump( window );
+		if ( std::chrono::steady_clock::now( ) < next_attempt_ ) {
+			return;
 		}
+
+		restart_pending_ = false;
+		attempt_restart( );
 	}
 
 	auto supervisor::detect_changed_tools( const std::vector< server_tool >& fresh ) const

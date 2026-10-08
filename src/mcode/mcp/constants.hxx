@@ -16,6 +16,10 @@ namespace mcode::mcp {
 	inline constexpr std::size_t RESTART_BACKOFF_STEPS = 5;
 	inline constexpr std::chrono::milliseconds RESTART_BACKOFF_BASE{ 1'000 };
 
+	// A `tools/list` pagination bound. A server that never stops handing back a
+	// cursor would otherwise make the listing run forever, one request per page.
+	inline constexpr std::size_t MAX_TOOL_PAGES = 64;
+
 	// pinned interop target; the fleet speaks 2024-11-05..2025-06-18
 	inline constexpr std::string_view PROTOCOL_VERSION = "2025-06-18";
 

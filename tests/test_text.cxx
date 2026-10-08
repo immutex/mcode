@@ -82,6 +82,35 @@ TEST_CASE( "sanitize replaces invalid sequences and preserves valid ones", "[tex
 	CHECK( sanitize_utf8( EMOJI ) == std::string{ EMOJI } );
 }
 
+// A rejected sequence must consume only the bytes it actually covered. Advancing
+// by the lead byte's claimed length swallowed the valid characters that followed
+// a truncated sequence, and this feeds the model the file it anchors an edit on.
+TEST_CASE( "sanitize does not eat the characters after a truncated sequence", "[text]" ) {
+	const auto cases = std::vector< std::string >{
+		"caf\xE9 x",        // Latin-1 lead, no continuation: the " x" must survive
+		"a\xE9" "bc",       // two valid characters follow the lone lead
+		"\xE2\x82" "A!",    // 3-byte lead with one continuation, then "A!"
+		"\xF0\x9F" "A",     // 4-byte lead with one continuation, then "A"
+		"\xE2\x82\xAC ok",  // a VALID 3-byte sequence is not a truncation
+	};
+
+	const auto expected = std::vector< std::string >{
+		"caf\xEF\xBF\xBD x",
+		"a\xEF\xBF\xBD" "bc",
+		"\xEF\xBF\xBD" "A!",
+		"\xEF\xBF\xBD" "A",
+		"\xE2\x82\xAC ok",
+	};
+
+	for ( auto index = std::size_t{ 0 }; index < cases.size( ); ++index ) {
+		const auto cleaned = sanitize_utf8( cases[ index ] );
+
+		INFO( "case " << index );
+		CHECK( is_valid_utf8( cleaned ) );
+		CHECK( cleaned == expected[ index ] );
+	}
+}
+
 TEST_CASE( "UTF-16 round trip", "[text]" ) {
 	SECTION( "ASCII" ) {
 		auto wide = to_utf16( "hello" );

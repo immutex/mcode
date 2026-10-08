@@ -572,7 +572,12 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 			cost );
 	}
 
-	std::fputc( '\n', stdout );
+	// A `--json` consumer reads one JSON object per line, so the blank line that
+	// separates the answer from the summary in the human view is not written
+	// there.
+	if ( !parsed->json ) {
+		std::fputc( '\n', stdout );
+	}
 
 	auto summary = std::string{ "run ended in state " };
 
