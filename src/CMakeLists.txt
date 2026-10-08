@@ -144,6 +144,7 @@ add_library(mcode_core STATIC
 
     mcode/cli/repl.cxx
     mcode/cli/setup.cxx
+    mcode/cli/setup_detail.cxx
     mcode/cli/slash.cxx
 )
 

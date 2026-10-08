@@ -1,4 +1,5 @@
 #include "mcode/cli/setup.hxx"
+#include "setup_detail.hxx"
 
 #include <algorithm>
 #include <array>
@@ -21,11 +22,6 @@ namespace mcode::cli {
 	namespace {
 
 		using tui::token;
-
-		// The `[model]` section this writes, as its bare name. One place, so the
-		// header it looks for and the header it writes cannot drift apart.
-		inline constexpr std::string_view SECTION_NAME = "model";
-		inline constexpr std::string_view CONFIG_FILE_NAME = "config.toml";
 
 		// A verification turn that never returns is worse than a failed one.
 		inline constexpr std::uint32_t SETUP_READ_TIMEOUT_MS = 300'000;
@@ -269,350 +265,14 @@ namespace mcode::cli {
 		// already knows how to talk to.
 		// -------------------------------------------------------------------
 
-		struct provider_choice {
-			std::string_view label;
-			std::string_view descriptor;
-			std::string_view base_url;
-			std::string_view api_key_env;
-			std::string_view note;
-		};
-
-		inline constexpr auto PROVIDERS = std::array{
-			provider_choice{ "OpenAI", "openai-chat-completions",
-				"https://api.openai.com/v1/chat/completions", "OPENAI_API_KEY",
-				"platform.openai.com" },
-			provider_choice{ "Anthropic", "anthropic-messages",
-				"https://api.anthropic.com/v1/messages", "ANTHROPIC_API_KEY",
-				"console.anthropic.com" },
-			provider_choice{ "OpenAI-compatible endpoint", "openai-chat-completions",
-				"", "MCODE_API_KEY", "any /v1/chat/completions gateway" },
-		};
-
-		// Only the models the compiled-in table prices. A model outside it needs
-		// a `[models."id"]` block, which the wizard names rather than silently
-		// writing a config that would refuse to run.
-		[[nodiscard]] auto suggested_models( const std::size_t provider_index )
-			-> std::vector< std::string > {
-			switch ( provider_index ) {
-				case 0: return { "gpt-5", "gpt-5-mini" };
-				default: return { };
-			}
-		}
-
-		// -------------------------------------------------------------------
-		// Config writing. The file is edited as text: the `[model]` section is
-		// replaced or appended and everything else, including the
-		// `[models."..."]` pricing blocks and their comments, is preserved byte
-		// for byte. Parsing and re-serialising would need a TOML writer that
-		// does not exist, and would drop the rationale those comments carry.
-		// -------------------------------------------------------------------
-
-		[[nodiscard]] auto escape_toml( const std::string_view text ) -> std::string {
-			auto out = std::string{ };
-			out.reserve( text.size( ) );
-
-			for ( const auto character : text ) {
-				switch ( character ) {
-					case '"': out += "\\\""; break;
-					case '\\': out += "\\\\"; break;
-					case '\n': out += "\\n"; break;
-					case '\r': out += "\\r"; break;
-					case '\t': out += "\\t"; break;
-
-					default: out.push_back( character ); break;
-				}
-			}
-
-			return out;
-		}
-
-		struct model_settings {
-			std::string provider;
-			std::string model;
-			std::string base_url;
-			std::string api_key_env;
-		};
-
-		[[nodiscard]] auto render_section( const model_settings& settings ) -> std::string {
-			auto out = std::string{ };
-			out += '[';
-			out += SECTION_NAME;
-			out += ']';
-			out += "\nprovider = \"";
-			out += escape_toml( settings.provider );
-			out += "\"\nmodel = \"";
-			out += escape_toml( settings.model );
-			out += "\"\n";
-
-			if ( !settings.base_url.empty( ) ) {
-				out += "base_url = \"";
-				out += escape_toml( settings.base_url );
-				out += "\"\n";
-			}
-
-			out += "api_key_env = \"";
-			out += escape_toml( settings.api_key_env );
-			out += "\"\n";
-
-			return out;
-		}
-
-		// Replaces the `[model]` section in place, or appends one.
-		//
-		// Line-based rather than offset-based, because a config edited on Windows
-		// carries CRLF endings and a check for a bare `\n` after the header would
-		// miss it and append a SECOND `[model]` section. Two sections with the
-		// same name are a duplicate-key error at load, so that failure would land
-		// on the user's next start rather than here.
-		[[nodiscard]] auto splice_section( const std::string_view existing,
-			const std::string& section ) -> std::string {
-			// Split preserving nothing; the ending is reapplied from the original
-			// dominant style so the file is not half-converted.
-			auto lines = std::vector< std::string >{ };
-			auto endings = std::string{ };
-			auto cursor = std::size_t{ 0 };
-
-			while ( cursor <= existing.size( ) && !existing.empty( ) ) {
-				const auto next = existing.find( '\n', cursor );
-
-				if ( next == std::string_view::npos ) {
-					if ( cursor < existing.size( ) ) {
-						lines.emplace_back( existing.substr( cursor ) );
-					}
-
-					break;
-				}
-
-				auto line = std::string{ existing.substr( cursor, next - cursor ) };
-
-				if ( !line.empty( ) && line.back( ) == '\r' ) {
-					line.pop_back( );
-
-					if ( endings.empty( ) ) {
-						endings = "\r\n";
-					}
-				} else if ( endings.empty( ) ) {
-					endings = "\n";
-				}
-
-				lines.push_back( std::move( line ) );
-				cursor = next + 1;
-			}
-
-			if ( endings.empty( ) ) {
-				endings = "\n";
-			}
-
-			// The replacement, split the same way so it joins the same file.
-			auto replacement = std::vector< std::string >{ };
-			auto section_cursor = std::size_t{ 0 };
-
-			while ( section_cursor <= section.size( ) ) {
-				const auto next = section.find( '\n', section_cursor );
-
-				if ( next == std::string::npos ) {
-					break;
-				}
-
-				replacement.emplace_back( section.substr( section_cursor, next - section_cursor ) );
-				section_cursor = next + 1;
-			}
-
-			// A TOML table header, ignoring the indentation, trailing space and
-			// trailing comment that TOML allows. Exact equality missed
-			// `[model] # my provider`, so the append branch ran and wrote a
-			// SECOND `[model]` -- which the loader then rejects as a duplicate
-			// key, leaving the user's config unreadable until they hand-edit it.
-			const auto header_name = []( const std::string& text )
-				-> std::optional< std::string > {
-				auto cursor = std::size_t{ 0 };
-
-				while ( cursor < text.size( ) &&
-					( text[ cursor ] == ' ' || text[ cursor ] == '\t' ) ) {
-					++cursor;
-				}
-
-				if ( cursor >= text.size( ) || text[ cursor ] != '[' ) {
-					return std::nullopt;
-				}
-
-				const auto close = text.find( ']', cursor + 1 );
-
-				if ( close == std::string::npos ) {
-					return std::nullopt;
-				}
-
-				const auto after = text.find_first_not_of( " \t", close + 1 );
-
-				if ( after != std::string::npos && text[ after ] != '#' ) {
-					return std::nullopt;
-				}
-
-				return text.substr( cursor + 1, close - cursor - 1 );
-			};
-
-			const auto is_header = [ & ]( const std::string& line ) -> bool {
-				return header_name( line ).has_value( );
-			};
-
-			const auto start = [&]( ) -> std::size_t {
-				for ( auto index = std::size_t{ 0 }; index < lines.size( ); ++index ) {
-					const auto name = header_name( lines[ index ] );
-
-					if ( name.has_value( ) && *name == SECTION_NAME ) {
-						return index;
-					}
-				}
-
-				return lines.size( );
-			}( );
-
-			if ( start == lines.size( ) ) {
-				// Not present: append, with a blank separator when the file is not empty.
-				if ( !lines.empty( ) && !lines.back( ).empty( ) ) {
-					lines.emplace_back( std::string{ } );
-				}
-
-				lines.insert( lines.end( ), replacement.begin( ), replacement.end( ) );
-			} else {
-				// The section runs to the next header, or to the end of the file.
-				auto end = start + 1;
-
-				while ( end < lines.size( ) && !is_header( lines[ end ] ) ) {
-					++end;
-				}
-
-				lines.erase( lines.begin( ) + static_cast< std::ptrdiff_t >( start ),
-					lines.begin( ) + static_cast< std::ptrdiff_t >( end ) );
-				lines.insert( lines.begin( ) + static_cast< std::ptrdiff_t >( start ),
-					replacement.begin( ), replacement.end( ) );
-			}
-
-			auto out = std::string{ };
-
-			for ( const auto& line : lines ) {
-				out += line;
-				out += endings;
-			}
-
-			return out;
-		}
-
-		[[nodiscard]] auto read_text_file( const std::filesystem::path& path )
-			-> std::optional< std::string > {
-			if ( !std::filesystem::exists( path ) ) {
-				return std::string{ };
-			}
-
-			auto* file = std::fopen( path.string( ).c_str( ), "rb" );
-
-			if ( file == nullptr ) {
-				return std::nullopt;
-			}
-
-			auto out = std::string{ };
-			auto buffer = std::array< char, 4096 >{ };
-			auto count = std::size_t{ 0 };
-
-			while ( ( count = std::fread( buffer.data( ), 1, buffer.size( ), file ) ) > 0 ) {
-				out.append( buffer.data( ), count );
-			}
-
-			std::fclose( file );
-
-			return out;
-		}
-
-		// Writes beside the target and renames, so an interrupted run cannot
-		// leave a half-written config that the next start would refuse.
-		[[nodiscard]] auto write_text_file( const std::filesystem::path& path,
-			const std::string_view content ) -> bool {
-			auto error = std::error_code{ };
-
-			if ( !path.parent_path( ).empty( ) ) {
-				std::filesystem::create_directories( path.parent_path( ), error );
-
-				if ( error ) {
-					return false;
-				}
-			}
-
-			const auto temporary = path.string( ) + ".new";
-			auto* file = std::fopen( temporary.c_str( ), "wb" );
-
-			if ( file == nullptr ) {
-				return false;
-			}
-
-			const auto written = std::fwrite( content.data( ), 1, content.size( ), file );
-			std::fclose( file );
-
-			if ( written != content.size( ) ) {
-				std::remove( temporary.c_str( ) );
-
-				return false;
-			}
-
-			std::filesystem::rename( temporary, path, error );
-
-			if ( !error ) {
-				return true;
-			}
-
-			// A rename onto a file that is open fails on Windows; a copy still
-			// completes the write rather than losing the user's settings.
-			std::filesystem::copy_file( temporary, path,
-				std::filesystem::copy_options::overwrite_existing, error );
-			std::remove( temporary.c_str( ) );
-
-			return !error;
-		}
-
-		[[nodiscard]] auto config_path( ) -> std::filesystem::path {
-			const auto directory = mcode::platform::app_data_path(
-				mcode::platform::data_kind::config );
-
-			if ( !directory ) {
-				return std::filesystem::path{ };
-			}
-
-			return *directory / CONFIG_FILE_NAME;
-		}
-
-		// -------------------------------------------------------------------
-		// Verification. The strongest check available is the one the user is
-		// about to run: write the config, then run a real turn with it. That
-		// exercises the descriptor, the endpoint, the credential and the
-		// streaming parser, so a success here is the whole path working rather
-		// than a hand-rolled request that might not match it.
-		// -------------------------------------------------------------------
-
-		[[nodiscard]] auto self_path( ) -> std::filesystem::path {
-			const auto directory = mcode::platform::executable_directory( );
-
-			if ( !directory ) {
-				return std::filesystem::path{ };
-			}
-
-			for ( const auto name : { "mcode", "mcode.exe" } ) {
-				const auto candidate = *directory / name;
-
-				if ( std::filesystem::exists( candidate ) ) {
-					return candidate;
-				}
-			}
-
-			return { };
-		}
-
 		struct verification {
 			bool ok = false;
 			std::string detail;
 		};
 
-		[[nodiscard]] auto verify( const model_settings& settings,
+		[[nodiscard]] auto verify( const detail::model_settings& settings,
 			const std::string& api_key ) -> verification {
-			const auto self = self_path( );
+			const auto self = detail::self_path( );
 
 			if ( self.empty( ) ) {
 				return { true, "could not locate the mcode binary; skipped" };
@@ -676,7 +336,7 @@ namespace mcode::cli {
 			blank( );
 		}
 
-		[[nodiscard]] auto finish( const painter& brush, const model_settings& settings,
+		[[nodiscard]] auto finish( const painter& brush, const detail::model_settings& settings,
 			const std::filesystem::path& path, const bool verified,
 			const bool have_key ) -> int {
 			blank( );
@@ -777,8 +437,8 @@ namespace mcode::cli {
 				}
 			}
 
-			const auto settings = model_settings{ provider, model, base_url, key_env };
-			const auto path = config_path( );
+			const auto settings = detail::model_settings{ provider, model, base_url, key_env };
+			const auto path = detail::config_path( );
 
 			if ( path.empty( ) ) {
 				std::fprintf( stderr, "mcode: no configuration directory is available\n" );
@@ -786,9 +446,9 @@ namespace mcode::cli {
 				return 2;
 			}
 
-			if ( !write_text_file( path, splice_section(
-				read_text_file( path ).value_or( std::string{ } ),
-				render_section( settings ) ) ) ) {
+			if ( !detail::write_text_file( path, detail::splice_section(
+				detail::read_text_file( path ).value_or( std::string{ } ),
+				detail::render_section( settings ) ) ) ) {
 				std::fprintf( stderr, "mcode: could not write %s\n", path.string( ).c_str( ) );
 
 				return 2;
@@ -818,10 +478,10 @@ namespace mcode::cli {
 	auto splice_model_section( const std::string_view existing,
 		const std::string_view provider, const std::string_view model,
 		const std::string_view base_url, const std::string_view api_key_env ) -> std::string {
-		const auto settings = model_settings{ std::string{ provider }, std::string{ model },
+		const auto settings = detail::model_settings{ std::string{ provider }, std::string{ model },
 			std::string{ base_url }, std::string{ api_key_env } };
 
-		return splice_section( existing, render_section( settings ) );
+		return detail::splice_section( existing, detail::render_section( settings ) );
 	}
 
 	auto setup_usage_text( ) -> std::string {
@@ -865,7 +525,7 @@ namespace mcode::cli {
 
 		auto input = reader{ *terminal };
 
-		const auto path = config_path( );
+		const auto path = detail::config_path( );
 
 		if ( path.empty( ) ) {
 			write_line( brush.bad( "  no configuration directory is available" ) );
@@ -878,7 +538,7 @@ namespace mcode::cli {
 		auto labels = std::vector< std::string >{ };
 		auto notes = std::vector< std::string >{ };
 
-		for ( const auto& entry : PROVIDERS ) {
+		for ( const auto& entry : detail::PROVIDERS ) {
 			labels.emplace_back( entry.label );
 			notes.emplace_back( std::string{ entry.note } );
 		}
@@ -889,7 +549,7 @@ namespace mcode::cli {
 			return cancelled( brush );
 		}
 
-		const auto& entry = PROVIDERS[ *chosen ];
+		const auto& entry = detail::PROVIDERS[ *chosen ];
 		blank( );
 
 		auto base_url = std::string{ entry.base_url };
@@ -914,7 +574,7 @@ namespace mcode::cli {
 			return 2;
 		}
 
-		auto models = suggested_models( *chosen );
+		auto models = detail::suggested_models( *chosen );
 		auto model = std::string{ };
 
 		if ( models.empty( ) ) {
@@ -980,15 +640,15 @@ namespace mcode::cli {
 
 		blank( );
 
-		const auto settings = model_settings{ std::string{ entry.descriptor }, model,
+		const auto settings = detail::model_settings{ std::string{ entry.descriptor }, model,
 			base_url, key_env };
 
 		// Write before verifying: the check runs a real turn, and a real turn
 		// reads the file. `previous` is kept so a failure can be undone.
-		const auto previous = read_text_file( path );
+		const auto previous = detail::read_text_file( path );
 
-		if ( !write_text_file( path, splice_section( previous.value_or( std::string{ } ),
-			render_section( settings ) ) ) ) {
+		if ( !detail::write_text_file( path, detail::splice_section( previous.value_or( std::string{ } ),
+			detail::render_section( settings ) ) ) ) {
 			blank( );
 			write_line( "  " + brush.bad( "could not write " + path.string( ) ) );
 			blank( );
@@ -1023,7 +683,7 @@ namespace mcode::cli {
 					// restore is reported rather than swallowed: the file is then
 					// half-configured and the user has to be told.
 					if ( previous ) {
-						if ( !write_text_file( path, *previous ) ) {
+						if ( !detail::write_text_file( path, *previous ) ) {
 							write_line( "  " + brush.bad( "could not restore "
 								+ path.string( ) ) );
 						}
