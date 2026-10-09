@@ -1,0 +1,55 @@
+# Dependency updates.
+#
+# Two ecosystems, because those are the two Dependabot can actually see. The
+# Conan dependencies in `conanfile.py` are the ones that matter most and are NOT
+# covered here: Dependabot has no Conan ecosystem, so `fmt`, `boost`, `openssl`
+# and the rest are updated by hand.
+#
+# That is a real gap rather than an oversight. A dependency bump here is not a
+# version-string edit: `docs/14-cpp23-stack.md` requires a new dependency to
+# justify itself against measured size and compile cost, and
+# `THIRD-PARTY-NOTICES.md` has to be updated when the license or the version
+# changes. Both are review steps a bot cannot do, so those bumps stay manual.
+
+version: 2
+
+updates:
+  # The workflow actions. These run on every push, so a bad bump fails
+  # immediately rather than at the next tag.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    # The house style has no prefix and no scope, so both are cleared.
+    # A bump reads "Bump actions/checkout from 4 to 7".
+    commit-message:
+      prefix: ""
+      include: "none"
+    groups:
+      # One pull request for the routine bumps, so a quiet week is one review
+      # rather than six. A major version still gets its own, because a major is
+      # where the breaking changes live.
+      actions-minor:
+        patterns: ['*']
+        update-types: [minor, patch]
+
+  # The ConPTY TUI gate (`tools/tui_check/tui_screen.py`). Both packages are
+  # needed: pywinpty supplies the pty, pyte renders the screen from the bytes.
+  # The gate is registered as a ctest on Windows, so a bump that breaks the API
+  # fails CI rather than silently skipping the check.
+  - package-ecosystem: pip
+    directory: /tools/tui_check
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    # The house style has no prefix and no scope, so both are cleared.
+    # A bump reads "Bump actions/checkout from 4 to 7".
+    commit-message:
+      prefix: ""
+      include: "none"
+    groups:
+      tui-gate:
+        patterns: ['*']

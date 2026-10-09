@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/immutex/mcode/security/advisories/new
+    about: Do not open a public issue. See SECURITY.md for what is in scope.
+  - name: Question or design discussion
+    url: https://github.com/immutex/mcode/discussions
+    about: How something works, or why a decision was made. The docs are the specification.
+  - name: Read the design docs
+    url: https://github.com/immutex/mcode/blob/master/docs/00-index.md
+    about: 43 docs covering the architecture, budgets, and every trap found so far.

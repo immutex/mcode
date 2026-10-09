@@ -1,0 +1,98 @@
+name: Feature request
+description: Propose a capability, or argue that a documented decision should change
+title: ""
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        mcode is deliberately small. The core knows four abstractions
+        (`ModelClient`, `Context`, `ToolRegistry`, `EventBus`) and nothing about
+        Lua, MCP, skills, or the terminal. **New capability attaches to a
+        registry or the event bus, never to the loop**, and a request that
+        requires touching the loop is a much harder sell than one that does not.
+
+        Two useful things before you file:
+
+        - **`docs/01-north-star.md`** has the hard budgets. A feature that cannot
+          meet one is a design discussion, not a pull request.
+        - **`docs/16-roadmap.md`** lists what is already planned, and the README
+          lists what is deliberately not built yet.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: |
+        What you are trying to do, and where the harness gets in the way. Describe
+        the situation rather than the API you have in mind -- the situation is
+        what has to be solved, and it often has a cheaper answer than the proposed
+        mechanism.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you propose
+      description: |
+        Concrete if you can: which registry, which event, which file. If you are
+        proposing a change to a documented decision, say which doc owns it and
+        what would have to be rewritten.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: attach
+    attributes:
+      label: Where it would attach
+      description: |
+        The design rule above. If the honest answer is "the loop", say so -- it is
+        not disqualifying, it just needs a stronger argument.
+      options:
+        - A tool (registered in the tool registry)
+        - The event bus (a subscriber, hook, or event kind)
+        - A Lua extension (no core change at all)
+        - A model provider (a descriptor, as data)
+        - The CLI or the TUI
+        - The loop itself (say why in the proposal)
+        - A document, not code
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: cost
+    attributes:
+      label: What it costs
+      description: |
+        The budgets are hard constraints, so this is the part that decides most
+        proposals. Which of these does it touch?
+
+        - System prompt or tool schema: these are spent on **every** request, forever
+        - Idle RSS (≤ 30 MB) or cold start (≤ 15 ms)
+        - A third-party dependency (size is the binding constraint, not count)
+        - Anything on the per-step hot path, or a new background thread
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you considered instead
+      description: |
+        Including doing nothing, or solving it in a Lua extension rather than in
+        the core. "A user extension could do this" is a legitimate answer that
+        closes a request.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched the open and closed issues for this
+          required: true
+        - label: I read the README section on what is deliberately not built yet
+          required: true

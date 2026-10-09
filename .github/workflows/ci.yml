@@ -32,7 +32,7 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Ninja
         run: sudo apt-get update && sudo apt-get install -y ninja-build
@@ -63,7 +63,7 @@ jobs:
             os: macos-14
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Ninja (Linux)
         if: runner.os == 'Linux'
@@ -99,7 +99,7 @@ jobs:
             profile: conan/profiles/macos-clang
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Ninja (Linux)
         if: runner.os == 'Linux'
@@ -109,7 +109,7 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install ninja
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -127,7 +127,7 @@ jobs:
         run: conan profile detect --force
 
       - name: Cache Conan packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.conan2/p
           key: conan-${{ runner.os }}-${{ hashFiles('conanfile.py', 'conan/recipes/**', 'conan/profiles/**') }}
@@ -187,7 +187,7 @@ jobs:
 
       - name: Upload eval records
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: eval-records-${{ matrix.name }}
           path: eval-records.jsonl
@@ -206,7 +206,7 @@ jobs:
 
       - name: Upload benchmark output
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bench-output-${{ matrix.name }}
           path: bench-output.txt
@@ -217,7 +217,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-results-${{ matrix.name }}
           path: build/Release/Testing/
@@ -248,9 +248,9 @@ jobs:
             profile: conan/profiles/macos-clang
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -321,9 +321,14 @@ jobs:
           # Stage everything the archive should contain, then archive the
           # directory. Two `-C` flags in one tar invocation is a trap: the
           # relative paths silently produce a tarball with the wrong layout.
+          #
+          # LICENSE is required, not optional: Apache-2.0 section 4(a) obliges
+          # anyone redistributing the work to ship a copy of the License, and a
+          # release archive is a redistribution. THIRD-PARTY-NOTICES carries the
+          # attribution for what mcode embeds.
           rm -rf stage dist
           mkdir -p stage dist
-          cp README.md THIRD-PARTY-NOTICES.md stage/
+          cp README.md LICENSE THIRD-PARTY-NOTICES.md stage/
 
           if [ "${{ runner.os }}" = "Windows" ]; then
             # `mcode.exe` inside, because that is the name the installer looks for
@@ -341,7 +346,7 @@ jobs:
           ls -la dist/
 
       - name: Upload the archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.name }}
           path: dist/*
@@ -357,10 +362,10 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Collect the archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
           pattern: dist-*

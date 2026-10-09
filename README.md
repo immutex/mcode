@@ -7,7 +7,7 @@
 
 <p align="center">
   <a href="https://github.com/immutex/mcode/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/immutex/mcode/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="#license"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-blue.svg?style=flat-square"></a>
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-blue.svg?style=flat-square"></a>
   <img alt="Platforms: Windows, Linux, macOS" src="https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg?style=flat-square">
   <img alt="C++23" src="https://img.shields.io/badge/C%2B%2B-23-00599C.svg?style=flat-square&logo=cplusplus&logoColor=white">
   <img alt="Binary: 8.4 MB" src="https://img.shields.io/badge/binary-8.4%20MB-success.svg?style=flat-square">
@@ -260,7 +260,7 @@ ctest --preset linux-gcc        # or macos-clang
 The design is the authoritative specification. Where code and docs disagree, the
 docs win. Start at the index.
 
-- [Design index](docs/00-index.md): reading order for all 41 docs
+- [Design index](docs/00-index.md): reading order for all 43 docs
 - [North Star](docs/01-north-star.md): thesis, hard budgets, principles, non-goals
 - [Prior art](docs/02-prior-art.md): 16 harnesses compared, plus the Lua-extension precedent
 - [Architecture](docs/03-architecture.md): process model, layers, core types, extension seams
@@ -392,9 +392,32 @@ Windows-shaped core.
 | Linux x86_64 | GCC 14+ or Clang 18+ (libstdc++) | musl static for release |
 | macOS arm64 | Apple Clang 16+ | Cannot be fully static: Apple requires a dynamic `libSystem` |
 
+## Contributing
+
+`AGENTS.md` is the authoritative rule set, and it applies to humans as much as to
+agents. Read [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup, the style rules that
+are load-bearing in review, and the two things CI catches that no local build
+will — the POSIX branches, which a Windows workstation never compiles, and the
+warnings-as-errors set, which is off locally and on in CI.
+
+Two checks are worth running before every push:
+
+```bash
+python _clgate.py                     # clang++ with the CI Clang warning set, in seconds
+./build/Release/bin/mcode --smoke     # exit code is the number of failed checks
+```
+
+## Security
+
+Report vulnerabilities privately through
+[GitHub Security Advisories](https://github.com/immutex/mcode/security/advisories/new),
+never in a public issue. [`SECURITY.md`](SECURITY.md) has the threat model, what
+is in scope, and — importantly — a table of which controls actually ship, since
+the design docs describe the target and the tree is at `0.0.1`.
+
 ## License
 
-Apache-2.0.
+Apache-2.0, see [`LICENSE`](LICENSE).
 
 mcode embeds **Luau**, which is distributed under the MIT License. Luau is
 Copyright (c) 2019-2025 Roblox Corporation and Copyright (c) 2005-2019 Lua.org,

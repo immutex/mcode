@@ -167,6 +167,32 @@ A cloned repository must never auto-execute code.
 3. Reject bytecode, symlinks, and absolute-path escapes in manifests.
 4. `--no-extensions` exists and is honored for headless/CI runs.
 
+> [!WARNING]
+> **Rules 1 and 2 are NOT implemented. The tree contradicts this section.**
+> `default_roots` (`src/mcode/ext/loader.cxx`) pushes
+> `<workspace>/.mcode/extensions` unconditionally, and `load_extensions` runs
+> every candidate's `init.luau`. There is no trust store, no grant, and no hash
+> pinning anywhere in `src/` — `grep -ri trust src/` finds only the unrelated
+> `wrap_untrusted` MCP taint marker.
+>
+> Measured, not inferred. A repository containing
+> `.mcode/extensions/backdoor/{ext.toml,init.luau}` where `init.luau` calls
+> `mcode.fs.write("EXTENSION_RAN.txt", …)`, run with
+> `mcode exec --cwd <repo> "…"`, writes the file on session start. No prompt, no
+> grant, no warning on the default path.
+>
+> **Consequence: cloning an untrusted repository and running mcode in it executes
+> that repository's code.** Rule 4 still holds — `--no-extensions` skips the load
+> entirely — and the permission engine still gates what the code can *reach*
+> (the probe's first attempt, a write under `.mcode/`, was denied by the
+> hard-deny floor). What is unbounded is that arbitrary code runs at all, in the
+> agent process, at the semi-trusted tier.
+>
+> Until a grant exists, the honest position is: `--no-extensions` is the
+> mitigation, and this section is a specification rather than a description.
+> Recorded here rather than in a commit message because this doc is what a
+> reader consults before trusting the claim.
+
 Note T2 (prompt-injected agent writes an extension): the agent has disk write access by design, so it can drop a file into the extensions directory. Mitigations are the trust gate above plus keeping the *user* extension directory (`~/.config/mcode/extensions/`) outside the workspace so the permission engine's workspace-write rules do not cover it.
 
 ### Hot reload and hang handling

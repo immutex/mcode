@@ -1,0 +1,131 @@
+name: Bug report
+description: Something behaved differently from what the documentation says
+title: ""
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, two things save a round trip:
+
+        - **`docs/40-non-obvious-constraints.md`** records 130 traps that cost
+          real time to find, numbered. If your symptom is in there, the behaviour
+          is deliberate and the entry says why.
+        - **Where code and docs disagree, the docs win.** If the docs describe
+          something the binary does not do, that is a bug in one of them and
+          worth reporting as such.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version and platform
+      description: The output of `mcode --version`. It prints both.
+      placeholder: mcode 0.0.1 (windows-AMD64, msvc-19.51.36260.0)
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The actual behaviour, as precisely as you can state it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+      description: |
+        If a doc specifies the expected behaviour, link it. A reference to the
+        doc that owns the decision makes this actionable rather than a matter of
+        opinion.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: |
+        The exact command and the exact workspace content. "It did not work" with
+        no command cannot be reproduced, and will be closed asking for one.
+      render: shell
+      placeholder: |
+        mkdir repro && cd repro && git init
+        printf '# x\n' > README.md
+        mcode exec --json "summarise README.md"
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Event log
+      description: |
+        If the failure involves the agent loop, a tool, or the model layer, the
+        typed event stream is far more useful than a screenshot. Re-run with
+        `--json` and paste the relevant records.
+
+        **Redact API keys, tokens, and anything private.** The log records the
+        conversation and the tool arguments verbatim.
+      render: json
+    validations:
+      required: false
+
+  - type: input
+    id: session
+    attributes:
+      label: Session log path
+      description: |
+        Printed on startup and by `/doctor`. It is an append-only JSONL file, so
+        the whole run is replayable from it. Useful for anything the agent loop
+        did wrong.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part
+      description: Pick the closest. The three boundary layers are separate, and knowing which one is implicated saves time.
+      options:
+        - Agent loop (plan/act/observe/verify, budget, termination)
+        - A core tool (read, edit, write, glob, grep, bash)
+        - Permissions or the approval prompt
+        - The OS sandbox
+        - Luau extensions or the extension API
+        - MCP
+        - Skills or the AGENTS.md instruction chain
+        - Model layer (provider, streaming, cache, retry)
+        - TUI or rendering
+        - CLI, flags, or config
+        - Build or toolchain
+        - Documentation
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      description: All three are tier-1, so a platform-specific failure is a real bug rather than a known gap.
+      options:
+        - Windows x64
+        - Linux x86_64
+        - macOS arm64
+        - More than one
+    validations:
+      required: true
+
+  - type: textarea
+    id: verified
+    attributes:
+      label: What you already ruled out
+      description: |
+        Optional, but it shortens the loop. For example: "not the model, since
+        `--smoke` passes", or "not the sandbox, since `--no-sandbox` behaves the
+        same", or "reproduced on a clean config".
+    validations:
+      required: false

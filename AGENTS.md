@@ -174,5 +174,8 @@ MSVC is only on `PATH` inside a developer prompt. A MinGW `link.exe` on the same
 | **Traps and deviations — cited by number** | `docs/40-non-obvious-constraints.md` |
 | Extension runtime, API, lifecycle | `docs/17-lua-runtime.md` … `docs/23-first-party-extensions.md` |
 | Cross-platform, packaging | `docs/24-cross-platform.md`, `docs/25-distribution.md` |
+| **Contributing, style rules, CI traps** | `CONTRIBUTING.md` |
+| **Security policy, what ships vs. what is designed** | `SECURITY.md` |
+| Third-party attribution, licenses | `THIRD-PARTY-NOTICES.md` |
 
 Each design doc carries a `## Traps` section. Open disagreements between sources are recorded in the doc that owns the decision — read it before "fixing" one.

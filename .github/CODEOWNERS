@@ -1,0 +1,42 @@
+# Review ownership.
+#
+# A single maintainer means this does not change who reviews what -- it requests
+# the same reviewer either way. It is here for the second reason: it names the
+# paths where a change is a **boundary** change rather than a feature, so a
+# contributor can see before opening a pull request which files need an argument
+# rather than a description.
+
+# Default: everything.
+*                       @immutex
+
+# --- Security boundaries -------------------------------------------------------
+# A change here alters what the harness claims to enforce. `SECURITY.md` §For
+# contributors applies: the commit should name the layer, and a boundary change
+# needs a test that fails without it.
+#
+# /src/mcode/perm/          the permission engine and the hard-deny floor
+# /src/mcode/platform/      the three OS sandboxes
+# /src/mcode/ext/api_gate   the extension capability boundary
+/src/mcode/perm/        @immutex
+/src/mcode/platform/    @immutex
+/src/mcode/ext/api_gate.cxx  @immutex
+/src/mcode/ext/api_gate.hxx  @immutex
+/src/mcode/ext/loader.cxx    @immutex
+/src/mcode/ext/manifest.cxx  @immutex
+SECURITY.md             @immutex
+
+# --- Budgets -------------------------------------------------------------------
+# These define the numbers every other decision is measured against. Changing one
+# is a design change, not an edit: `docs/01-north-star.md` is the single source of
+# truth and moves first, then every doc that cites it.
+/docs/01-north-star.md  @immutex
+/docs/40-non-obvious-constraints.md  @immutex
+
+# --- Release and supply chain --------------------------------------------------
+# The installers execute a downloaded binary, so a change here is a supply-chain
+# change: verification must happen before anything runs.
+/install.ps1            @immutex
+/install.sh             @immutex
+/.github/workflows/     @immutex
+/THIRD-PARTY-NOTICES.md @immutex
+/LICENSE                @immutex
