@@ -11,6 +11,7 @@
 #include "mcode/ext/loader.hxx"
 #include "mcode/ext/lua_host.hxx"
 #include "mcode/model/provider.hxx"
+#include "mcode/platform/seams.hxx"
 
 #include "mcode/smoke/check.hxx"
 
@@ -20,18 +21,44 @@ using smoke::section;
 
 namespace {
 
+	// Where the extensions that travel with the binary live.
+	//
+	// Resolved from the running executable, NOT from a compiled-in path. The
+	// `MCODE_SMOKE_*` constants name the build machine's source tree, which exists
+	// for a local build and for nobody else -- so a released binary walked into a
+	// missing directory, and `directory_iterator` throws on one. That is what
+	// killed the process part-way through its own smoke test.
+	//
+	// This is the same location the product itself uses
+	// (`cli/commands.cxx`, `cli/session.cxx`), so a smoke run asserts on the
+	// extensions the binary will actually load.
+	[[nodiscard]] auto bundled_extensions_directory( ) -> std::filesystem::path {
+		const auto executable = mcode::platform::executable_directory( );
+
+		return executable ? *executable / "extensions" : std::filesystem::path{ };
+	}
+
 	// A shipped extension is a directory holding an `ext.toml`. Counting them
 	// rather than pinning a literal means adding one does not need this edited --
 	// and a shipped extension that is silently skipped, neither loaded nor
 	// failed, is still caught, which a bare `failed.empty()` would not see.
-	[[nodiscard]] auto shipped_extension_count( ) -> std::size_t {
+	[[nodiscard]] auto shipped_extension_count( const std::filesystem::path& directory )
+		-> std::size_t {
+		auto error = std::error_code{ };
+		const auto entries = std::filesystem::directory_iterator{ directory, error };
+
+		if ( error ) {
+			return 0;
+		}
+
 		auto count = std::size_t{ 0 };
 
-		for ( const auto& entry : std::filesystem::directory_iterator{
-			std::filesystem::path{ MCODE_SMOKE_SHIPPED_EXTENSIONS } } ) {
-			if ( std::filesystem::exists( entry.path( ) / "ext.toml" ) ) {
+		for ( const auto& entry : entries ) {
+			if ( std::filesystem::exists( entry.path( ) / "ext.toml", error ) && !error ) {
 				++count;
 			}
+
+			error.clear( );
 		}
 
 		return count;
@@ -119,9 +146,20 @@ auto smoke_cli_and_extensions( ) -> void {
 		check( stream.run_end_emitted( ), "run.end was emitted" );
 		check( stream.lines_emitted( ) == 3, "run.start, one event, and exactly one run.end" );
 	}
+	// The fixture extensions live in the source tree, so they exist only for a build
+	// running from it. A released binary has no fixture tree, and asserting on files
+	// it cannot reach would fail for a reason that says nothing about the binary.
+	// The shipped extensions below ARE checked either way: they travel with it.
+	const auto fixture_tree_present =
+		std::filesystem::exists( std::filesystem::path{ MCODE_SMOKE_EXTENSIONS } );
+
+	if ( !fixture_tree_present ) {
+		std::printf( "  (fixture extensions not present; skipping the fixture loader checks)\n" );
+	}
+
 	section( "extension loader" );
 
-	{
+	if ( fixture_tree_present ) {
 		auto registry = mcode::tool_registry{ };
 		auto providers = mcode::model::provider_registry{ };
 		auto bus = mcode::events::bus{ };
@@ -141,8 +179,16 @@ auto smoke_cli_and_extensions( ) -> void {
 
 		check( loaded.report.loaded.size( ) == 1, "the valid fixture extension loaded" );
 		check( loaded.report.failed.size( ) == 1, "the invalid fixture extension failed" );
-		check( loaded.report.loaded.front( ).name == "hello-tool",
-			"the loaded extension is the valid one" );
+
+		// Guarded, not assumed. `MCODE_SMOKE_EXTENSIONS` is an absolute path into the
+		// build machine's source tree, so it is absent for anyone running a released
+		// binary -- and an unguarded `front()` on the empty result was an access
+		// violation, which killed the process and truncated every check after it.
+		// That is what made the shipped 0.0.2 archive fail its own smoke test.
+		if ( !loaded.report.loaded.empty( ) ) {
+			check( loaded.report.loaded.front( ).name == "hello-tool",
+				"the loaded extension is the valid one" );
+		}
 
 		const auto* hello = registry.find( "hello" );
 		check( hello != nullptr, "the extension's tool is in the registry" );
@@ -226,38 +272,47 @@ auto smoke_cli_and_extensions( ) -> void {
 		auto absent = bare.invoke( "hello", "{}" );
 		check( !absent, "invoking a disabled tool is an error" );
 
-		section( "extension loader (shipped extensions)" );
+	}
 
-		auto shipped_registry = mcode::tool_registry{ };
-		auto shipped_providers = mcode::model::provider_registry{ };
-		auto shipped_bus = mcode::events::bus{ };
-		auto shipped_hooks = mcode::ext::hook_registry{ shipped_bus };
+	section( "extension loader (shipped extensions)" );
 
-		auto shipped_options = mcode::ext::loader_options{ };
-		shipped_options.register_api = mcode::ext::default_register_api( shipped_registry );
+	auto shipped_registry = mcode::tool_registry{ };
+	auto shipped_providers = mcode::model::provider_registry{ };
+	auto shipped_bus = mcode::events::bus{ };
+	auto shipped_hooks = mcode::ext::hook_registry{ shipped_bus };
 
-		auto shipped = mcode::ext::load_extensions(
-			{ std::filesystem::path{ MCODE_SMOKE_SHIPPED_EXTENSIONS } }, shipped_providers,
-			shipped_hooks, shipped_options );
+	auto shipped_options = mcode::ext::loader_options{ };
+	shipped_options.register_api = mcode::ext::default_register_api( shipped_registry );
 
-		for ( const auto& failure : shipped.report.failed ) {
-			std::printf( "  loader: %s failed: %s\n", failure.name.c_str( ),
-				failure.reason.c_str( ) );
-		}
+	auto shipped = mcode::ext::load_extensions(
+		{ bundled_extensions_directory( ) }, shipped_providers, shipped_hooks,
+		shipped_options );
 
-		check( shipped.report.loaded.size( ) == shipped_extension_count( ),
-			"every shipped extension directory loaded" );
-		check( shipped.report.failed.empty( ), "every shipped extension loaded" );
-		check( shipped_providers.size( ) == 3, "the providers extension declared three providers" );
-		check( shipped_providers.find( "openai-chat-completions" ) != nullptr,
-			"the OpenAI descriptor is registered" );
-		check( shipped_registry.find( "skill_read" ) != nullptr,
-			"the skills extension registered skill_read" );
+	for ( const auto& failure : shipped.report.failed ) {
+		std::printf( "  loader: %s failed: %s\n", failure.name.c_str( ),
+			failure.reason.c_str( ) );
+	}
 
-		if ( const auto* descriptor = shipped_providers.find( "anthropic-messages" );
-			descriptor != nullptr ) {
-			check( descriptor->endpoint.starts_with( "https://" ),
-				"the descriptor carries a real endpoint" );
-		}
+	const auto expected = shipped_extension_count( bundled_extensions_directory( ) );
+
+	check( expected > 0, "the bundled extensions directory is present" );
+	check( shipped.report.loaded.size( ) == expected,
+		"every shipped extension directory loaded" );
+	check( shipped.report.failed.empty( ), "every shipped extension loaded" );
+
+	// The providers extension is not decoration: without it the binary has no
+	// provider at all and cannot run a single turn. A released archive shipped
+	// without this directory, and the only symptom was "no provider named
+	// 'openai-chat-completions' is registered" on the user's first command.
+	check( shipped_providers.size( ) == 3, "the providers extension declared three providers" );
+	check( shipped_providers.find( "openai-chat-completions" ) != nullptr,
+		"the OpenAI descriptor is registered" );
+	check( shipped_registry.find( "skill_read" ) != nullptr,
+		"the skills extension registered skill_read" );
+
+	if ( const auto* descriptor = shipped_providers.find( "anthropic-messages" );
+		descriptor != nullptr ) {
+		check( descriptor->endpoint.starts_with( "https://" ),
+			"the descriptor carries a real endpoint" );
 	}
 }

@@ -292,6 +292,24 @@ checksum mismatch for $archive
 		Copy-Item -Path $binary -Destination $target -Force
 		Write-Ok "installed $target"
 
+		# The bundled extensions are not optional. `providers` is what registers
+		# every model provider, so a binary installed without them cannot run a
+		# single turn -- it exits 2 with "no provider named
+		# 'openai-chat-completions' is registered". They are resolved from the
+		# executable's own directory, so they are installed next to it.
+		$extensions = Join-Path $extract 'extensions'
+		if ( Test-Path $extensions ) {
+			$extensionsTarget = Join-Path $directory 'extensions'
+			Remove-Item -Path $extensionsTarget -Recurse -Force -ErrorAction SilentlyContinue
+			Copy-Item -Path $extensions -Destination $extensionsTarget -Recurse -Force
+			Write-Ok "installed $extensionsTarget"
+		} else {
+			# Failing closed: a binary that cannot resolve a provider is not a
+			# usable install, and saying so here is better than the user meeting
+			# "no provider is registered" on their first command.
+			Write-Fail 'the archive does not contain the bundled extensions'
+		}
+
 		Add-ToUserPath -Directory $directory
 
 		$versionOutput = & $target --version 2>$null

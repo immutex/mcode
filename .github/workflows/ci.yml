@@ -331,6 +331,18 @@ jobs:
           mkdir -p stage dist
           cp README.md LICENSE CHANGELOG.md THIRD-PARTY-NOTICES.md stage/
 
+          # The extensions are not optional, and this was a release-blocking
+          # omission: `providers` is what registers every model provider, so a
+          # binary shipped without it cannot run a single turn and says only
+          # "no provider named 'openai-chat-completions' is registered". The
+          # binary resolves them from its own directory, so they travel next to it.
+          cp -r extensions stage/extensions
+
+          # The startup smoke test asserts the bundled extensions are present and
+          # load, which is exactly the check that would have caught the omission.
+          # It resolves them from the running executable, so it holds for a user's
+          # install and not only for a build tree.
+
           if [ "${{ runner.os }}" = "Windows" ]; then
             # `mcode.exe` inside, because that is the name the installer looks for
             cp "$binary" stage/mcode.exe
@@ -345,6 +357,39 @@ jobs:
 
           rm -rf stage
           ls -la dist/
+
+      # The archive is what a user runs, and it is not the build tree: it has no
+      # source, no fixtures and no CMake definitions. This is the only check that
+      # exercises it, and it is here because the 0.0.2 archive shipped without
+      # `extensions/` -- so the binary had no provider, could not run a turn, and
+      # nothing in CI noticed. Unpack, run the smoke test from inside the
+      # unpacked directory, and fail on a non-zero exit.
+      - name: Smoke-test the packaged archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive=$(ls dist/*)
+          echo "archive: $archive"
+          rm -rf unpack && mkdir unpack
+
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z x -o"unpack" "$archive" > /dev/null
+            executable="unpack/mcode.exe"
+          else
+            tar -xzf "$archive" -C unpack
+            executable="unpack/mcode"
+          fi
+
+          ls -la unpack/
+
+          # The extensions must be in the archive, not merely referenced: without
+          # them the binary registers no provider at all.
+          [ -d unpack/extensions ] || { echo "the archive does not contain extensions/"; exit 1; }
+          [ -f unpack/extensions/providers/ext.toml ] || { echo "the providers extension is missing"; exit 1; }
+
+          # Run from inside the unpacked directory so the binary resolves its own
+          # bundled extensions the way a user's install will.
+          ( cd unpack && "./$(basename "$executable")" --smoke < /dev/null )
 
       - name: Upload the archive
         uses: actions/upload-artifact@v7

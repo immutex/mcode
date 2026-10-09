@@ -293,6 +293,23 @@ main( ) {
 	chmod +x "${prefix}/mcode"
 	ok "installed ${prefix}/mcode"
 
+	# The bundled extensions are not optional. `providers` is what registers every
+	# model provider, so a binary installed without them cannot run a single turn
+	# -- it exits 2 with "no provider named 'openai-chat-completions' is
+	# registered". They are resolved from the executable's own directory, so they
+	# are installed next to it.
+	extensions="$(dirname "$binary")/extensions"
+	if [ -d "$extensions" ]; then
+		rm -rf "${prefix}/extensions"
+		cp -R "$extensions" "${prefix}/extensions" || die "could not install the extensions"
+		ok "installed ${prefix}/extensions"
+	else
+		# Failing closed: a binary that cannot resolve a provider is not a usable
+		# install, and saying so here beats the user meeting "no provider is
+		# registered" on their first command.
+		die "the archive does not contain the bundled extensions"
+	fi
+
 	wire_path "$prefix"
 
 	installed=$("${prefix}/mcode" --version 2>/dev/null || echo "mcode")

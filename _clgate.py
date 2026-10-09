@@ -39,9 +39,27 @@ WARN = (
 )
 
 # MSVC-only switches and outputs that clang rejects outright.
+# MSVC-only switches and outputs that clang rejects outright.
+#
+# A literal list is not enough on its own: the set MSVC emits depends on the
+# configure, and a switch nobody listed reaches clang and fails the whole gate
+# with `no such file or directory: '/WX'` rather than with a diagnostic about
+# the code. That happened as soon as a local configure added
+# `-DMCODE_WARNINGS_AS_ERRORS=ON`, which injects `/WX`.
 STRIP = (
     "/nologo", "/TP", "/FS", "/EHsc", "/O2", "/Ob2", "/DNDEBUG", "/MT",
     "/utf-8", "/permissive-", "/W4", "/wd4127",
+)
+
+# Every `/W...` warning switch and every `/wdNNNN` suppression: clang has its own
+# warning set and its own flags, and the gate passes them explicitly. Matching the
+# family rather than listing members means a configure that adds `/WX`, `/W3` or
+# `/wd4996` cannot break the gate.
+MSVC_FLAG_FAMILY = (
+    r"/W[0-4X]\b",
+    r"/wd\d+",
+    r"/we\d+",
+    r"/wo\d+",
 )
 
 
@@ -85,6 +103,9 @@ def to_clang(command: str) -> str:
 
     for flag in STRIP:
         text = text.replace(flag + " ", "")
+
+    for pattern in MSVC_FLAG_FAMILY:
+        text = re.sub(pattern + r"\s*", " ", text)
 
     # MSVC spells an external include `-external:I<path>`; clang wants -isystem.
     text = re.sub(r"-external:I(\S+)", r"-isystem \1", text)

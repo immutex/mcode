@@ -57,6 +57,7 @@ commands, or a 20-second spawn.
 - Approval-precedence resolution and the snapshot directory constant each have one definition, in `exec_internal`.
 - CI actions updated to current majors: `checkout` v7, `setup-python` v7, `upload-artifact` v7, `download-artifact` v8, `cache` v6.
 - `THIRD-PARTY-NOTICES.md` names every dependency's licence as declared by its Conan recipe, rather than deferring to the packages.
+- Release archives carry `extensions/` next to the binary, which is where the binary resolves them from; the `package` job smoke-tests the unpacked archive so a missing directory fails the build rather than the user.
 
 ### Fixed
 
@@ -111,6 +112,9 @@ commands, or a 20-second spawn.
 - The first-run message named neither the config file's path nor the `mcode setup` command that writes one.
 - The release archive omitted `LICENSE`, which Apache-2.0 section 4(a) requires a redistributor to include.
 - A dependabot `commit-message.include` value that is not a legal value for that key.
+- The released archive shipped no `extensions/`, so the binary registered no model provider and could not run a single turn; the archive now carries them and both installers place them beside the binary.
+- The startup smoke test crashed with an access violation when the fixture or bundled extension directory was absent, killing the process part-way through and truncating every check after it; it now resolves the bundled directory from the running executable and skips only what it genuinely cannot reach.
+- `_clgate.py` failed the whole run on an MSVC switch it did not list (`/WX`), reporting `no such file or directory` instead of a diagnostic about the code; the warning-switch family is now matched rather than enumerated.
 
 ### Removed
 
