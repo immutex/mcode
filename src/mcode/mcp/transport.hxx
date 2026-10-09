@@ -26,7 +26,7 @@ namespace mcode::mcp {
 		transport( const transport& ) = delete;
 		auto operator=( const transport& ) -> transport& = delete;
 
-		virtual auto send( std::string_view frame_json ) -> status = 0;
+		virtual auto send( const std::string_view frame_json ) -> status = 0;
 
 		// returns when the transport is dead; the callbacks have seen every line and the EOF
 		virtual auto run( ) -> status = 0;

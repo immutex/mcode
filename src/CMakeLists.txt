@@ -100,6 +100,7 @@ add_library(mcode_core STATIC
     mcode/tools/write_tools_common.cxx
     mcode/tools/write_tools_edit.cxx
     mcode/tools/search_tools.cxx
+    mcode/tools/search_walk.cxx
     mcode/tools/exec_tools.cxx
     mcode/tools/register.cxx
 

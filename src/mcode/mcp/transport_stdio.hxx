@@ -18,7 +18,7 @@ namespace mcode::mcp {
 		// no shell: command[0] is the executable, the rest the argv
 		[[nodiscard]] static auto spawn( const server_config& config ) -> result< stdio_transport >;
 
-		auto send( std::string_view frame_json ) -> status override;
+		auto send( const std::string_view frame_json ) -> status override;
 
 		auto run( ) -> status override;
 

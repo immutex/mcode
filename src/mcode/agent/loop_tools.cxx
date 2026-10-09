@@ -72,7 +72,7 @@ namespace mcode {
 
 		if ( !parsed ) {
 			log_->append( "snapshot.capture",
-				"{\"ok\":false,\"error\":\"arguments are not JSON\"}" );
+				tools::loop_failure( call.name, "arguments are not JSON" ) );
 
 			return;
 		}
@@ -81,7 +81,7 @@ namespace mcode {
 
 		if ( !path ) {
 			// A write-class tool with no `path` argument has no single target to capture.
-			log_->append( "snapshot.capture", "{\"ok\":false,\"error\":\"no path argument\"}" );
+			log_->append( "snapshot.capture", tools::loop_failure( call.name, "no path argument" ) );
 
 			return;
 		}
@@ -127,9 +127,7 @@ namespace mcode {
 			"the identical call again",
 			true );
 
-		auto payload = std::string{ "{\"ok\":false,\"error\":\"doom_loop\",\"tool\":\"" };
-		json::append_escaped( payload, call.name );
-		payload += "\"}";
+		auto payload = tools::loop_failure( call.name, "doom_loop" );
 
 		log_->append( "tool.result", payload );
 		publish( events::kind::tool_result, std::move( payload ) );
@@ -164,8 +162,10 @@ namespace mcode {
 			outcome.ok = false;
 			outcome.code = errc::budget_exhausted;
 			outcome.error_message = "session budget exhausted";
-			log_->append( "tool.result", "{\"ok\":false,\"error\":\"budget_exhausted\"}" );
-			publish( events::kind::tool_result, "{\"ok\":false,\"error\":\"budget_exhausted\"}" );
+			auto payload = tools::loop_failure( call.name, "budget_exhausted" );
+
+			log_->append( "tool.result", payload );
+			publish( events::kind::tool_result, std::move( payload ) );
 
 			return finish( );
 		}
@@ -177,9 +177,7 @@ namespace mcode {
 			outcome.code = errc::tool_failed;
 			outcome.error_message = "unknown tool: " + call.name;
 
-			auto payload = std::string{ "{\"ok\":false,\"error\":\"unknown_tool\",\"tool\":\"" };
-			json::append_escaped( payload, call.name );
-			payload += "\"}";
+			auto payload = tools::loop_failure( call.name, "unknown_tool" );
 
 			log_->append( "tool.result", payload );
 			publish( events::kind::tool_result, std::move( payload ) );
@@ -194,8 +192,10 @@ namespace mcode {
 			outcome.ok = false;
 			outcome.code = errc::tool_failed;
 			outcome.error_message = "tool has no handler registered: " + call.name;
-			log_->append( "tool.result", "{\"ok\":false,\"error\":\"no_handler\"}" );
-			publish( events::kind::tool_result, "{\"ok\":false,\"error\":\"no_handler\"}" );
+			auto payload = tools::loop_failure( call.name, "no_handler" );
+
+			log_->append( "tool.result", payload );
+			publish( events::kind::tool_result, std::move( payload ) );
 
 			return finish( );
 		}
@@ -216,16 +216,13 @@ namespace mcode {
 				? tools::truncation_error( call.name )
 				: prepared.failure;
 
-			auto payload = std::string{ "{\"ok\":false,\"tool\":\"" };
-			json::append_escaped( payload, call.name );
-			payload += "\",\"error\":\"";
-			payload += call.truncated ? "truncated_arguments" : "invalid_arguments";
-			payload += "\"}";
+			auto payload = tools::loop_failure( call.name,
+				call.truncated ? "truncated_arguments" : "invalid_arguments" );
 
-			log_->append( "tool.result", std::move( payload ) );
-			publish( events::kind::tool_result,
-				call.truncated ? "{\"ok\":false,\"error\":\"truncated_arguments\"}"
-								: "{\"ok\":false,\"error\":\"invalid_arguments\"}" );
+			// The same envelope on both, so a subscriber sees the tool name the log
+			// does. It published a second, tool-less string built by hand.
+			log_->append( "tool.result", payload );
+			publish( events::kind::tool_result, std::move( payload ) );
 
 			return finish( );
 		}
@@ -258,13 +255,8 @@ namespace mcode {
 				outcome.permission_denied = true;
 				permission_denied_ = true;
 
-				auto payload = std::string{ "{\"ok\":false,\"denied\":true,\"veto\":true,\"tool\":\"" };
-				json::append_escaped( payload, call.name );
-				payload += "\",\"source\":\"";
-				json::append_escaped( payload, veto->source );
-				payload += "\",\"reason\":\"";
-				json::append_escaped( payload, veto->reason );
-				payload += "\"}";
+				auto payload = tools::loop_denial( { .tool_name = call.name, .veto = true,
+					.detail_key = "source", .detail = veto->source, .reason = veto->reason } );
 
 				log_->append( "tool.result", payload );
 				publish( events::kind::tool_result, std::move( payload ) );
@@ -293,14 +285,10 @@ namespace mcode {
 				outcome.permission_denied = true;
 				permission_denied_ = true;
 
-				auto payload = std::string{ "{\"ok\":false,\"denied\":true,\"tool\":\"" };
-				json::append_escaped( payload, call.name );
-				payload += "\",\"rule\":\"";
-				json::append_escaped( payload, verdict.matched.scope + ": " +
-					verdict.matched.pattern );
-				payload += "\",\"reason\":\"";
-				json::append_escaped( payload, verdict.reason );
-				payload += "\"}";
+				auto rule = verdict.matched.scope + ": " + verdict.matched.pattern;
+
+				auto payload = tools::loop_denial( { .tool_name = call.name,
+					.detail_key = "rule", .detail = rule, .reason = verdict.reason } );
 
 				log_->append( "tool.result", payload );
 				publish( events::kind::tool_result, std::move( payload ) );
@@ -365,11 +353,7 @@ namespace mcode {
 			json::append_escaped( recorded, produced.error( ).msg );
 			recorded += "\"}";
 
-			auto payload = std::string{ "{\"ok\":false,\"tool\":\"" };
-			json::append_escaped( payload, call.name );
-			payload += "\",\"error\":\"";
-			json::append_escaped( payload, produced.error( ).msg );
-			payload += "\"}";
+			auto payload = tools::loop_failure( call.name, produced.error( ).msg );
 
 			log_->append( std::string{ agent::TOOL_RESULT_EVENT }, std::move( recorded ) );
 			publish( events::kind::tool_result, std::move( payload ) );

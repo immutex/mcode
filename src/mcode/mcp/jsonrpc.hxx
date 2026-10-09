@@ -35,7 +35,7 @@ namespace mcode::mcp::jsonrpc {
 		std::uint64_t number = 0;
 		std::string text;
 
-		[[nodiscard]] static auto numeric( std::uint64_t value ) -> request_id;
+		[[nodiscard]] static auto numeric( const std::uint64_t value ) -> request_id;
 		[[nodiscard]] static auto string( std::string value ) -> request_id;
 
 		friend auto operator<=>( const request_id&, const request_id& ) = default;
@@ -55,23 +55,23 @@ namespace mcode::mcp::jsonrpc {
 	};
 
 	// the migration choke point: protocol version and client caps get injected here
-	[[nodiscard]] auto stamp_meta( std::string_view params_json ) -> result< std::string >;
+	[[nodiscard]] auto stamp_meta( const std::string_view params_json ) -> result< std::string >;
 
-	[[nodiscard]] auto render_request( std::uint64_t id, std::string_view method,
-		std::string_view params_json ) -> result< std::string >;
+	[[nodiscard]] auto render_request( const std::uint64_t id, const std::string_view method,
+		const std::string_view params_json ) -> result< std::string >;
 
-	[[nodiscard]] auto render_notification( std::string_view method,
-		std::string_view params_json ) -> result< std::string >;
+	[[nodiscard]] auto render_notification( const std::string_view method,
+		const std::string_view params_json ) -> result< std::string >;
 
-	[[nodiscard]] auto render_response( const request_id& id, std::string_view result_json )
+	[[nodiscard]] auto render_response( const request_id& id, const std::string_view result_json )
 		-> result< std::string >;
 
 	// a reply that carries `error` must not also carry `result`
-	[[nodiscard]] auto render_error_response( const request_id& id, int code,
-		std::string_view reason ) -> result< std::string >;
+	[[nodiscard]] auto render_error_response( const request_id& id, const int code,
+		const std::string_view reason ) -> result< std::string >;
 
 	// a non-JSON-RPC line (banner, blank, malformed) yields nothing, never an error
-	[[nodiscard]] auto parse_line( std::string_view line )
+	[[nodiscard]] auto parse_line( const std::string_view line )
 		-> result< std::optional< message > >;
 
 }

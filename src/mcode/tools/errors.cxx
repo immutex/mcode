@@ -42,4 +42,35 @@ namespace mcode::tools {
 			true );
 	}
 
+	auto loop_failure( const std::string_view tool_name, const std::string_view error_code )
+		-> std::string {
+		auto out = std::string{ "{\"ok\":false,\"error\":\"" };
+		json::append_escaped( out, error_code );
+		out += "\",\"tool\":\"";
+		json::append_escaped( out, tool_name );
+		out += "\"}";
+
+		return out;
+	}
+
+	auto loop_denial( const denial_payload& request ) -> std::string {
+		auto out = std::string{ "{\"ok\":false,\"denied\":true" };
+
+		if ( request.veto ) {
+			out += ",\"veto\":true";
+		}
+
+		out += ",\"tool\":\"";
+		json::append_escaped( out, request.tool_name );
+		out += "\",\"";
+		out += request.detail_key;
+		out += "\":\"";
+		json::append_escaped( out, request.detail );
+		out += "\",\"reason\":\"";
+		json::append_escaped( out, request.reason );
+		out += "\"}";
+
+		return out;
+	}
+
 }
