@@ -77,6 +77,21 @@ namespace mcode::cli {
 		return exit_code::success;
 	}
 
+	auto argument_error_text( const std::vector< std::string >& arguments )
+		-> std::optional< std::string > {
+		const auto parsed = parse_exec_options( arguments );
+
+		if ( !parsed ) {
+			return parsed.error( ).msg;
+		}
+
+		if ( !parsed->unknown_arguments.empty( ) ) {
+			return "unknown argument '" + parsed->unknown_arguments.front( ) + "'";
+		}
+
+		return std::nullopt;
+	}
+
 	auto parse_exec_options( const std::vector< std::string >& arguments )
 		-> result< exec_options > {
 		auto options = exec_options{ };

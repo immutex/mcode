@@ -85,6 +85,13 @@ namespace mcode::cli {
 	[[nodiscard]] auto parse_exec_options( const std::vector< std::string >& arguments )
 		-> result< exec_options >;
 
+	// Why the argument list is unusable, or nothing when it parses. One function
+	// because the plain and the TUI entry points each reported this themselves and
+	// had already diverged: the plain path named the offending argument and the TUI
+	// printed a bare usage dump with no explanation at all.
+	[[nodiscard]] auto argument_error_text( const std::vector< std::string >& arguments )
+		-> std::optional< std::string >;
+
 	// One JSONL event log under the state directory: the unit a resume reopens.
 	struct session_ref {
 		std::string id;

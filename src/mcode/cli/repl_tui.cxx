@@ -77,7 +77,11 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 
 	auto parsed = mcode::cli::parse_exec_options( arguments );
 
+	// The reason, not a bare usage dump: this printed the usage text alone, so a
+	// TUI user who mistyped a flag got no idea which one. The plain path named it.
 	if ( !parsed || !parsed->unknown_arguments.empty( ) ) {
+		std::fprintf( stderr, "mcode: %s\n\n",
+			mcode::cli::argument_error_text( arguments )->c_str( ) );
 		std::fputs( mcode::cli::usage_text( "mcode" ).c_str( ), stderr );
 
 		return mcode::cli::to_int( mcode::cli::exit_code::usage_error );

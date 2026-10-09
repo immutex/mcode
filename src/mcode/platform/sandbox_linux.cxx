@@ -141,13 +141,16 @@ namespace mcode::platform {
 
 			const auto added = ::syscall( SYSCALL_LANDLOCK_ADD_RULE, ruleset.get( ),
 				LANDLOCK_RULE_PATH_BENEATH, &beneath, 0U );
-			const auto open_error = errno;
+			// Read before `close`, which may clobber it. Named for the syscall that set
+			// it: `open_error` named the wrong call and sent a reader to the `open` above.
+			const auto rule_error = errno;
+
 			::close( fd );
 
 			if ( added < 0 ) {
 				return std::unexpected( mcode::fail( mcode::errc::io,
 					"landlock_add_rule(" + path.string( ) + ") failed: " +
-					std::strerror( open_error ) ) );
+					std::strerror( rule_error ) ) );
 			}
 
 			return { };
@@ -188,13 +191,16 @@ namespace mcode::platform {
 
 			const auto added = ::syscall( SYSCALL_LANDLOCK_ADD_RULE, ruleset.get( ),
 				LANDLOCK_RULE_PATH_BENEATH, &beneath, 0U );
-			const auto open_error = errno;
+			// Read before `close`, which may clobber it. Named for the syscall that set
+			// it: `open_error` named the wrong call and sent a reader to the `open` above.
+			const auto rule_error = errno;
+
 			::close( fd );
 
 			if ( added < 0 ) {
 				return std::unexpected( mcode::fail( mcode::errc::io,
 					"landlock_add_rule(write " + path.string( ) + ") failed: " +
-					std::strerror( open_error ) ) );
+					std::strerror( rule_error ) ) );
 			}
 		}
 

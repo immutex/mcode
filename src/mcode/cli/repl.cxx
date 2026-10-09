@@ -33,8 +33,8 @@ namespace mcode::cli {
 		}
 
 		if ( !parsed->unknown_arguments.empty( ) ) {
-			std::fprintf( stderr, "mcode: unknown argument '%s'\n\n",
-				parsed->unknown_arguments.front( ).c_str( ) );
+			std::fprintf( stderr, "mcode: %s\n\n",
+				argument_error_text( arguments )->c_str( ) );
 			std::fputs( usage_text( "mcode" ).c_str( ), stderr );
 
 			return to_int( cli::exit_code::usage_error );
