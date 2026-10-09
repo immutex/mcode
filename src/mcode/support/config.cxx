@@ -279,6 +279,39 @@ namespace mcode::config {
 		return out;
 	}
 
+	auto unconfigured_message( const std::string_view missing_key ) -> std::string {
+		// No `mcode: ` prefix: every caller adds it, and one that did not would
+		// print `mcode: mcode: ...`.
+		auto out = std::string{ "no " };
+		out += missing_key;
+		out += " configured.\n\n";
+
+		// The user scope is the one a person can write; managed is the machine's
+		// and project is a repository's, so naming either would misdirect.
+		auto target = std::filesystem::path{ };
+
+		for ( const auto& [ level, path ] : default_layer_paths( ) ) {
+			if ( level == scope::user ) {
+				target = path;
+			}
+		}
+
+		if ( !target.empty( ) ) {
+			// Preferred separators: the environment's `APPDATA` can carry forward
+			// slashes, and a path printed for a person to copy should not be mixed.
+			target.make_preferred( );
+
+			out += "  config file: " + target.string( ) + "\n";
+			out += "  key to set:  model." + std::string{ missing_key } + "\n\n";
+		}
+
+		out += "  run `mcode setup` to write one, or set [model] ";
+		out += missing_key;
+		out += " by hand.\n";
+
+		return out;
+	}
+
 	auto load( const std::filesystem::path& project_root ) -> result< merged_config > {
 		auto layers = std::vector< layer >{ };
 

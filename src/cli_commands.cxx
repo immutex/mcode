@@ -138,15 +138,18 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	const auto base_url = config->get_string( "model.base_url" );
 
 	if ( provider_name.empty( ) ) {
-		std::fprintf( stderr,
-			"mcode: no provider configured; set [model] provider in config.toml\n" );
+		const auto message = mcode::config::unconfigured_message( "provider" );
+
+		std::fprintf( stderr, "mcode: %s", message.c_str( ) );
 		stream.emit_run_end( mcode::cli::exit_code::usage_error, "no provider configured" );
 
 		return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
 	}
 
 	if ( model_name.empty( ) ) {
-		std::fprintf( stderr, "mcode: no model configured; set [model] model in config.toml\n" );
+		const auto message = mcode::config::unconfigured_message( "model" );
+
+		std::fprintf( stderr, "mcode: %s", message.c_str( ) );
 		stream.emit_run_end( mcode::cli::exit_code::usage_error, "no model configured" );
 
 		return mcode::cli::to_int( mcode::cli::exit_code::usage_error );

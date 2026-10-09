@@ -454,3 +454,85 @@ end)
 
 	std::filesystem::remove_all( root );
 }
+
+TEST_CASE( "the deepseek guard reports leaked tool-call markup and stays quiet otherwise",
+	"[loader][deepseek-guard]" ) {
+	// Loads the SHIPPED extension, not a fixture: the guard's value is that it is
+	// wired to a real event, and a fixture copy would keep passing after the
+	// shipped one stopped loading.
+	auto registry = tool_registry{ };
+	g_registry = &registry;
+	g_notifications.clear( );
+
+	auto providers = model::provider_registry{ };
+	auto bus = events::bus{ };
+	auto hooks = ext::hook_registry{ bus };
+
+	auto options = ext::loader_options{ };
+	options.register_api = register_api;
+
+	auto loaded = ext::load_extensions( { std::filesystem::path{ MCODE_EXTENSIONS_ROOT } },
+		providers, hooks, options );
+
+	REQUIRE( loaded.report.failed.empty( ) );
+
+	auto guard_loaded = false;
+
+	for ( const auto& entry : loaded.report.loaded ) {
+		if ( entry.name == "deepseek-guard" ) {
+			guard_loaded = true;
+		}
+	}
+
+	REQUIRE( guard_loaded );
+	REQUIRE( hooks.handlers_for( "assistant.delta" ) >= 1 );
+
+	auto turn = events::event{ };
+	turn.type = events::kind::turn_start;
+	turn.payload_json = R"({})";
+	bus.publish( turn );
+
+	// Ordinary prose must not fire it, or the guard is noise.
+	auto prose = events::event{ };
+	prose.type = events::kind::assistant_delta;
+	prose.payload_json = R"({"text":"The header markup is identical on all pages."})";
+	bus.publish( prose );
+
+	REQUIRE( g_notifications.empty( ) );
+
+	// The ASCII wrapper form.
+	auto leak = events::event{ };
+	leak.type = events::kind::assistant_delta;
+	leak.payload_json = R"({"text":"Sure. <|DSML|tool_calls> {\"name\":\"write\"}"})";
+	bus.publish( leak );
+
+	REQUIRE( g_notifications.size( ) == 1 );
+	REQUIRE( g_notifications.front( ).find( "deepseek-guard" ) != std::string::npos );
+	REQUIRE( g_notifications.front( ).find( "warn" ) != std::string::npos );
+
+	// Once per turn: a leaked wrapper arrives across many deltas and a
+	// notification per delta would be the failure rather than the report.
+	bus.publish( leak );
+	REQUIRE( g_notifications.size( ) == 1 );
+
+	// The next turn reports again, because a second leak is a second event.
+	bus.publish( turn );
+	bus.publish( leak );
+	REQUIRE( g_notifications.size( ) == 2 );
+
+	// The full-width `｜` (U+FF5C) form is the one the DeepSeek serving path
+	// actually emits, and the extension writes it as a Lua `\u{FF5C}` escape.
+	// Built here from raw UTF-8 bytes (EF BD 9C) rather than a JSON `\u` escape,
+	// because the payload decoder does not interpret those. If the Lua escape did
+	// not produce this character the marker would never match, and this is the
+	// only thing that would say so.
+	auto full_width = events::event{ };
+	full_width.type = events::kind::assistant_delta;
+	full_width.payload_json = std::string{ "{\"text\":\"Sure. " } + "\xEF\xBD\x9C" +
+		"DSML" + "\xEF\xBD\x9C" + "tool_calls>\"}";
+
+	bus.publish( turn );
+	bus.publish( full_width );
+
+	REQUIRE( g_notifications.size( ) == 3 );
+}

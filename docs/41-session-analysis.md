@@ -1,6 +1,6 @@
 # Session analysis: a long run against DeepSeek V4 Flash
 
-> TL;DR: Two runs of the same six-file website task — one before the fixes and one after. The first exposed seven defects, **all of them in the harness rather than the model**: every `bash` call was refused, every directory-scoped `grep` silently returned zero matches, and every `run.end` record was invalid JSON. The model made **zero** malformed tool calls in either run, so tool-call robustness is not this model's problem. The environment reporting was.
+> TL;DR: Two runs of the same six-file website task — one before the fixes and one after. Nine defects surfaced, **all of them in the harness rather than the model**: every `bash` call was refused, every directory-scoped `grep` silently returned zero matches, and every `run.end` record was invalid JSON. Seven came from the run; two more came from CI, including a screen gate that had never once passed there. The model made **zero** malformed tool calls in either run, so tool-call robustness is not this model's problem. The environment reporting was.
 
 ## Method
 
@@ -93,6 +93,40 @@ Run totals: run 1 was 807535 input / 44829 output / 791296 cached, a 98.0% hit r
 | cost | — (summary unparseable) | $0.1821 |
 
 The `bash` row is the whole story. In run 1 every shell call was refused before it ran; in run 2 the model's verification harness executed. The two non-output calls in run 2 were environmental — an MSYS binary the sandbox denies `\BaseNamedObjects` to, and a `cmd`/`powershell` invocation the permission engine refuses by policy — and neither is a harness defect.
+
+## Two defects found after the session, by CI
+
+Running the session found the seven above. Pushing found two more, and they are worth separating because neither is visible from a log.
+
+**The `tui-screen` gate only passed on a configured machine.** It spawns the real binary under a ConPTY and asserts on the screen it draws, but it inherited `%APPDATA%` — so on a clean runner `mcode` exited with "no provider configured" before drawing a frame. It had never passed on CI: the run that added it also failed it, and the failure predates this work. The report it produced was
+
+```
+[FAIL] the prompt is the last row and bare -- ''
+[FAIL] the meter sits directly above the prompt -- ''
+...
+EOFError: Pty is closed
+```
+
+which reads as a TUI rendering defect. It was a missing config file. The gate now writes its own config into a private `APPDATA` and `LOCALAPPDATA` and sets the credential variable its fixture names, so it no longer depends on the host at all — verified by running it with the host's `APPDATA` pointed at a deliberately malformed config, where it still passes.
+
+**The first-run message names neither the file nor the command.** On a clean machine, the entire output of running `mcode` was:
+
+```
+mcode: no provider configured; set [model] provider in config.toml
+```
+
+Exit 2, no terminal, 68 bytes on stderr. It does not say where `config.toml` is, and it does not mention `mcode setup`, which is the command that writes one. A reader with no config has no way to act on that. It now prints the resolved path, the key to set, and the command:
+
+```
+mcode: no provider configured.
+
+  config file: C:\Users\<user>\AppData\Roaming\mcode\config.toml
+  key to set:  model.provider
+
+  run `mcode setup` to write one, or set [model] provider by hand.
+```
+
+This is the same defect an earlier report described as *"it doesn't open when I use it in PATH, just loads for a while then quits no logs"* — the message existed, but it did not lead anywhere.
 
 ## Tools worth adding
 

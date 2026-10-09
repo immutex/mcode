@@ -28,8 +28,10 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -52,11 +54,46 @@ METER = re.compile(r"\d+(\.\d+)?k? tok( \d+%)? . \$0\.\d+")
 # discipline, so nothing is written before the first frame.
 FIRST_FRAME_SECONDS = 5.0
 
+# A minimal config the gate owns, so the run does not depend on the developer's
+# `%APPDATA%\mcode\config.toml`. Without it the gate only passed on a machine
+# that had already been configured: on a clean runner mcode exits with "no
+# provider configured" before drawing a frame, the screen stays empty, and every
+# assertion fails. A gate that reads the host's state is not a gate.
+#
+# The provider is declared and never contacted -- the gate drives startup,
+# typing and exit, and no turn is ever submitted -- so the endpoint and the
+# credential name are placeholders.
+FIXTURE_CONFIG = """\
+[model]
+provider = "openai-chat-completions"
+model = "tui-gate-placeholder"
+base_url = "https://tui-gate.invalid/v1/chat/completions"
+api_key_env = "MCODE_TUI_GATE_KEY"
+
+[models."tui-gate-placeholder"]
+caching = "implicit"
+context_window = 100000
+max_output_tokens = 8192
+price_input = 0.15
+price_output = 0.6
+"""
+
+def isolated_appdata(root: str) -> str:
+    """A private `%APPDATA%` holding the fixture config, and return it."""
+    directory = os.path.join(root, "mcode")
+
+    os.makedirs(directory, exist_ok=True)
+
+    with open(os.path.join(directory, "config.toml"), "w", encoding="utf-8") as handle:
+        handle.write(FIXTURE_CONFIG)
+
+    return root
+
 
 class Terminal:
     """A pty, a reader thread, and the screen the bytes produce."""
 
-    def __init__(self, executable: str, rows: int, columns: int) -> None:
+    def __init__(self, executable: str, rows: int, columns: int, appdata: str) -> None:
         self.rows = rows
         self.columns = columns
         self.raw = bytearray()
@@ -67,6 +104,17 @@ class Terminal:
         environment = dict(os.environ)
         environment["TERM"] = "xterm-256color"
         environment["COLORTERM"] = "truecolor"
+
+        # Both, because config is read from APPDATA and state is written under
+        # LOCALAPPDATA: pointing only one at the fixture would still let the run
+        # touch the developer's real session store.
+        environment["APPDATA"] = appdata
+        environment["LOCALAPPDATA"] = appdata
+
+        # The fixture declares a credential source, and mcode refuses to start
+        # when the named variable is absent -- fail-closed, which is right. The
+        # value is never used: the gate submits no turn.
+        environment["MCODE_TUI_GATE_KEY"] = "tui-gate-placeholder"
 
         self.screen = pyte.Screen(columns, rows)
         self._stream = pyte.ByteStream(self.screen)
@@ -255,20 +303,26 @@ def main() -> int:
         print(f"tui-check: no such executable: {arguments.exe}", file=sys.stderr)
         return 2
 
-    terminal = Terminal(arguments.exe, arguments.rows, arguments.columns)
+    scratch = tempfile.mkdtemp(prefix="mcode-tui-gate-")
+    appdata = isolated_appdata(scratch)
 
     try:
-        time.sleep(FIRST_FRAME_SECONDS)
+        terminal = Terminal(arguments.exe, arguments.rows, arguments.columns, appdata)
 
-        report = Report()
-        assert_startup(report, terminal)
-        assert_typing(report, terminal)
-        assert_exit(report, terminal)
+        try:
+            time.sleep(FIRST_FRAME_SECONDS)
 
-        screen_text = terminal.text() if arguments.keep else ""
-        return report.finish(screen_text)
+            report = Report()
+            assert_startup(report, terminal)
+            assert_typing(report, terminal)
+            assert_exit(report, terminal)
+
+            screen_text = terminal.text() if arguments.keep else ""
+            return report.finish(screen_text)
+        finally:
+            terminal.close()
     finally:
-        terminal.close()
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
 if __name__ == "__main__":

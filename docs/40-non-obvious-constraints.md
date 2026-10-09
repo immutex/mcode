@@ -1,6 +1,6 @@
 # Non-obvious constraints
 
-> TL;DR: 125 things that cost real time to discover. Docs and `AGENTS.md` cite them by number, so numbering is stable: a constraint keeps its number, and a retired one leaves a gap rather than renumbering the rest. New entries append at the end.
+> TL;DR: 126 things that cost real time to discover. Docs and `AGENTS.md` cite them by number, so numbering is stable: a constraint keeps its number, and a retired one leaves a gap rather than renumbering the rest. New entries append at the end.
 
 ## Constraints
 
@@ -1013,3 +1013,14 @@ Read the number you were sent to, not the whole file. Each entry states the cons
     doing any work. Environmental, not a harness defect — but it is why the
     dedicated `grep`, `glob` and `read` tools matter, and why a `bash` call to
     coreutils is not a substitute for them on this platform.
+126. **A gate that reads the developer's config is not a gate.** `tui-screen`
+    spawns the real binary under a ConPTY and asserts on the screen it draws, but
+    it inherited `%APPDATA%` -- so on any machine that had not been configured,
+    `mcode` exited with "no provider configured" before drawing a frame. It
+    passed on every developer machine and failed on every clean CI runner, and
+    the empty screen it produced was indistinguishable from a rendering defect:
+    the report said `the prompt is the last row and bare -- ''`, which reads as
+    a TUI bug rather than a missing config file. The gate now writes its own
+    config into a private `APPDATA` and `LOCALAPPDATA` and sets the credential
+    variable its fixture names. Any gate that spawns the product must own every
+    piece of state the product reads.

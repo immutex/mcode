@@ -128,12 +128,12 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 
 	if ( provider_name.empty( ) ) {
 		return std::unexpected( mcode::fail( mcode::errc::config,
-			"no provider configured; set [model] provider in config.toml" ) );
+			mcode::config::unconfigured_message( "provider" ) ) );
 	}
 
 	if ( model_name.empty( ) ) {
 		return std::unexpected( mcode::fail( mcode::errc::config,
-			"no model configured; set [model] model in config.toml" ) );
+			mcode::config::unconfigured_message( "model" ) ) );
 	}
 
 	auto skills_options = mcode::skills::session_context_options{ };

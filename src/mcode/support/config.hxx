@@ -92,6 +92,13 @@ namespace mcode::config {
 	[[nodiscard]] auto default_layer_paths( )
 		-> std::vector< std::pair< scope, std::filesystem::path > >;
 
+	// The message for a run that has no usable config: it names the file to edit
+	// and the command that writes it. Measured on a clean machine, mcode's entire
+	// output was `mcode: no provider configured; set [model] provider in
+	// config.toml`, exit 2, no terminal -- which names neither the file's location
+	// nor `mcode setup`. A reader with no config has no way to act on it.
+	[[nodiscard]] auto unconfigured_message( const std::string_view missing_key ) -> std::string;
+
 	// A missing file is skipped; an unreadable or malformed one is an error.
 	[[nodiscard]] auto load( const std::filesystem::path& project_root = { } )
 		-> result< merged_config >;

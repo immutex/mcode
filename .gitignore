@@ -47,3 +47,7 @@ Thumbs.db
 *.pdb
 *.ilk
 *.exp
+
+# Any Python run inside the tree -- the TUI gate, the analysis tools.
+__pycache__/
+*.pyc

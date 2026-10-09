@@ -4,7 +4,9 @@
 
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <string>
+#include <vector>
 
 #include "mcode/events/bus.hxx"
 #include "mcode/ext/hooks.hxx"
@@ -18,6 +20,18 @@ namespace ext_test {
 	// a free function cannot capture, so the installer reads the registry from here.
 	inline mcode::tool_registry* g_registry = nullptr;
 
+	// Notifications an extension raised, newest last, as "level: message". The
+	// surface only forwards `mcode.notify` when a sink is installed, so a test
+	// that wants to assert on one has to provide this -- without it the call is a
+	// silent no-op and the assertion would pass against nothing.
+	inline std::vector< std::string > g_notifications;
+
+	inline auto g_notifier = std::function< void( const std::string&, const std::string&,
+		const std::string& ) >{ []( const std::string& name, const std::string& level,
+		const std::string& message ) {
+		g_notifications.push_back( name + " " + level + ": " + message );
+	} };
+
 	inline auto extensions_root( ) -> std::filesystem::path {
 		return std::filesystem::path{ MCODE_FIXTURE_EXTENSIONS };
 	}
@@ -27,7 +41,7 @@ namespace ext_test {
 		-> mcode::status {
 		return given.surface.install( mcode::ext::api_surface::install_request{ .host = given.host,
 			.registry = *g_registry, .providers = given.providers, .hooks = given.hooks,
-			.details = given.details } );
+			.details = given.details, .notifier = &g_notifier } );
 	}
 
 	// a bare "0 == 1" hides which extension failed and why.
