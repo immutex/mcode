@@ -46,6 +46,13 @@ namespace {
 	// Under the per-user data directory, so a restore survives a workspace being removed.
 	inline constexpr std::string_view SNAPSHOT_DIRECTORY = "snapshots";
 
+	// The load report of the session that was built, so `/extensions` can read it
+	// without the loop carrying a pointer it has no other use for -- the loop
+	// knows four abstractions and extensions are not one of them. The report
+	// lives on the session's own parts, which are function-local and outlive the
+	// returned loop; this points at them. Null until a session is built.
+	const mcode::ext::load_report* g_session_extensions = nullptr;
+
 }
 
 auto build_interactive_loop( const mcode::cli::exec_options& parsed,
@@ -191,6 +198,11 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 		parts->extensions = mcode::ext::load_extensions( roots, parts->providers,
 			parts->hooks, options );
 	}
+
+	// Published whether or not extensions were loaded: with `--no-extensions` the
+	// report is empty, and `/extensions` saying "0 loaded" is the true answer
+	// rather than a null it has to explain.
+	g_session_extensions = &parts->extensions.report;
 
 	const auto* descriptor = parts->providers.find( provider_name );
 
@@ -385,4 +397,8 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 	}
 
 	return loop;
+}
+
+auto session_extensions( ) -> const mcode::ext::load_report* {
+	return g_session_extensions;
 }

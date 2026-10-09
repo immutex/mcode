@@ -27,6 +27,12 @@ namespace mcode::ext {
 		std::filesystem::path directory;
 		std::vector< std::string > tools;
 
+		// Carried on the report so a reader can describe what is loaded without
+		// reaching back into the live surfaces, which the report deliberately
+		// does not expose. `/extensions` reports from here.
+		std::string version;
+		std::string description;
+
 		std::uint64_t bytes_used = 0;
 	};
 

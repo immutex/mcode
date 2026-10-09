@@ -1,10 +1,12 @@
 #pragma once
 
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "mcode/agent/loop.hxx"
+#include "mcode/ext/loader.hxx"
 #include "mcode/model/types.hxx"
 #include "mcode/tui/mention.hxx"
 #include "mcode/tui/palette.hxx"
@@ -112,6 +114,14 @@ namespace mcode::cli {
 		// reaching into the editor itself.
 		bool open_mention = false;
 
+		// A prompt the command wants run as a real turn, exactly as if the user
+		// had typed it. This is what lets a command use the model without its own
+		// copy of the loop: `/init` returns one so the agent explores the
+		// workspace and writes AGENTS.md. The REPL echoes the command the user
+		// actually typed -- the returned prompt is instructions, not a transcript
+		// line, and echoing a few thousand characters of it would bury the turn.
+		std::optional< std::string > submit_prompt;
+
 		std::string output;
 	};
 
@@ -120,7 +130,15 @@ namespace mcode::cli {
 	[[nodiscard]] auto render_transcript_markdown(
 		const std::vector< mcode::model::message >& history ) -> std::string;
 
+	// What `/extensions` prints. Pure: the report is the whole input, so the
+	// rendering is testable without loading an extension.
+	[[nodiscard]] auto extensions_text( const mcode::ext::load_report& report ) -> std::string;
+
+	// `extensions` is the session's load report and may be null when no session
+	// was built; `/extensions` reports that rather than an empty list, because
+	// "nothing loaded" and "nothing to read" are different answers.
 	[[nodiscard]] auto run_command( const command_match& match, const agent_loop& loop,
-		const std::vector< mcode::tui::slash_command >& commands ) -> command_result;
+		const std::vector< mcode::tui::slash_command >& commands,
+		const mcode::ext::load_report* extensions = nullptr ) -> command_result;
 
 }

@@ -526,8 +526,15 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 
 		const auto match = mcode::cli::match_command( *submitted, commands );
 
+		// What the turn runs. A plain submission runs what was typed; a command
+		// that returned a prompt runs that instead. The echo below still prints
+		// what the user typed, because a generated prompt is instructions rather
+		// than a transcript line.
+		auto prompt = *submitted;
+
 		if ( match.is_command ) {
-			const auto result = mcode::cli::run_command( match, loop, commands );
+			const auto result = mcode::cli::run_command( match, loop, commands,
+				session_extensions( ) );
 
 			if ( result.should_exit ) {
 				exiting = true;
@@ -544,15 +551,21 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 				continue;
 			}
 
-			{
+			if ( !result.output.empty( ) ) {
 				const auto held = std::lock_guard< std::mutex >{ render_gate };
 
 				coordinator.queue_text( result.output );
 			}
 
-			show_prompt( );
+			// A command that only printed is done; one that asked for a turn
+			// falls through to the same path a typed prompt takes.
+			if ( !result.submit_prompt ) {
+				show_prompt( );
 
-			continue;
+				continue;
+			}
+
+			prompt = *result.submit_prompt;
 		}
 
 		{
@@ -575,7 +588,7 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 		session_tty->set_mouse_reporting( true );
 
 		worker = std::thread{ [ & ]( ) {
-			last_code = turn.run_turn( *submitted );
+			last_code = turn.run_turn( prompt );
 			turn_done.store( true );
 		} };
 

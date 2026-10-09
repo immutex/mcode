@@ -1,7 +1,7 @@
 name = "deepseek-guard"
 version = "0.1.0"
 api_version = 1
-description = "Watch for the failure modes DeepSeek V4 Flash is documented to have, and say so when they happen"
+description = "Report DeepSeek's tool-call markup leaking into assistant text, which the gateway emits instead of parsing"
 
 # No permissions. This extension only observes events and reports; it reads no
 # files, makes no network calls, and spawns nothing. A guard that needed

@@ -42,10 +42,10 @@ namespace mcode::tools {
 			switch ( status ) {
 				case 0xC0000142u:
 					return "the process could not start (0xC0000142, DLL init failed). This "
-						"binary is unusable in this environment -- MSYS/Cygwin tools such as "
-						"Git's grep, rm and sed fail under the sandbox because they create a "
-						"named object it denies. Use a native tool or the dedicated grep, "
-						"glob and read tools instead; do not retry this one";
+						"binary is unusable in this environment -- Git's MSYS/Cygwin tools "
+						"(ls, grep, rm, sed and the rest of coreutils) fail under the sandbox "
+						"because they create a named object it denies. Use a native tool or "
+						"the dedicated read, glob and grep tools instead; do not retry this one";
 				case 0xC0000135u:
 					return "the process could not start (0xC0000135, a required DLL was not "
 						"found). Run a native tool or the dedicated file tools instead";

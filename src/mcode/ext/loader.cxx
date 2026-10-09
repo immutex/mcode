@@ -279,6 +279,8 @@ namespace mcode::ext {
 			auto report_entry = load_outcome{ };
 			report_entry.name = entry.details.name;
 			report_entry.directory = candidate.directory;
+			report_entry.version = entry.details.version;
+			report_entry.description = entry.details.description;
 			report_entry.bytes_used = entry.host->bytes_allocated( );
 			report_entry.tools = entry.tool_names( );
 

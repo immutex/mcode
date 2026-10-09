@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -442,3 +443,136 @@ TEST_CASE( "an export argument names the file, inside the session's working dire
 	std::filesystem::remove_all( directory );
 }
 
+
+TEST_CASE( "/extensions reports what loaded, what failed and what is disabled",
+	"[cli][slash]" ) {
+	auto report = ext::load_report{ };
+
+	auto first = ext::load_outcome{ };
+	first.name = "providers";
+	first.version = "0.1.0";
+	first.description = "Reference model providers";
+	first.tools = { "provider_read" };
+	first.bytes_used = 320 * 1024;
+	report.loaded.push_back( std::move( first ) );
+
+	auto second = ext::load_outcome{ };
+	second.name = "skills";
+	second.version = "0.2.1";
+	second.tools = { "skill_read", "skill_list" };
+	second.bytes_used = 512;
+	report.loaded.push_back( std::move( second ) );
+
+	report.failed.push_back( { "broken", "/tmp/broken", "unknown key: permission" } );
+	report.disabled = 1;
+
+	const auto text = cli::extensions_text( report );
+
+	// The counts, because that is the first thing a reader looks for.
+	CHECK( text.find( "2 loaded" ) != std::string::npos );
+	CHECK( text.find( "1 failed" ) != std::string::npos );
+	CHECK( text.find( "1 disabled" ) != std::string::npos );
+
+	// Every loaded name, and each one's tools.
+	CHECK( text.find( "providers" ) != std::string::npos );
+	CHECK( text.find( "skills" ) != std::string::npos );
+	CHECK( text.find( "skill_read" ) != std::string::npos );
+
+	// A failure carries its reason, not just its name: the reason names the key
+	// or the permission that was refused, which is the whole point of asking.
+	CHECK( text.find( "broken" ) != std::string::npos );
+	CHECK( text.find( "unknown key: permission" ) != std::string::npos );
+
+	// The memory figure is a tracked budget (`docs/28` measured ~320 KB per VM),
+	// so it is reported rather than hidden.
+	CHECK( text.find( "KB" ) != std::string::npos );
+}
+
+TEST_CASE( "/extensions says so when nothing is loaded", "[cli][slash]" ) {
+	const auto text = cli::extensions_text( ext::load_report{ } );
+
+	CHECK( text.find( "0 loaded" ) != std::string::npos );
+	CHECK( text.find( "none loaded" ) != std::string::npos );
+
+	// A zero failure count is noise on the common path.
+	CHECK( text.find( "failed" ) == std::string::npos );
+}
+
+TEST_CASE( "/extensions reports a missing session rather than an empty list",
+	"[cli][slash]" ) {
+	// Null is "there is no report to read", which is a different answer from
+	// "nothing loaded" -- the command is reachable before a session exists.
+	auto deps = agent_loop::dependencies{ };
+	auto loop = agent_loop{ deps };
+
+	const auto match = cli::match_command( "/extensions", cli::builtin_commands( ) );
+
+	REQUIRE( match.entry != nullptr );
+
+	const auto result = cli::run_command( match, loop, cli::builtin_commands( ), nullptr );
+
+	CHECK( result.output.find( "no session" ) != std::string::npos );
+}
+
+TEST_CASE( "/init asks for a turn instead of writing the file itself",
+	"[cli][slash]" ) {
+	const auto directory = test::scratch_directory( "mcode-init-generate" );
+
+	auto deps = agent_loop::dependencies{ };
+	deps.workspace_root = directory.string( );
+
+	auto loop = agent_loop{ deps };
+	const auto match = cli::match_command( "/init", cli::builtin_commands( ) );
+
+	REQUIRE( match.entry != nullptr );
+
+	const auto result = cli::run_command( match, loop, cli::builtin_commands( ) );
+
+	// The command must not write: the file is generated from what is actually in
+	// the repository, so the model explores and writes it. A command that wrote
+	// its own file here would be the scaffold this replaced.
+	CHECK_FALSE( std::filesystem::exists( directory / "AGENTS.md" ) );
+
+	REQUIRE( result.submit_prompt.has_value( ) );
+	CHECK_FALSE( result.submit_prompt->empty( ) );
+	CHECK( result.output.empty( ) );
+
+	std::filesystem::remove_all( directory );
+}
+
+TEST_CASE( "/init refuses to regenerate over an existing AGENTS.md", "[cli][slash]" ) {
+	const auto directory = test::scratch_directory( "mcode-init-existing" );
+
+	std::filesystem::create_directories( directory );
+
+	{
+		auto existing = std::ofstream{ directory / "AGENTS.md", std::ios::trunc };
+		existing << "# the user's own instructions\n";
+	}
+
+	auto deps = agent_loop::dependencies{ };
+	deps.workspace_root = directory.string( );
+
+	auto loop = agent_loop{ deps };
+	const auto match = cli::match_command( "/init", cli::builtin_commands( ) );
+
+	REQUIRE( match.entry != nullptr );
+
+	const auto result = cli::run_command( match, loop, cli::builtin_commands( ) );
+
+	// No turn is submitted, so no model call is spent on a file that will not be
+	// written, and the message says how to proceed deliberately.
+	CHECK_FALSE( result.submit_prompt.has_value( ) );
+	CHECK( result.output.find( "already exists" ) != std::string::npos );
+
+	// The user's file is untouched -- the point of refusing.
+	{
+		auto kept = std::ifstream{ directory / "AGENTS.md" };
+		auto line = std::string{ };
+		std::getline( kept, line );
+
+		CHECK( line == "# the user's own instructions" );
+	}
+
+	std::filesystem::remove_all( directory );
+}
