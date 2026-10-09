@@ -75,15 +75,17 @@ namespace mcode {
 				": " + error_code.message( ) ) );
 		}
 
-		auto root_entry = root.begin( );
+		if ( !path_is_within( root, absolute ) ) {
+			return std::unexpected( fail( errc::io,
+				"path is outside the workspace: " + absolute.string( ) ) );
+		}
+
+		// `path_is_within` proved the root is a component prefix, so the remainder
+		// starts exactly `root`'s component count in.
 		auto path_entry = absolute.begin( );
 
-		for ( ; root_entry != root.end( ); ++root_entry, ++path_entry ) {
-			if ( path_entry == absolute.end( ) || *root_entry != *path_entry ) {
-				return std::unexpected( fail( errc::io,
-					"path is outside the workspace: " + absolute.string( ) ) );
-			}
-		}
+		std::advance( path_entry,
+			static_cast< std::ptrdiff_t >( std::distance( root.begin( ), root.end( ) ) ) );
 
 		if ( path_entry == absolute.end( ) ) {
 			return std::unexpected( fail( errc::io,

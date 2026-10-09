@@ -556,3 +556,24 @@ TEST_CASE( "protected paths are .mcode and .git at the root only", "[workspace]"
 
 	REQUIRE( static_cast< bool >( artifact ) );
 }
+
+TEST_CASE( "the containment predicate is component-wise at the boundary", "[workspace]" ) {
+	// One implementation now serves the read tool, the write tool, the snapshot
+	// restore path and the permission engine's extra roots. It was written out
+	// four times by hand, so this pins the property they all depend on: a sibling
+	// directory sharing a name prefix is NOT inside.
+	const auto root = std::filesystem::path{ "/work/mcode" };
+
+	CHECK( mcode::path_is_within( root, "/work/mcode" ) );
+	CHECK( mcode::path_is_within( root, "/work/mcode/src/main.cxx" ) );
+
+	// The case a string-prefix test gets wrong.
+	CHECK_FALSE( mcode::path_is_within( root, "/work/mcode-notes" ) );
+	CHECK_FALSE( mcode::path_is_within( root, "/work/mcode-notes/a.cxx" ) );
+
+	CHECK_FALSE( mcode::path_is_within( root, "/work" ) );
+	CHECK_FALSE( mcode::path_is_within( root, "/other/mcode" ) );
+
+	// A root is never inside a longer path that merely starts with it.
+	CHECK_FALSE( mcode::path_is_within( "/work/mcode/src", "/work/mcode" ) );
+}

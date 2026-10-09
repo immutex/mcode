@@ -73,6 +73,22 @@ namespace mcode {
 		std::filesystem::path canonical_root_;
 	};
 
+	// Whether `candidate` is `root` or sits below it, comparing whole path
+	// components.
+	//
+	// One implementation, because this predicate IS the workspace boundary: the
+	// read and write tools, the snapshot restore path, the permission engine's
+	// extra roots and the `.mcode` protection rule all decide a security question
+	// with it. It was written out four times by hand, so a correction to one --
+	// symlink handling, case folding -- would have left the other three answering
+	// differently with nothing to say which was canonical.
+	//
+	// Both paths are expected canonical; a component-wise comparison is what makes
+	// `/work/mcode-notes` not match a root of `/work/mcode`, which a string prefix
+	// test would.
+	[[nodiscard]] auto path_is_within( const std::filesystem::path& root,
+		const std::filesystem::path& candidate ) -> bool;
+
 	[[nodiscard]] auto looks_binary( std::string_view bytes ) noexcept -> bool;
 	[[nodiscard]] auto hash_bytes( std::string_view bytes ) noexcept -> std::string;
 

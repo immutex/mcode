@@ -4,7 +4,7 @@
 
 #include "mcode/ext/lua_host.hxx"
 
-#include "smoke.hxx"
+#include "mcode/smoke/check.hxx"
 
 auto smoke_luau( ) -> void {
 smoke::section( "Luau (extension layer)" );

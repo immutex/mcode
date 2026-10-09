@@ -3,6 +3,7 @@
 #include <atomic>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 
 #include "mcode/platform/seams.hxx"
@@ -18,18 +19,16 @@ namespace mcode {
 			return false;
 		}
 
-		auto root_entry = canonical_root_.begin( );
+		if ( !path_is_within( canonical_root_, canonical ) ) {
+			return false;
+		}
+
+		// `path_is_within` proved the root is a component prefix, so the first
+		// component below it is exactly `canonical_root_`'s component count in.
 		auto path_entry = canonical.begin( );
 
-		for ( ; root_entry != canonical_root_.end( ); ++root_entry, ++path_entry ) {
-			if ( path_entry == canonical.end( ) ) {
-				return false;
-			}
-
-			if ( *root_entry != *path_entry ) {
-				return false;
-			}
-		}
+		std::advance( path_entry, static_cast< std::ptrdiff_t >(
+			std::distance( canonical_root_.begin( ), canonical_root_.end( ) ) ) );
 
 		// The first component below the root: `notes.mcode` is not protected, `.mcode/` is.
 		if ( path_entry == canonical.end( ) ) {

@@ -1,11 +1,11 @@
-#include "cli_repl_plain.hxx"
+#include "mcode/cli/repl_plain.hxx"
 
 #include <iostream>
 #include <optional>
 #include <string>
 #include <vector>
 
-#include "cli_session.hxx"
+#include "mcode/cli/session.hxx"
 #include "mcode/cli/repl.hxx"
 
 auto run_plain_repl( const std::vector< std::string >& arguments ) -> int {

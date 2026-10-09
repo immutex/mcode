@@ -357,6 +357,16 @@ namespace mcode::tui {
 			const auto outcome = state.paste.feed( rest );
 
 			if ( outcome == paste_decoder::outcome::incomplete ) {
+				// The bytes before a marker that is still arriving are ordinary
+				// input, and they must still be reported. Returning here dropped
+				// them: typing `abc` immediately before an escape sequence that a
+				// read boundary split lost the `abc` entirely, with nothing on
+				// screen to say a key had been swallowed. The marker itself stays
+				// held for the next read, which is what `incomplete` means.
+				if ( !state.paste.text( ).empty( ) ) {
+					decode_plain_key_bytes( state.paste.text( ), state, out, mouse_reporting );
+				}
+
 				return;
 			}
 

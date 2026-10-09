@@ -189,3 +189,44 @@ TEST_CASE( "malformed JSON in a data payload is an error", "[sse]" ) {
 	REQUIRE_FALSE( text );
 	CHECK( text.error( ).code == mcode::errc::json );
 }
+
+TEST_CASE( "an over-long event is refused, not grown without bound", "[sse]" ) {
+	// An event is only dispatched on a blank line, so a stream that never sends
+	// one grew `current_.data` for as long as the server kept writing. The class
+	// declared MAX_EVENT_BYTES for exactly this and never enforced it.
+	auto events = std::vector< sse_event >{ };
+	auto parser = sse_parser{ [ & ]( sse_event&& value ) { events.push_back( std::move( value ) ); } };
+
+	// One `data:` line just over the cap, with no terminating blank line.
+	auto payload = std::string( sse_parser::MAX_EVENT_BYTES + 1, 'x' );
+
+	const auto fed = parser.feed( "data: " + payload + "\n" );
+
+	REQUIRE_FALSE( static_cast< bool >( fed ) );
+	CHECK( fed.error( ).code == mcode::errc::protocol );
+	CHECK( events.empty( ) );
+}
+
+TEST_CASE( "a line with no terminator is refused past the line cap", "[sse]" ) {
+	// The old code cleared the buffer and carried on, which left the parser
+	// mid-stream: the rest of that line was re-read as a fresh field and the event
+	// was assembled from the wrong bytes.
+	auto events = std::vector< sse_event >{ };
+	auto parser = sse_parser{ [ & ]( sse_event&& value ) { events.push_back( std::move( value ) ); } };
+
+	const auto fed = parser.feed( std::string( sse_parser::MAX_LINE_BYTES + 1, 'y' ) );
+
+	REQUIRE_FALSE( static_cast< bool >( fed ) );
+	CHECK( fed.error( ).code == mcode::errc::protocol );
+}
+
+TEST_CASE( "an ordinary event still parses", "[sse]" ) {
+	// The bound must not have broken the normal path.
+	auto events = std::vector< sse_event >{ };
+	auto parser = sse_parser{ [ & ]( sse_event&& value ) { events.push_back( std::move( value ) ); } };
+
+	REQUIRE( static_cast< bool >( parser.feed( "data: {\"a\":1}\n\n" ) ) );
+
+	REQUIRE( events.size( ) == 1 );
+	CHECK( events.front( ).data == "{\"a\":1}" );
+}

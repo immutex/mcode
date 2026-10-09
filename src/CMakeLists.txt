@@ -211,9 +211,16 @@ endif()
 
 set(MCODE_BUNDLED_EXT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../extensions")
 
-add_executable(mcode main.cxx cli_commands.cxx cli_repl.cxx cli_repl_events.cxx
-    cli_repl_plain.cxx cli_repl_view.cxx cli_session.cxx
-    cli_approval.cxx smoke_cli_extensions.cxx smoke_luau.cxx)
+add_executable(mcode main.cxx
+    mcode/cli/approval.cxx
+    mcode/cli/commands.cxx
+    mcode/cli/repl_events.cxx
+    mcode/cli/repl_plain.cxx
+    mcode/cli/repl_tui.cxx
+    mcode/cli/repl_view.cxx
+    mcode/cli/session.cxx
+    mcode/smoke/cli_extensions.cxx
+    mcode/smoke/luau.cxx)
 target_link_libraries(mcode PRIVATE mcode_core)
 
 # The binary cannot live at `src/mcode`: that path is the SOURCE DIRECTORY, and on

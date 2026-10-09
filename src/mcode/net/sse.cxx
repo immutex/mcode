@@ -30,7 +30,7 @@ namespace mcode::net {
 
 	}
 
-	auto sse_parser::feed( const std::string_view chunk ) -> void {
+	auto sse_parser::feed( const std::string_view chunk ) -> status {
 		auto content = chunk;
 
 		// A CRLF split across chunks: the CR ended the line already, so this LF is its pair.
@@ -50,7 +50,11 @@ namespace mcode::net {
 				break;
 			}
 
-			process_line( std::string_view{ buffer_ }.substr( position, terminator - position ) );
+			if ( auto processed = process_line(
+					std::string_view{ buffer_ }.substr( position, terminator - position ) );
+				!processed ) {
+				return processed;
+			}
 
 			position = terminator + 1;
 
@@ -69,20 +73,28 @@ namespace mcode::net {
 			buffer_.erase( 0, position );
 		}
 
+		// A line with no terminator yet. Refused rather than discarded: clearing
+		// the buffer left the parser mid-stream, so the rest of that line was
+		// re-read as a fresh field and the event it belonged to was assembled from
+		// the wrong bytes.
 		if ( buffer_.size( ) > MAX_LINE_BYTES ) {
-			buffer_.clear( );
+			return std::unexpected( fail( errc::protocol,
+				"SSE line exceeded the " + std::to_string( MAX_LINE_BYTES ) +
+					" byte cap without a terminator" ) );
 		}
+
+		return { };
 	}
 
-	auto sse_parser::process_line( const std::string_view line ) -> void {
+	auto sse_parser::process_line( const std::string_view line ) -> status {
 		if ( line.empty( ) ) {
 			dispatch( );
 
-			return;
+			return { };
 		}
 
 		if ( line.front( ) == ':' ) {
-			return;
+			return { };
 		}
 
 		auto field = std::string_view{ };
@@ -96,6 +108,16 @@ namespace mcode::net {
 
 			current_.data.append( value );
 			saw_data_ = true;
+
+			// The bound the class declares, enforced where the growth happens. An
+			// event is only dispatched on a blank line, so a server that never
+			// sends one grew this string without limit -- on the model response
+			// path, which is exactly where an unbounded allocation is worst.
+			if ( current_.data.size( ) > MAX_EVENT_BYTES ) {
+				return std::unexpected( fail( errc::protocol,
+					"SSE event data exceeded the " + std::to_string( MAX_EVENT_BYTES ) +
+						" byte cap" ) );
+			}
 		} else if ( field == "event" ) {
 			current_.event.assign( value );
 		} else if ( field == "id" ) {
@@ -105,6 +127,8 @@ namespace mcode::net {
 		} else if ( field == "retry" ) {
 			current_.retry.assign( value );
 		}
+
+		return { };
 	}
 
 	auto sse_parser::dispatch( ) -> void {

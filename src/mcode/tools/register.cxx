@@ -181,7 +181,6 @@ namespace mcode::tools {
 			definition.description = std::string{ entry.description };
 			definition.klass = entry.klass;
 			definition.source = tool_source::core;
-			definition.deferrable = false;
 			definition.schema_json = std::string{ entry.schema };
 
 			if ( auto added = registry.add( std::move( definition ) ); !added ) {

@@ -38,7 +38,6 @@ namespace mcode {
 		tool_class klass = tool_class::read;
 		tool_source source = tool_source::core;
 		std::string owner;
-		bool deferrable = true;
 
 		// A tool without one is callable but never advertised to the model.
 		std::string schema_json;

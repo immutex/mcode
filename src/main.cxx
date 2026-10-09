@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-#include "cli_session.hxx"
+#include "mcode/cli/session.hxx"
 #include "mcode/agent/loop.hxx"
 #include "mcode/cli/exec.hxx"
 #include "mcode/cli/repl.hxx"
@@ -33,7 +33,7 @@
 #include "mcode/perm/permission.hxx"
 #include "mcode/perm/store.hxx"
 #include "mcode/tools/register.hxx"
-#include "smoke.hxx"
+#include "mcode/smoke/check.hxx"
 
 using smoke::check;
 using smoke::g_checks;
@@ -43,7 +43,7 @@ using smoke::section;
 namespace {
 
 	std::vector< std::pair< std::string,
-		std::function< mcode::result< std::string >( std::string_view ) > > > pending_handlers;
+		std::function< mcode::result< std::string >( std::string_view ) > > > g_pending_handlers;
 
 	auto build_core_registry( mcode::tool_registry& registry, mcode::tools::tool_context& context )
 		-> mcode::status {
@@ -55,7 +55,7 @@ namespace {
 			return registered;
 		}
 
-		pending_handlers = sink.take( );
+		g_pending_handlers = sink.take( );
 
 		return { };
 	}
@@ -456,9 +456,9 @@ auto run_smoke( ) -> int {
 		auto budget = mcode::session_budget{ };
 		auto loop = mcode::agent_loop{ registry, log, budget };
 
-		auto pending = pending_handlers.size( );
+		auto pending = g_pending_handlers.size( );
 
-		for ( auto& [ name, handler ] : pending_handlers ) {
+		for ( auto& [ name, handler ] : g_pending_handlers ) {
 			loop.register_handler( name, handler );
 		}
 

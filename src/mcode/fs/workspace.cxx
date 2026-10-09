@@ -227,6 +227,24 @@ namespace mcode {
 		return std::string{ buffer.data( ) };
 	}
 
+	auto path_is_within( const std::filesystem::path& root,
+		const std::filesystem::path& candidate ) -> bool {
+		auto root_entry = root.begin( );
+		auto path_entry = candidate.begin( );
+
+		for ( ; root_entry != root.end( ); ++root_entry, ++path_entry ) {
+			if ( path_entry == candidate.end( ) ) {
+				return false;
+			}
+
+			if ( *root_entry != *path_entry ) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
 	auto workspace::open( const std::filesystem::path& root ) -> result< workspace > {
 		auto error_code = std::error_code{ };
 
@@ -288,20 +306,7 @@ namespace mcode {
 			return false;
 		}
 
-		auto root_entry = canonical_root_.begin( );
-		auto path_entry = canonical.begin( );
-
-		for ( ; root_entry != canonical_root_.end( ); ++root_entry, ++path_entry ) {
-			if ( path_entry == canonical.end( ) ) {
-				return false;
-			}
-
-			if ( *root_entry != *path_entry ) {
-				return false;
-			}
-		}
-
-		return true;
+		return path_is_within( canonical_root_, canonical );
 	}
 
 	auto workspace::glob( const std::string_view pattern, const std::size_t max_results ) const

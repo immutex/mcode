@@ -175,4 +175,34 @@ namespace mcode::cli::detail {
 		return buffer.data( );
 	}
 
+
+	auto resolve_approval_policy( const exec_options& options,
+		const mcode::config::merged_config& config, const bool interactive )
+		-> mcode::perm::permission_engine::options {
+		auto resolved = mcode::perm::permission_engine::options{ };
+		resolved.yolo = options.yolo;
+		resolved.headless = !interactive;
+		resolved.plan_mode = options.plan;
+
+		// The permissive default is for a human who can see the disclaimer and use
+		// /undo. A headless run has neither, so it keeps the engine's conservative
+		// default and fails closed on anything the rules do not already allow.
+		resolved.approval = options.approval.empty( )
+			? config.get_string( "sandbox.approval" ).value_or(
+				std::string{ interactive ? "never" : "on-request" } )
+			: options.approval;
+
+		// --yolo forces the permissive mode; --ask is applied after it so the
+		// explicit request to be prompted wins over every permissive flag.
+		if ( options.yolo ) {
+			resolved.approval = "never";
+		}
+
+		if ( options.ask ) {
+			resolved.approval = "on-request";
+			resolved.yolo = false;
+		}
+
+		return resolved;
+	}
 }

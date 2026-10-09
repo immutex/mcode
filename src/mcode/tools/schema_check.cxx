@@ -11,6 +11,31 @@ namespace mcode::tools {
 
 	namespace {
 
+		// A property name as a JSON Pointer segment.
+		//
+		// The name comes straight from the model's arguments, and a pointer gives
+		// `~` and `/` meaning: a key of `a/b` resolved to the nested node
+		// `properties.a.b` and `a~1b` to `properties.a/b`, so an argument was
+		// validated against a different property's type and enum -- a bypass of
+		// both `additionalProperties: false` and enum membership. RFC 6901 escapes
+		// `~` first, or the `~1` produced by `/` would be re-escaped.
+		[[nodiscard]] auto pointer_segment( const std::string_view name ) -> std::string {
+			auto out = std::string{ };
+			out.reserve( name.size( ) );
+
+			for ( const auto character : name ) {
+				if ( character == '~' ) {
+					out += "~0";
+				} else if ( character == '/' ) {
+					out += "~1";
+				} else {
+					out.push_back( character );
+				}
+			}
+
+			return out;
+		}
+
 		[[nodiscard]] auto is_named_type( const json::node& value, const std::string_view type )
 			-> bool {
 			if ( type == "string" ) {
@@ -130,10 +155,13 @@ namespace mcode::tools {
 		}
 
 		for ( const auto& [key, value] : root->members ) {
-			const auto property = schema->pointer_string( "/properties/" + key + "/type" );
+			// Escaped: the key is the model's own, and a pointer gives `/` and `~`
+			// meaning, so an unescaped one resolves to a different property.
+			const auto escaped = pointer_segment( key );
+			const auto property = schema->pointer_string( "/properties/" + escaped + "/type" );
 
 			if ( !property || property->empty( ) ) {
-				if ( !schema->has_pointer( "/properties/" + key ) &&
+				if ( !schema->has_pointer( "/properties/" + escaped ) &&
 					declares_no_additional_properties( *schema ) ) {
 					faults.push_back( argument_fault{ .parameter = key,
 						.problem = "is not a parameter of this tool",
@@ -156,7 +184,7 @@ namespace mcode::tools {
 				continue;
 			}
 
-			const auto choices = schema->pointer_string_array( "/properties/" + key + "/enum" );
+			const auto choices = schema->pointer_string_array( "/properties/" + escaped + "/enum" );
 
 			if ( !choices || choices->empty( ) ) {
 				continue;

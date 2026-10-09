@@ -25,13 +25,20 @@ namespace mcode::net {
 
 		explicit sse_parser( event_callback on_event ) : on_event_( std::move( on_event ) ) { }
 
-		auto feed( std::string_view chunk ) -> void;
+		// Fallible, because both bounds below are real: a line longer than
+		// `MAX_LINE_BYTES` and an event whose data exceeds `MAX_EVENT_BYTES` are
+		// both refusals, not truncations. Discarding the over-long line and
+		// carrying on left the parser mid-stream, re-reading the remainder as a
+		// fresh field, and an event that never terminated grew `current_.data`
+		// without bound. Neither is recoverable by guessing, so the stream fails
+		// and the caller reports it rather than parsing garbage.
+		[[nodiscard]] auto feed( std::string_view chunk ) -> status;
 		auto finish( ) -> void;
 
 		[[nodiscard]] auto events_parsed( ) const noexcept -> std::size_t { return events_parsed_; }
 
 	private:
-		auto process_line( std::string_view line ) -> void;
+		auto process_line( std::string_view line ) -> status;
 		auto dispatch( ) -> void;
 
 		event_callback on_event_;

@@ -212,9 +212,9 @@ namespace mcode::net {
 						fail( errc::protocol, "SSE stream exceeded the response cap" ) );
 				}
 
-				request.parser_state.feed( bytes );
-
-				return { };
+				// The parser's own bounds. A refusal here means the stream is not
+				// parseable, so it is surfaced rather than swallowed.
+				return request.parser_state.feed( bytes );
 			};
 
 			const auto deliver_raw = [&]( const std::string_view bytes ) -> status {

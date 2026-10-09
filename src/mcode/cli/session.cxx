@@ -18,6 +18,8 @@
 #include "mcode/perm/store.hxx"
 #include "mcode/platform/seams.hxx"
 #include "mcode/skills/session_context.hxx"
+#include "exec_internal.hxx"
+
 #include "mcode/support/config.hxx"
 #include "mcode/support/json.hxx"
 #include "mcode/support/time.hxx"
@@ -39,17 +41,14 @@
 #include <thread>
 #include <vector>
 
-#include "cli_session.hxx"
+#include "mcode/cli/session.hxx"
 
 namespace {
-
-	// Under the per-user data directory, so a restore survives a workspace being removed.
-	inline constexpr std::string_view SNAPSHOT_DIRECTORY = "snapshots";
 
 	// The load report of the session that was built, so `/extensions` can read it
 	// without the loop carrying a pointer it has no other use for -- the loop
 	// knows four abstractions and extensions are not one of them. The report
-	// lives on the session's own parts, which are function-local and outlive the
+	// lives on the session's own g_parts, which are function-local and outlive the
 	// returned loop; this points at them. Null until a session is built.
 	const mcode::ext::load_report* g_session_extensions = nullptr;
 
@@ -96,20 +95,47 @@ namespace {
 
 	// One session per process: a second build would make an unwired loop over
 	// these shared parts.
-	auto parts = std::optional< session_parts >{ };
+	auto g_parts = std::optional< session_parts >{ };
+
+	// Releases the session slot unless the build reached its success return.
+	//
+	// The parts are emplaced before anything is validated, because the validation
+	// reads them. Every failure after that used to leave them engaged, so the next
+	// call reported "an interactive session is already running in this process" --
+	// the wrong diagnosis for a retry after fixing a config.
+	class parts_reservation {
+	public:
+		parts_reservation( ) = default;
+		parts_reservation( const parts_reservation& ) = delete;
+		auto operator=( const parts_reservation& ) -> parts_reservation& = delete;
+
+		~parts_reservation( ) {
+			if ( held_ ) {
+				g_parts.reset( );
+			}
+		}
+
+		// The build succeeded; the parts live for the rest of the process.
+		auto release( ) noexcept -> void { held_ = false; }
+
+	private:
+		bool held_ = true;
+	};
 
 }
 
 auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 	mcode::perm::approval_source* interactive_approval )
 	-> mcode::result< mcode::agent_loop > {
-	// A second call would build an unwired loop over shared parts, so it is refused.
-	if ( parts ) {
+	// A second call would build an unwired loop over shared g_parts, so it is refused.
+	if ( g_parts ) {
 		return std::unexpected( mcode::fail( mcode::errc::config,
 			"an interactive session is already running in this process" ) );
 	}
 
-	parts.emplace( );
+	g_parts.emplace( );
+
+	auto reservation = parts_reservation{ };
 
 	const auto workspace_path = parsed.working_directory.empty( )
 		? std::filesystem::current_path( )
@@ -167,9 +193,9 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 		skills_options.extension_roots = { *bundled_directory / "extensions" };
 	}
 
-	parts->skills_context = mcode::skills::assemble_session_context( skills_options );
+	g_parts->skills_context = mcode::skills::assemble_session_context( skills_options );
 
-	auto& skills_context = parts->skills_context;
+	auto& skills_context = g_parts->skills_context;
 
 	// Built before the loader so the extension surface's `fs.*` entries share this context.
 	auto space = mcode::workspace::open( workspace_path );
@@ -178,23 +204,23 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 		return std::unexpected( space.error( ) );
 	}
 
-	parts->space = std::move( *space );
+	g_parts->space = std::move( *space );
 
 	const auto user_data = mcode::platform::app_data_path(
 		mcode::platform::data_kind::config );
 
-	parts->user_store = mcode::perm::remember_store{ user_data
+	g_parts->user_store = mcode::perm::remember_store{ user_data
 		? *user_data / "permissions.json"
 		: std::filesystem::path{ ".mcode/permissions.json" } };
 
-	parts->engine = mcode::perm::permission_engine{ *parts->space, &*parts->user_store };
+	g_parts->engine = mcode::perm::permission_engine{ *g_parts->space, &*g_parts->user_store };
 
 	if ( !parsed.no_extensions ) {
 		auto options = mcode::ext::loader_options{ };
-		options.register_api = mcode::ext::default_register_api( parts->tools,
-			{ .skills = &skills_context.skills, .servers = &parts->extension_servers,
-				.config = &*config, .space = &*parts->space, .reads = &parts->reads,
-				.permissions = &*parts->engine } );
+		options.register_api = mcode::ext::default_register_api( g_parts->tools,
+			{ .skills = &skills_context.skills, .servers = &g_parts->extension_servers,
+				.config = &*config, .space = &*g_parts->space, .reads = &g_parts->reads,
+				.permissions = &*g_parts->engine } );
 
 		auto roots = mcode::ext::default_roots( workspace_path );
 
@@ -202,16 +228,16 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 			roots.push_back( *bundled_directory / "extensions" );
 		}
 
-		parts->extensions = mcode::ext::load_extensions( roots, parts->providers,
-			parts->hooks, options );
+		g_parts->extensions = mcode::ext::load_extensions( roots, g_parts->providers,
+			g_parts->hooks, options );
 	}
 
 	// Published whether or not extensions were loaded: with `--no-extensions` the
 	// report is empty, and `/extensions` saying "0 loaded" is the true answer
 	// rather than a null it has to explain.
-	g_session_extensions = &parts->extensions.report;
+	g_session_extensions = &g_parts->extensions.report;
 
-	const auto* descriptor = parts->providers.find( provider_name );
+	const auto* descriptor = g_parts->providers.find( provider_name );
 
 	if ( descriptor == nullptr ) {
 		return std::unexpected( mcode::fail( mcode::errc::config,
@@ -241,48 +267,26 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 		return std::unexpected( api_key.error( ) );
 	}
 
-	parts->project_store = mcode::perm::remember_store{
-		parts->space->root( ) / ".mcode" / "permissions.json" };
+	g_parts->project_store = mcode::perm::remember_store{
+		g_parts->space->root( ) / ".mcode" / "permissions.json" };
 
 	const auto interactive = !parsed.json &&
 		mcode::platform::terminal_size( ).has_value( );
 
 	{
-		auto engine_options = mcode::perm::permission_engine::options{ };
-		engine_options.yolo = parsed.yolo;
-		engine_options.headless = !interactive;
-		engine_options.plan_mode = parsed.plan;
-
-		// The permissive default is for a human who can see the disclaimer and use /undo.
-		// A headless run has neither, so it keeps the engine's conservative default and
-		// fails closed on anything the rules do not already allow.
-		engine_options.approval = parsed.approval.empty( )
-			? config->get_string( "sandbox.approval" ).value_or(
-				std::string{ interactive ? "never" : "on-request" } )
-			: parsed.approval;
-
-		// --yolo forces the permissive mode; --ask is applied after it so the explicit
-		// request to be prompted wins over every permissive flag.
-		if ( parsed.yolo ) {
-			engine_options.approval = "never";
-		}
-
-		if ( parsed.ask ) {
-			engine_options.approval = "on-request";
-			engine_options.yolo = false;
-		}
-
-		parts->engine->set_options( engine_options );
+		auto engine_options = mcode::cli::detail::resolve_approval_policy(
+			parsed, *config, interactive );
+		g_parts->engine->set_options( engine_options );
 
 		// The engine's null-source path denies every ask, which would refuse every tool call.
 		if ( interactive_approval != nullptr ) {
-			parts->engine->set_approval_source( interactive_approval );
+			g_parts->engine->set_approval_source( interactive_approval );
 		} else if ( interactive ) {
-			parts->engine->set_approval_source( &parts->terminal_source );
+			g_parts->engine->set_approval_source( &g_parts->terminal_source );
 		}
 
 		for ( const auto& dir : parsed.add_dirs ) {
-			parts->engine->add_root( dir );
+			g_parts->engine->add_root( dir );
 		}
 
 		auto deny_rules = config->get_string_array( "permissions.deny" );
@@ -292,14 +296,14 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 			return std::unexpected( !deny_rules ? deny_rules.error( ) : ask_rules.error( ) );
 		}
 
-		parts->engine->add_config_rules( mcode::perm::rule_scope::user, *deny_rules, *ask_rules );
+		g_parts->engine->add_config_rules( mcode::perm::rule_scope::user, *deny_rules, *ask_rules );
 
-		if ( const auto loaded = parts->engine->load_store( ); !loaded ) {
+		if ( const auto loaded = g_parts->engine->load_store( ); !loaded ) {
 			std::fprintf( stderr, "mcode: %s\n", loaded.error( ).msg.c_str( ) );
 		}
 
-		if ( const auto loaded = parts->engine->load_project_store(
-			*parts->project_store ); !loaded ) {
+		if ( const auto loaded = g_parts->engine->load_project_store(
+			*g_parts->project_store ); !loaded ) {
 			std::fprintf( stderr, "mcode: %s\n", loaded.error( ).msg.c_str( ) );
 		}
 	}
@@ -308,15 +312,15 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 		static_cast< long long >( mcode::support::epoch_milliseconds( ) ) );
 
 	auto tools_context = mcode::tools::tool_context{ };
-	tools_context.space = &*parts->space;
-	tools_context.reads = &parts->reads;
-	tools_context.permissions = &*parts->engine;
+	tools_context.space = &*g_parts->space;
+	tools_context.reads = &g_parts->reads;
+	tools_context.permissions = &*g_parts->engine;
 	tools_context.run_id = run_id;
 	tools_context.headless = parsed.json;
 
 	auto sink = mcode::tools::vector_sink{ };
 
-	const auto registered = mcode::tools::register_core_tools( parts->tools, sink,
+	const auto registered = mcode::tools::register_core_tools( g_parts->tools, sink,
 		tools_context );
 
 	if ( !registered ) {
@@ -324,11 +328,11 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 	}
 
 	if ( parsed.max_steps > 0 ) {
-		parts->budget.max_steps = parsed.max_steps;
+		g_parts->budget.max_steps = parsed.max_steps;
 	}
 
 	if ( parsed.max_budget_usd > 0.0 ) {
-		parts->budget.max_usd = parsed.max_budget_usd;
+		g_parts->budget.max_usd = parsed.max_budget_usd;
 	}
 
 	auto provider = *descriptor;
@@ -337,38 +341,38 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 		provider.endpoint = *base_url;
 	}
 
-	parts->loop_deps.registry = &parts->tools;
-	parts->loop_deps.client = &parts->client;
-	parts->loop_deps.log = &parts->log;
-	parts->loop_deps.bus = &parts->bus;
-	parts->loop_deps.budget = parts->budget;
-	parts->loop_deps.model_name = model_name;
-	parts->loop_deps.caps = *caps;
-	parts->loop_deps.provider_name = provider_name;
-	parts->loop_deps.provider = provider;
-	parts->loop_deps.api_key = *api_key;
-	parts->loop_deps.workspace_root = parts->space->root( ).string( );
-	parts->loop_deps.platform_name = std::string{ mcode::cli::PLATFORM_NAME };
-	parts->loop_deps.permissions = &*parts->engine;
-	parts->loop_deps.instruction_chain = skills_context.chain.text;
-	parts->loop_deps.skill_index = skills_context.skill_index;
+	g_parts->loop_deps.registry = &g_parts->tools;
+	g_parts->loop_deps.client = &g_parts->client;
+	g_parts->loop_deps.log = &g_parts->log;
+	g_parts->loop_deps.bus = &g_parts->bus;
+	g_parts->loop_deps.budget = g_parts->budget;
+	g_parts->loop_deps.model_name = model_name;
+	g_parts->loop_deps.caps = *caps;
+	g_parts->loop_deps.provider_name = provider_name;
+	g_parts->loop_deps.provider = provider;
+	g_parts->loop_deps.api_key = *api_key;
+	g_parts->loop_deps.workspace_root = g_parts->space->root( ).string( );
+	g_parts->loop_deps.platform_name = std::string{ mcode::cli::PLATFORM_NAME };
+	g_parts->loop_deps.permissions = &*g_parts->engine;
+	g_parts->loop_deps.instruction_chain = skills_context.chain.text;
+	g_parts->loop_deps.skill_index = skills_context.skill_index;
 
 	// The store lives in the per-user data directory, keyed by nothing else: the index
 	// records the workspace-relative path, so one store serves every project.
 	if ( auto data = mcode::platform::app_data_path( mcode::platform::data_kind::data ) ) {
-		parts->snapshots.emplace( *data / SNAPSHOT_DIRECTORY );
-		parts->loop_deps.snapshots = &*parts->snapshots;
+		g_parts->snapshots.emplace( *data / mcode::cli::detail::SNAPSHOT_DIRECTORY );
+		g_parts->loop_deps.snapshots = &*g_parts->snapshots;
 	}
 
 	// the loop drives the timers: one pump per step, on the thread the VM belongs to.
-	parts->loop_deps.pump_timers = [ ]( ) { parts->extensions.pump_timers( ); };
+	g_parts->loop_deps.pump_timers = [ ]( ) { g_parts->extensions.pump_timers( ); };
 
-	auto loop = mcode::agent_loop{ parts->loop_deps };
+	auto loop = mcode::agent_loop{ g_parts->loop_deps };
 
 	// The session file is opened before the first turn, so an interactive session's
 	// events are on disk the same way an exec run's are. An unknown --resume id is
 	// refused here rather than starting a fresh session under it.
-	const auto session = mcode::cli::open_session_for_run( parsed, parts->space->root( ) );
+	const auto session = mcode::cli::open_session_for_run( parsed, g_parts->space->root( ) );
 
 	if ( !session ) {
 		return std::unexpected( session.error( ) );
@@ -376,11 +380,11 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 
 	const auto resumed = !parsed.resume_session.empty( ) || parsed.continue_session;
 
-	if ( const auto opened = parts->log.open( session->path ); !opened ) {
+	if ( const auto opened = g_parts->log.open( session->path ); !opened ) {
 		return std::unexpected( opened.error( ) );
 	}
 
-	std::fputs( mcode::cli::start_session_log( parts->log, *session, resumed ).c_str( ), stderr );
+	std::fputs( mcode::cli::start_session_log( g_parts->log, *session, resumed ).c_str( ), stderr );
 
 	// A resumed session continues its conversation. The headless path has always
 	// rebuilt the transcript here; the interactive one opened the log, reported
@@ -389,7 +393,7 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 	// the model started from nothing while the report said it had carried N
 	// messages. Seeded before the first turn, exactly as `run_exec` does it.
 	if ( resumed ) {
-		auto restored = mcode::cli::restore_transcript( parts->log );
+		auto restored = mcode::cli::restore_transcript( g_parts->log );
 
 		if ( !restored.empty( ) ) {
 			loop.seed_history( std::move( restored ) );
@@ -400,9 +404,9 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 		loop.register_handler( name, std::move( handler ) );
 	}
 
-	for ( const auto& [ name, owner ] : parts->extensions.tool_owners ) {
+	for ( const auto& [ name, owner ] : g_parts->extensions.tool_owners ) {
 		loop.register_handler( name,
-			[ &extensions = parts->extensions, tool_name = name ](
+			[ &extensions = g_parts->extensions, tool_name = name ](
 				const std::string_view arguments_json ) -> mcode::result< std::string > {
 			return extensions.invoke( tool_name, arguments_json );
 		} );
@@ -410,12 +414,15 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 
 	const auto connected = mcode::mcp::connect_servers(
 		mcode::mcp::connect_input{ .config_values = &config->keys( ),
-			.extension_servers = &parts->extension_servers, .registry = &parts->tools,
-			.loop = &loop, .owned = &parts->mcp_servers } );
+			.extension_servers = &g_parts->extension_servers, .registry = &g_parts->tools,
+			.loop = &loop, .owned = &g_parts->mcp_servers } );
 
 	if ( !connected ) {
 		return std::unexpected( connected.error( ) );
 	}
+
+	// The build succeeded, so the parts stay engaged for the life of the session.
+	reservation.release( );
 
 	return loop;
 }
@@ -426,14 +433,14 @@ auto session_extensions( ) -> const mcode::ext::load_report* {
 
 auto adopt_session( mcode::agent_loop& loop, const std::string_view id )
 	-> mcode::result< std::string > {
-	if ( !parts ) {
+	if ( !g_parts ) {
 		return std::unexpected( mcode::fail( mcode::errc::config,
 			"no interactive session is running" ) );
 	}
 
 	// An unknown id is a named error from here and never falls back to a fresh
 	// session; an empty one is the workspace's newest, which is `/continue`.
-	auto session = mcode::cli::resolve_session( parts->space->root( ), id );
+	auto session = mcode::cli::resolve_session( g_parts->space->root( ), id );
 
 	if ( !session ) {
 		return std::unexpected( session.error( ) );
@@ -442,12 +449,12 @@ auto adopt_session( mcode::agent_loop& loop, const std::string_view id )
 	// Repoint first: `restore_transcript` reads the log's own events, so it must
 	// see the new file and nothing else. `event_log::open` clears the previous
 	// session's events, which is what stops the two transcripts merging.
-	if ( auto opened = parts->log.open( session->path ); !opened ) {
+	if ( auto opened = g_parts->log.open( session->path ); !opened ) {
 		return std::unexpected( opened.error( ) );
 	}
 
-	auto restored = mcode::cli::restore_transcript( parts->log );
-	auto report = mcode::cli::start_session_log( parts->log, *session, true );
+	auto restored = mcode::cli::restore_transcript( g_parts->log );
+	auto report = mcode::cli::start_session_log( g_parts->log, *session, true );
 
 	loop.reset_session( std::move( restored ) );
 
@@ -455,23 +462,23 @@ auto adopt_session( mcode::agent_loop& loop, const std::string_view id )
 }
 
 auto start_new_session( mcode::agent_loop& loop ) -> mcode::result< std::string > {
-	if ( !parts ) {
+	if ( !g_parts ) {
 		return std::unexpected( mcode::fail( mcode::errc::config,
 			"no interactive session is running" ) );
 	}
 
-	auto session = mcode::cli::new_session_ref( parts->space->root( ) );
+	auto session = mcode::cli::new_session_ref( g_parts->space->root( ) );
 
 	if ( !session ) {
 		return std::unexpected( session.error( ) );
 	}
 
 	// `open` with a path that does not exist yet creates it.
-	if ( auto opened = parts->log.open( session->path ); !opened ) {
+	if ( auto opened = g_parts->log.open( session->path ); !opened ) {
 		return std::unexpected( opened.error( ) );
 	}
 
-	auto report = mcode::cli::start_session_log( parts->log, *session, false );
+	auto report = mcode::cli::start_session_log( g_parts->log, *session, false );
 
 	// An empty history, not the previous session's: this is a new conversation.
 	loop.reset_session( { } );
@@ -480,10 +487,10 @@ auto start_new_session( mcode::agent_loop& loop ) -> mcode::result< std::string 
 }
 
 auto workspace_sessions( ) -> mcode::result< std::vector< mcode::cli::session_ref > > {
-	if ( !parts ) {
+	if ( !g_parts ) {
 		return std::unexpected( mcode::fail( mcode::errc::config,
 			"no interactive session is running" ) );
 	}
 
-	return mcode::cli::list_sessions( parts->space->root( ) );
+	return mcode::cli::list_sessions( g_parts->space->root( ) );
 }

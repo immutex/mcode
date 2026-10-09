@@ -26,11 +26,24 @@ namespace mcode::ext {
 		const auto* text = lua_tolstring( state, 1, &length );
 		const auto path = std::string{ text != nullptr ? text : "", length };
 
-		auto arguments = std::string{ "{\"path\":" };
-		mcode::json::append_escaped( arguments, path );
-		arguments += "}";
+		// Built with the JSON writer, not by hand. `json::append_escaped` writes the
+		// escaped BODY of a string and never its surrounding quotes, so the previous
+		// `"{\"path\":" + escaped + "}"` produced `{"path":/tmp/x}` -- not valid
+		// JSON. `tool_args::parse` is strict, so every call took the failure branch
+		// and `mcode.fs.read` could never succeed at all.
+		auto arguments_document = mcode::json::document::make_object( );
+		arguments_document.set_string( "path", path );
 
-		auto parsed = mcode::tools::tool_args::parse( arguments );
+		const auto arguments = arguments_document.dump( );
+
+		if ( !arguments ) {
+			lua_pushnil( state );
+			lua_pushliteral( state, "mcode.fs.read could not build its arguments" );
+
+			return 2;
+		}
+
+		auto parsed = mcode::tools::tool_args::parse( *arguments );
 
 		if ( !parsed ) {
 			lua_pushnil( state );
@@ -81,14 +94,20 @@ namespace mcode::ext {
 		const auto* data_text = lua_tolstring( state, 2, &length );
 		const auto data = std::string{ data_text != nullptr ? data_text : "", length };
 
-		auto arguments = std::string{ "{\"path\":" };
-		mcode::json::append_escaped( arguments, path );
-		arguments += ",\"content\":";
+		auto arguments_document = mcode::json::document::make_object( );
+		arguments_document.set_string( "path", path );
+		arguments_document.set_string( "content", data );
 
-		mcode::json::append_escaped( arguments, data );
-		arguments += "}";
+		const auto arguments = arguments_document.dump( );
 
-		auto parsed = mcode::tools::tool_args::parse( arguments );
+		if ( !arguments ) {
+			lua_pushnil( state );
+			lua_pushliteral( state, "mcode.fs.write could not build its arguments" );
+
+			return 2;
+		}
+
+		auto parsed = mcode::tools::tool_args::parse( *arguments );
 
 		if ( !parsed ) {
 			lua_pushnil( state );

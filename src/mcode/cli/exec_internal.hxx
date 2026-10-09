@@ -8,6 +8,8 @@
 
 #include "mcode/cli/exec.hxx"
 #include "mcode/core/error.hxx"
+#include "mcode/perm/permission.hxx"
+#include "mcode/support/config.hxx"
 
 // Shared by the `exec` surface's translation units. Not part of the CLI's
 // interface: everything here is an implementation detail of the session store,
@@ -70,5 +72,24 @@ namespace mcode::cli::detail {
 		-> result< std::vector< session_ref > >;
 
 	[[nodiscard]] auto format_utc( std::int64_t milliseconds ) -> std::string;
+
+	// Where the undo store lives, under the per-user data directory rather than
+	// the workspace, so a restore survives a workspace being removed. Shared,
+	// because `run_exec` and the interactive builder both construct the store and
+	// a literal in one of them had already drifted from the constant in the other.
+	inline constexpr std::string_view SNAPSHOT_DIRECTORY = "snapshots";
+
+	// The approval policy both entry points run under, resolved from the flags and
+	// the config. One function, because `run_exec` and the interactive builder held
+	// two copies of this precedence and it is a security decision: `--yolo` sets
+	// the permissive mode, `--ask` is applied AFTER it so an explicit request to be
+	// prompted wins over every permissive flag, and a run with no terminal keeps
+	// the conservative default and fails closed.
+	//
+	// `interactive` is passed rather than derived, because the two callers decide it
+	// from different things and the decision is theirs.
+	[[nodiscard]] auto resolve_approval_policy( const exec_options& options,
+		const mcode::config::merged_config& config, bool interactive )
+		-> mcode::perm::permission_engine::options;
 
 }

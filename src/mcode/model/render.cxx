@@ -76,11 +76,18 @@ namespace mcode::model {
 		[[nodiscard]] auto strictify_schema( const json::node& schema ) -> json::node {
 			auto out = schema;
 
-			auto& properties = out.members[ "properties" ];
+			// `member`, not `members[...]`: the subscript default-constructs the
+			// entry when the key is absent, so the guard below returned a schema it
+			// had just mutated. A no-argument tool's schema came back as
+			// `{"type":"object","properties":null}`, and providers reject a null
+			// properties object.
+			auto* existing = out.member( "properties" );
 
-			if ( properties.type != json::node::kind::object ) {
+			if ( existing == nullptr || existing->type != json::node::kind::object ) {
 				return out;
 			}
+
+			auto& properties = *existing;
 
 			auto required = json::node::make_array( );
 

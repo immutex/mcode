@@ -51,6 +51,13 @@ namespace mcode {
 	inline constexpr std::size_t MAX_TOOL_CALL_RETRIES = 3;
 
 	inline constexpr double COMPACTION_TRIGGER_FRACTION = 0.80;
+
+	// The floor on a model's usable window, as a fraction of its declared window.
+	// A model whose declared window is at or below RESERVED_OUTPUT_TOKENS would
+	// otherwise have a negative usable window, so the compaction trigger was never
+	// true and the path ran on every step reporting a compaction it did not do.
+	inline constexpr double MIN_USABLE_WINDOW_FRACTION = 0.10;
+
 	inline constexpr double TOOL_CLEAR_TRIGGER_FRACTION = 0.60;
 	inline constexpr double CLEAR_AT_LEAST_FRACTION = 0.20;
 	inline constexpr double SAFETY_MARGIN_FRACTION = 0.05;
@@ -288,7 +295,6 @@ namespace mcode {
 		std::string_view model_name;
 		model::cache_mode mode = model::cache_mode::none;
 		bool near_budget = false;
-		std::string_view recitation;
 
 		// the provider's field names, so a breakpoint anchor matches the rendered body.
 		model::request_spec fields = { };
@@ -304,7 +310,7 @@ namespace mcode {
 	[[nodiscard]] auto assemble_request( const tool_registry& registry,
 		const assemble_request_options& options ) -> assembled_request;
 
-	// Sections 1-8 are cache-stable; the environment block and recitation live in the tail.
+	// Sections 1-8 are cache-stable; the environment block lives in the tail.
 	[[nodiscard]] auto build_system_prompt( const tool_registry& registry,
 		const std::string_view instruction_chain = { },
 		const std::string_view skill_index = { } ) -> std::string;

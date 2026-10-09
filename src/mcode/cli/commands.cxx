@@ -16,7 +16,7 @@
 #include "mcode/tui/render.hxx"
 #include "mcode/tui/tty.hxx"
 #include "mcode/agent/loop.hxx"
-#include "cli_session.hxx"
+#include "mcode/cli/session.hxx"
 #include "mcode/cli/exec.hxx"
 #include "mcode/cli/repl.hxx"
 #include "mcode/core/registry.hxx"
@@ -36,6 +36,8 @@
 #include "mcode/perm/store.hxx"
 #include "mcode/platform/seams.hxx"
 #include "mcode/skills/session_context.hxx"
+#include "exec_internal.hxx"
+
 #include "mcode/support/config.hxx"
 #include "mcode/support/time.hxx"
 #include "mcode/tools/context.hxx"
@@ -351,29 +353,7 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	}
 
 	{
-		auto engine_options = mcode::perm::permission_engine::options{ };
-		engine_options.yolo = parsed->yolo;
-		engine_options.headless = !interactive;
-		engine_options.plan_mode = parsed->plan;
-
-		// The permissive default is for a human who can see the disclaimer and use /undo.
-		// A headless `--json` run has neither, so it keeps the engine's conservative default
-		// and fails closed on anything the rules do not already allow.
-		engine_options.approval = parsed->approval.empty( )
-			? config->get_string( "sandbox.approval" ).value_or(
-				std::string{ interactive ? "never" : "on-request" } )
-			: parsed->approval;
-
-		// --yolo forces the permissive mode; --ask is applied after it so the explicit
-		// request to be prompted wins over every permissive flag.
-		if ( parsed->yolo ) {
-			engine_options.approval = "never";
-		}
-
-		if ( parsed->ask ) {
-			engine_options.approval = "on-request";
-			engine_options.yolo = false;
-		}
+		auto engine_options = mcode::cli::detail::resolve_approval_policy( *parsed, *config, interactive );
 
 		engine.set_options( engine_options );
 		engine.set_approval_source( interactive
@@ -500,7 +480,7 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	std::optional< mcode::snapshot_store > snapshots;
 
 	if ( auto data = mcode::platform::app_data_path( mcode::platform::data_kind::data ) ) {
-		snapshots.emplace( *data / "snapshots" );
+		snapshots.emplace( *data / mcode::cli::detail::SNAPSHOT_DIRECTORY );
 		dependencies.snapshots = &*snapshots;
 	}
 

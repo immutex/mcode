@@ -10,8 +10,10 @@
 #include "mcode/ext/defer.hxx"
 #include "mcode/ext/notify.hxx"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <utility>
@@ -160,7 +162,6 @@ namespace mcode::ext {
 			read_field_string( state, definition, "permission" ) ).value_or( tool_class::exec );
 		definition_value.source = tool_source::user_extension;
 		definition_value.owner = tool.owner;
-		definition_value.deferrable = true;
 		definition_value.schema_json = std::move( schema );
 
 		if ( auto added = self->registry_->add( std::move( definition_value ) ); !added ) {
@@ -172,10 +173,12 @@ namespace mcode::ext {
 			lua_error( state );
 		}
 
+		tool.identifier = self->next_tool_identifier_++;
+
 		self->by_name_.insert_or_assign( tool.name, self->tools_.size( ) );
 		self->tools_.push_back( std::move( tool ) );
 
-		lua_pushnumber( state, static_cast< double >( self->tools_.size( ) ) );
+		lua_pushnumber( state, static_cast< double >( self->tools_.back( ).identifier ) );
 
 		return 1;
 	}
@@ -186,14 +189,26 @@ namespace mcode::ext {
 		const auto number = luaL_checknumber( state, 1 );
 		const auto identifier = static_cast< std::int64_t >( number );
 
-		if ( static_cast< double >( identifier ) != number || identifier <= 0 ||
-			static_cast< std::size_t >( identifier ) > self->tools_.size( ) ) {
+		if ( static_cast< double >( identifier ) != number || identifier <= 0 ) {
 			lua_pushliteral( state, "mcode.tool.unregister: unknown id" );
 			lua_error( state );
 		}
 
-		const auto index = static_cast< std::size_t >( identifier ) - 1;
-		const auto& tool = self->tools_[ index ];
+		// By identifier, never by position: `register` returns a handle the
+		// extension keeps, and a positional one named a different tool once any
+		// earlier unregister shifted the vector.
+		const auto found = std::find_if( self->tools_.begin( ), self->tools_.end( ),
+			[ identifier ]( const registered_tool& candidate ) {
+				return candidate.identifier == identifier;
+			} );
+
+		if ( found == self->tools_.end( ) ) {
+			lua_pushliteral( state, "mcode.tool.unregister: unknown id" );
+			lua_error( state );
+		}
+
+		const auto index = static_cast< std::size_t >( std::distance( self->tools_.begin( ), found ) );
+		const auto& tool = *found;
 
 		self->registry_->remove( tool.name );
 

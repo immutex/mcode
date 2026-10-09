@@ -25,6 +25,13 @@ namespace mcode::model {
 		inline constexpr unsigned MAX_BACKOFF_SHIFT = 16;
 		inline constexpr std::int64_t MILLISECONDS_PER_SECOND = 1000;
 
+		// The longest wait a `Retry-After` header may impose. Two reasons: the
+		// header is the server's own and unbounded, so `seconds *
+		// MILLISECONDS_PER_SECOND` overflows to a negative delay past ~9.2e15 and
+		// silently falls through to the short backoff; and an hour is already far
+		// past any wait this harness should absorb on the user's behalf.
+		inline constexpr std::int64_t MAX_RETRY_AFTER_SECONDS = 3'600;
+
 		// Bounds the retries a request-field downgrade may add, so an unhelpful body cannot
 		// loop: three fields can be dropped, so three retries is the most it can produce.
 		inline constexpr unsigned MAX_FEATURE_DOWNGRADES = 3;
@@ -441,7 +448,17 @@ namespace mcode::model {
 
 			if ( failure.status != 0 ) {
 				if ( const auto seconds = retry_after_seconds( failure ) ) {
-					delay = std::chrono::milliseconds{ *seconds * MILLISECONDS_PER_SECOND };
+					// Clamped twice: the server's value is unbounded, and
+					// `seconds * MILLISECONDS_PER_SECOND` overflows to a negative
+					// delay for anything past ~9.2e15 -- which then falls through to
+					// the backoff, so a gateway asking for a long wait would get a
+					// short one. The cap is the longest wait this loop will honour
+					// regardless, so a hostile or misconfigured header cannot stall
+					// the run indefinitely either.
+					const auto bounded = std::min< std::int64_t >( *seconds,
+						MAX_RETRY_AFTER_SECONDS );
+
+					delay = std::chrono::milliseconds{ bounded * MILLISECONDS_PER_SECOND };
 				}
 			}
 

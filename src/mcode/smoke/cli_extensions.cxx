@@ -12,7 +12,7 @@
 #include "mcode/ext/lua_host.hxx"
 #include "mcode/model/provider.hxx"
 
-#include "smoke.hxx"
+#include "mcode/smoke/check.hxx"
 
 using smoke::check;
 using smoke::g_failures;

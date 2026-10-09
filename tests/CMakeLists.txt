@@ -11,6 +11,7 @@ add_executable(mcode_tests
     test_snapshot.cxx
     test_tools.cxx
     test_tools_bash.cxx
+    test_schema_check.cxx
     test_permissions.cxx
     test_floor.cxx
     test_permission_store.cxx

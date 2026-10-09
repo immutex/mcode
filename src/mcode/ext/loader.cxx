@@ -244,6 +244,12 @@ namespace mcode::ext {
 						registration{ .host = *host, .surface = *surface,
 							.providers = providers, .hooks = hooks,
 							.details = *manifest_value } ); !registered ) {
+					// Discarded like the two sibling failure paths below. Without
+					// this, whatever the registration managed to install before it
+					// failed stayed in the hook and provider registries pointing at
+					// a VM that the `continue` then destroys.
+					discard( *host, *surface, providers, hooks );
+
 					outcome.report.failed.push_back( { candidate.name, candidate.directory,
 						"API registration failed: " + registered.error( ).msg } );
 

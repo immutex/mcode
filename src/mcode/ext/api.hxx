@@ -45,6 +45,11 @@ namespace mcode::ext {
 		std::string description;
 		std::string owner;
 
+		// The handle the extension holds. Never reused and never a position:
+		// a positional handle shifted after any unregister, so a handle taken
+		// before one erase named a DIFFERENT tool afterwards.
+		std::int64_t identifier = 0;
+
 		int function_reference = 0;
 	};
 
@@ -249,6 +254,7 @@ namespace mcode::ext {
 		static const model::provider_registry empty_providers_;
 
 		std::vector< registered_tool > tools_;
+		std::int64_t next_tool_identifier_ = 1;
 
 		std::map< std::string, std::size_t, std::less<> > by_name_;
 	};

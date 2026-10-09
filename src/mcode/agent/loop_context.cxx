@@ -77,18 +77,6 @@ namespace mcode {
 			out.request.messages.push_back( value );
 		}
 
-		if ( !options.recitation.empty( ) ) {
-			auto tail = model::message{ };
-			tail.speaker = model::role::user;
-
-			auto tail_block = model::block{ };
-			tail_block.kind = model::block_kind::text;
-			tail_block.text = std::string{ options.recitation };
-			tail.blocks.push_back( std::move( tail_block ) );
-
-			out.request.messages.push_back( std::move( tail ) );
-		}
-
 		if ( options.near_budget ) {
 			auto note = model::message{ };
 			note.speaker = model::role::user;
@@ -111,9 +99,28 @@ namespace mcode {
 
 	// compaction keeps the first events and the newest tail, dropping everything between them.
 	auto agent_loop::maybe_compact( ) -> status {
+		// Nothing to drop in a conversation this short, and `newest` below would
+		// underflow on an empty one.
+		if ( history_.size( ) <= COMPACTION_KEEP_FIRST_EVENTS ) {
+			return status{ };
+		}
+
 		const auto window_tokens = caps_.effective_context_window( );
-		const auto usable = static_cast< double >( window_tokens - RESERVED_OUTPUT_TOKENS );
+		const auto reserved = static_cast< double >( RESERVED_OUTPUT_TOKENS );
+
+		// Clamped. A model whose declared window is at or below the output reserve
+		// -- which a config can name, since the capability table is data -- made
+		// this negative, so the trigger below was never true and the function ran
+		// on every single step. It then rebuilt `kept` from identical ranges,
+		// dropped nothing, and appended a `context.compaction` record saying it had.
+		const auto usable = std::max< double >( static_cast< double >( window_tokens ) - reserved,
+			static_cast< double >( window_tokens ) * MIN_USABLE_WINDOW_FRACTION );
 		const auto window = usable * ( 1.0 - SAFETY_MARGIN_FRACTION );
+
+		if ( window <= 0.0 ) {
+			return status{ };
+		}
+
 		const auto fill = static_cast< double >( loop_internal::history_tokens( history_ ) );
 
 		if ( fill < window * COMPACTION_TRIGGER_FRACTION ) {
@@ -179,10 +186,23 @@ namespace mcode {
 			result.kept.push_back( history_[ index ] );
 		}
 
+		// The pinned prefix and the tail can meet, covering the whole history --
+		// a few messages with one enormous newest one, which is exactly the case
+		// that triggers compaction. Rebuilding the identical vector and recording
+		// that a compaction happened would report a drop that did not occur, and
+		// `kept_tokens` would describe a result that is not smaller.
+		if ( result.kept.size( ) >= history_.size( ) ) {
+			return status{ };
+		}
+
+		const auto dropped = history_.size( ) - result.kept.size( );
+
 		history_ = std::move( result.kept );
 
 		auto payload = std::string{ "{\"reason\":\"80pct\",\"kept_tokens\":" };
 		payload += std::to_string( kept_tokens );
+		payload += ",\"dropped_messages\":";
+		payload += std::to_string( dropped );
 		payload += "}";
 
 		log_->append( "context.compaction", payload );

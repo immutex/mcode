@@ -147,19 +147,7 @@ namespace mcode::perm {
 				continue;
 			}
 
-			auto root_entry = root.begin( );
-			auto path_entry = canonical.begin( );
-			auto inside = true;
-
-			for ( ; root_entry != root.end( ); ++root_entry, ++path_entry ) {
-				if ( path_entry == canonical.end( ) || *root_entry != *path_entry ) {
-					inside = false;
-
-					break;
-				}
-			}
-
-			if ( inside ) {
+			if ( mcode::path_is_within( root, canonical ) ) {
 				return true;
 			}
 		}

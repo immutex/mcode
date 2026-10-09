@@ -59,7 +59,6 @@ namespace mcode {
 				.model_name = model_name_,
 				.mode = caps_.caching,
 				.near_budget = near_budget,
-				.recitation = { },
 				.fields = provider_.request,
 				.strict_tools = caps_.supports_strict_schema && provider_.features.strict_tools,
 				.response_format_with_tools =

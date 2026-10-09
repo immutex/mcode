@@ -5,6 +5,7 @@
 #include <fstream>
 
 #include "mcode/fs/snapshot.hxx"
+#include "mcode/fs/workspace.hxx"
 #include "mcode/support/time.hxx"
 
 namespace mcode::cli {
@@ -327,6 +328,25 @@ because I have to review this file before it is worth anything.)AGENTS";
 					std::string{ EXPORT_FILE_SUFFIX } );
 			} else {
 				path = directory / std::filesystem::path{ std::string{ argument } };
+
+				// `operator/` replaces the base when the right side is absolute, and
+				// `..` walks out, so `/export /etc/passwd` or `/export ../../x` wrote
+				// outside the workspace. Every other write in this program goes
+				// through the workspace boundary; this one has to as well. Compared
+				// canonically, so `notes/../out.md` is allowed and `../out.md` is not.
+				auto canonical_error = std::error_code{ };
+				const auto canonical_root = std::filesystem::weakly_canonical(
+					directory, canonical_error );
+				const auto canonical_path = std::filesystem::weakly_canonical(
+					path, canonical_error );
+
+				if ( canonical_error || !mcode::path_is_within( canonical_root, canonical_path ) ) {
+					return "export failed: '" + std::string{ argument } +
+						"' is outside the workspace; give a path inside " +
+						directory.string( );
+				}
+
+				path = canonical_path;
 			}
 
 			auto out = std::ofstream{ path, std::ios::binary | std::ios::trunc };
@@ -420,12 +440,25 @@ because I have to review this file before it is worth anything.)AGENTS";
 	// is the one they want. One implementation so the two reports cannot disagree.
 	auto human_bytes( const std::uint64_t bytes ) -> std::string {
 		constexpr auto BYTES_PER_KILOBYTE = std::uint64_t{ 1024 };
+		constexpr auto BYTES_PER_MEGABYTE = BYTES_PER_KILOBYTE * 1024;
+		constexpr auto BYTES_PER_GIGABYTE = BYTES_PER_MEGABYTE * 1024;
 
-		if ( bytes < BYTES_PER_KILOBYTE ) {
-			return std::to_string( bytes ) + " B";
+		// The ladder matters for the values this is used on: a 12 MB session log
+		// rendered as "12288 KB" is a number a reader has to convert before they
+		// can compare it with the next row.
+		if ( bytes >= BYTES_PER_GIGABYTE ) {
+			return std::to_string( bytes / BYTES_PER_GIGABYTE ) + " GB";
 		}
 
-		return std::to_string( bytes / BYTES_PER_KILOBYTE ) + " KB";
+		if ( bytes >= BYTES_PER_MEGABYTE ) {
+			return std::to_string( bytes / BYTES_PER_MEGABYTE ) + " MB";
+		}
+
+		if ( bytes >= BYTES_PER_KILOBYTE ) {
+			return std::to_string( bytes / BYTES_PER_KILOBYTE ) + " KB";
+		}
+
+		return std::to_string( bytes ) + " B";
 	}
 
 	auto extensions_text( const mcode::ext::load_report& report ) -> std::string {

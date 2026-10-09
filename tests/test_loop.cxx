@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "mcode/agent/loop.hxx"
+#include "mcode/agent/loop_internal.hxx"
 #include "mcode/model/capabilities.hxx"
 #include "mcode/model/http_client.hxx"
 #include "mcode/model/provider.hxx"
@@ -100,7 +101,7 @@ TEST_CASE( "explicit-marker providers get a populated cache breakpoint", "[loop]
 			.model_name = "test-model",
 			.mode = model::cache_mode::explicit_markers,
 			.near_budget = false,
-			.recitation = { } } );
+		} );
 
 	REQUIRE( assembled.request.cache.breakpoints.size( ) == 1 );
 
@@ -138,7 +139,7 @@ TEST_CASE( "explicit-marker providers get a populated cache breakpoint", "[loop]
 			.model_name = "test-model",
 			.mode = model::cache_mode::implicit,
 			.near_budget = false,
-			.recitation = { } } );
+		} );
 
 	CHECK( unmarked.request.cache.breakpoints.empty( ) );
 
@@ -454,7 +455,7 @@ TEST_CASE( "assembly stays within the session-start budget", "[loop]" ) {
 			.model_name = "test-model",
 			.mode = model::cache_mode::implicit,
 			.near_budget = false,
-			.recitation = { } } );
+		} );
 
 	auto total = std::int64_t{ 0 };
 
@@ -482,7 +483,33 @@ TEST_CASE( "compaction triggers at 80 percent of the usable window", "[loop]" ) 
 		( 1.0 - SAFETY_MARGIN_FRACTION );
 	const auto trigger = static_cast< std::int64_t >( usable * COMPACTION_TRIGGER_FRACTION );
 
-	auto compacts = []( const std::int64_t answer_tokens ) {
+	// The seeded history is part of the fill, so the answer only has to make up the
+	// difference. Computed with the loop's own estimator rather than a hand count,
+	// or the boundary assertion would drift with the seed text.
+
+	// A history long enough that a compaction has something to drop. Without it the
+	// pinned prefix and the tail meet, cover the whole history, and nothing is
+	// removed -- which is now correctly NOT reported as a compaction, so the
+	// trigger would be unobservable here.
+	auto seeded = []( ) {
+		auto history = std::vector< model::message >{ };
+
+		for ( auto index = 0; index < 12; ++index ) {
+			auto message = model::message{ };
+			message.speaker = index % 2 == 0 ? model::role::user : model::role::assistant;
+
+			auto block = model::block{ };
+			block.kind = model::block_kind::text;
+			block.text = "seed message " + std::to_string( index );
+			message.blocks.push_back( std::move( block ) );
+
+			history.push_back( std::move( message ) );
+		}
+
+		return history;
+	};
+
+	auto compacts = [ & ]( const std::int64_t answer_tokens ) {
 		auto fx = fixture{ };
 		fx.connect( );
 
@@ -495,25 +522,65 @@ TEST_CASE( "compaction triggers at 80 percent of the usable window", "[loop]" ) 
 		small.caps.context_window = 20'000;
 
 		auto tight = agent_loop{ small };
+		tight.seed_history( seeded( ) );
 
+		const auto before = tight.history( ).size( );
 		const auto answer = std::string(
 			static_cast< std::size_t >( answer_tokens ) * CHARS_PER_TOKEN_ESTIMATE, 'x' );
 
 		fx.client.queue( text_response( answer ) );
 		std::ignore = tight.run( "t" );
 
+		auto logged = false;
+
 		for ( const auto& event : fx.log.events( ) ) {
 			if ( event.kind == "context.compaction" ) {
-				return true;
+				logged = true;
 			}
 		}
 
-		return false;
+		// A compaction record must mean messages were actually removed, not merely
+		// that the threshold was crossed.
+		if ( logged ) {
+			CHECK( tight.history( ).size( ) < before + 2 );
+		}
+
+		return logged;
 	};
 
-	// the estimate is one token per four characters, so one token either side decides it.
-	CHECK_FALSE( compacts( trigger - 1 ) );
-	CHECK( compacts( trigger + 1 ) );
+	// One token either side of the boundary, measured against the seeded baseline
+	// because the seed is already part of the fill the trigger is compared with.
+	const auto baseline = loop_internal::history_tokens( seeded( ) );
+
+	CHECK_FALSE( compacts( trigger - baseline - 1 ) );
+	CHECK( compacts( trigger - baseline + 1 ) );
+}
+
+TEST_CASE( "a compaction that drops nothing is not reported as one", "[loop]" ) {
+	// The pinned prefix and the tail can cover the whole history -- a couple of
+	// messages with one enormous newest one, which is exactly what crosses the
+	// threshold. Rebuilding the identical history and logging
+	// `context.compaction` claimed a drop that did not happen.
+	auto fx = fixture{ };
+	fx.connect( );
+
+	auto small = agent_loop::dependencies{ };
+	small.client = &fx.client;
+	small.registry = &fx.registry;
+	small.log = &fx.log;
+	small.model_name = "test-model";
+	small.caps = fx.deps.caps;
+	small.caps.context_window = 20'000;
+
+	auto tight = agent_loop{ small };
+
+	// Nothing seeded: the turn's own task and answer are all there is.
+	fx.client.queue( text_response( std::string( 200'000, 'x' ) ) );
+	std::ignore = tight.run( "t" );
+
+	for ( const auto& event : fx.log.events( ) ) {
+		CHECK( event.kind != "context.compaction" );
+	}
 }
 
 TEST_CASE( "verify with a passing command reaches done", "[loop]" ) {

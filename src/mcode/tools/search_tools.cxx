@@ -118,6 +118,12 @@ namespace mcode::tools {
 		inline constexpr std::size_t GLOB_BUDGET_PER_RESULT = 4;
 		inline constexpr std::size_t GLOB_BUDGET_BASE = 256;
 
+		// The most paths a single glob may ask the walk to enumerate. It is a
+		// bound on the WORK, not on the result: `max_results` multiplies into the
+		// walk budget, so an unbounded value overflows it to a small number and
+		// the caller asking for more results gets fewer.
+		inline constexpr std::int64_t MAX_GLOB_LIMIT = 100'000;
+
 		// the workspace walk is ignore-blind; these would burn the whole result budget on artifacts
 		[[nodiscard]] auto always_skipped( const std::string_view name ) noexcept -> bool {
 			return name == ".git" || name == ".mcode" ||
@@ -290,10 +296,18 @@ namespace mcode::tools {
 		if ( const auto requested = args.int_field( "max_results" ) ) {
 			if ( *requested < 1 ) {
 				return error_result( "max_results must be positive",
-					"pass max_results >= 1; the default budget is 1000 paths", false );
+					"pass max_results >= 1; the default budget is " +
+						std::to_string( DEFAULT_GLOB_LIMIT ) + " paths", false );
 			}
 
-			max_results = static_cast< std::size_t >( *requested );
+			// Clamped before the cast and the multiply below. The value is the
+			// model's own, and an unbounded one overflows `max_results *
+			// GLOB_BUDGET_PER_RESULT` to a small number -- which would shrink the
+			// walk budget rather than grow it, and the caller asked for MORE
+			// results. The ceiling is what the walk can actually afford to
+			// enumerate, not a limit on what may be returned.
+			const auto bounded = std::min< std::int64_t >( *requested, MAX_GLOB_LIMIT );
+			max_results = static_cast< std::size_t >( bounded );
 		}
 
 		auto& space = *context.space;
