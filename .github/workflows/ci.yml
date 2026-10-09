@@ -325,10 +325,11 @@ jobs:
           # LICENSE is required, not optional: Apache-2.0 section 4(a) obliges
           # anyone redistributing the work to ship a copy of the License, and a
           # release archive is a redistribution. THIRD-PARTY-NOTICES carries the
-          # attribution for what mcode embeds.
+          # attribution for what mcode embeds, and CHANGELOG is what a user reads
+          # to decide whether to replace the binary they already have.
           rm -rf stage dist
           mkdir -p stage dist
-          cp README.md LICENSE THIRD-PARTY-NOTICES.md stage/
+          cp README.md LICENSE CHANGELOG.md THIRD-PARTY-NOTICES.md stage/
 
           if [ "${{ runner.os }}" = "Windows" ]; then
             # `mcode.exe` inside, because that is the name the installer looks for

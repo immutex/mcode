@@ -1069,4 +1069,15 @@ Read the number you were sent to, not the whole file. Each entry states the cons
     (`"` `\` `$` `` ` `` and newline) are consumed; every other backslash is
     literal, which is what keeps a Windows path intact. Single quotes take no
     escapes at all, as in sh.
+131. **A version bump is not visible until CMake reconfigures.** `MCODE_VERSION`
+    reaches CMake from the Conan toolchain, which sets it with
+    `set(... CACHE STRING ...)` and no `FORCE`. A cache entry therefore wins over
+    the regenerated toolchain, so editing `conanfile.py` and running
+    `conan install` is not enough: the binary keeps reporting the old version
+    until the cache entry is removed or the configure is forced. Cost two full
+    rebuild cycles to notice, because `--version` printed the previous number
+    while the toolchain file on disk already said the new one. CI is unaffected --
+    a clean runner has no cache to win -- which is exactly why it is invisible
+    locally and worth writing down.
+
 

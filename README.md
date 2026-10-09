@@ -275,6 +275,8 @@ docs win. Start at the index.
 - [Non-obvious constraints](docs/40-non-obvious-constraints.md): the traps, numbered
 - [Roadmap](docs/16-roadmap.md): milestones and risks
 
+[`CHANGELOG.md`](CHANGELOG.md) records what changed in each release.
+
 ## What's in the box
 
 | Area | State |
