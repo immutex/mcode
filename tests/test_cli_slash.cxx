@@ -444,7 +444,7 @@ TEST_CASE( "an export argument names the file, inside the session's working dire
 }
 
 
-TEST_CASE( "/extensions reports what loaded, what failed and what is disabled",
+TEST_CASE( "the extensions command reports what loaded, what failed and what is disabled",
 	"[cli][slash]" ) {
 	auto report = ext::load_report{ };
 
@@ -488,7 +488,7 @@ TEST_CASE( "/extensions reports what loaded, what failed and what is disabled",
 	CHECK( text.find( "KB" ) != std::string::npos );
 }
 
-TEST_CASE( "/extensions says so when nothing is loaded", "[cli][slash]" ) {
+TEST_CASE( "the extensions command says so when nothing is loaded", "[cli][slash]" ) {
 	const auto text = cli::extensions_text( ext::load_report{ } );
 
 	CHECK( text.find( "0 loaded" ) != std::string::npos );
@@ -498,7 +498,7 @@ TEST_CASE( "/extensions says so when nothing is loaded", "[cli][slash]" ) {
 	CHECK( text.find( "failed" ) == std::string::npos );
 }
 
-TEST_CASE( "/extensions reports a missing session rather than an empty list",
+TEST_CASE( "the extensions command reports a missing session rather than an empty list",
 	"[cli][slash]" ) {
 	// Null is "there is no report to read", which is a different answer from
 	// "nothing loaded" -- the command is reachable before a session exists.
@@ -514,7 +514,7 @@ TEST_CASE( "/extensions reports a missing session rather than an empty list",
 	CHECK( result.output.find( "no session" ) != std::string::npos );
 }
 
-TEST_CASE( "/init asks for a turn instead of writing the file itself",
+TEST_CASE( "the init command asks for a turn instead of writing the file itself",
 	"[cli][slash]" ) {
 	const auto directory = test::scratch_directory( "mcode-init-generate" );
 
@@ -540,7 +540,7 @@ TEST_CASE( "/init asks for a turn instead of writing the file itself",
 	std::filesystem::remove_all( directory );
 }
 
-TEST_CASE( "/init refuses to regenerate over an existing AGENTS.md", "[cli][slash]" ) {
+TEST_CASE( "the init command refuses to regenerate over an existing AGENTS.md", "[cli][slash]" ) {
 	const auto directory = test::scratch_directory( "mcode-init-existing" );
 
 	std::filesystem::create_directories( directory );

@@ -1,6 +1,6 @@
 # Non-obvious constraints
 
-> TL;DR: 127 things that cost real time to discover. Docs and `AGENTS.md` cite them by number, so numbering is stable: a constraint keeps its number, and a retired one leaves a gap rather than renumbering the rest. New entries append at the end.
+> TL;DR: 128 things that cost real time to discover. Docs and `AGENTS.md` cite them by number, so numbering is stable: a constraint keeps its number, and a retired one leaves a gap rather than renumbering the rest. New entries append at the end.
 
 ## Constraints
 
@@ -1033,3 +1033,15 @@ Read the number you were sent to, not the whole file. Each entry states the cons
     passed. `sys.stdout.reconfigure(encoding="utf-8")` at the top of the tool is
     the fix; `PYTHONIOENCODING` alone is not enough, because the environment that
     sets it is the same one that gets it wrong.
+128. **A `TEST_CASE` name must begin with an alphanumeric, or it is unrunnable on
+    Windows only.** `catch_discover_tests` registers each test by name and
+    `ctest` passes that name back as a filter argument. Clara -- Catch2's CLI
+    parser -- accepts `/option` as an option on Windows and rejects it
+    everywhere else, so a name beginning with `/` makes the binary fail with
+    `Unrecognised token: /extensions` and the test fails. Linux and macOS run the
+    same name without complaint, so this is a green-on-Linux, red-on-Windows
+    failure that costs a CI cycle to find. Measured: five tests named
+    `/extensions ...` and `/init ...` passed the GCC and Apple Clang legs and
+    failed all five on MSVC. Names beginning with `[` are unaffected, because
+    Catch2 parses a leading bracket group as a tag. Rename to start with a word --
+    "the extensions command reports ...".
