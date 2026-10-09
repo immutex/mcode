@@ -7,6 +7,7 @@
 
 #include "mcode/cli/exec.hxx"
 #include "mcode/perm/argv.hxx"
+#include "mcode/platform/seams.hxx"
 
 #include "permission_test_helpers.hxx"
 
@@ -417,3 +418,88 @@ namespace permission_test {
 	}
 
 } // namespace permission_test
+
+	TEST_CASE( "an escaped quote inside double quotes does not end the string", "[perm][argv]" ) {
+		// The exact command a measured run was refused. The `\"` sequences closed
+		// the quote early, so the `||` after them was scanned as unquoted and read
+		// as a pipe -- the command was rejected as "compound" when nothing about it
+		// was compound. The model lost a turn and had to work around the gate.
+		const auto node = perm::parse_command_line(
+			R"(node -e "const m='x'; console.log(m.match(/id=\"[^\"]+\"/g)||[]);")" );
+
+		REQUIRE( node.has_value( ) );
+		REQUIRE( node->size( ) == 3 );
+		CHECK( node->at( 0 ) == "node" );
+		CHECK( node->at( 1 ) == "-e" );
+		CHECK( node->at( 2 ) == R"(const m='x'; console.log(m.match(/id="[^"]+"/g)||[]);)" );
+
+		// A backslash before an ordinary character is literal, so a Windows path
+		// survives. Only the characters sh escapes are consumed.
+		const auto path = perm::parse_command_line( R"(node "C:\Users\somebody\x.js")" );
+
+		REQUIRE( path.has_value( ) );
+		CHECK( path->at( 1 ) == R"(C:\Users\somebody\x.js)" );
+
+		// A doubled backslash is one backslash, as in sh.
+		const auto doubled = perm::parse_command_line( R"(node -e "a\\b")" );
+
+		REQUIRE( doubled.has_value( ) );
+		CHECK( doubled->at( 2 ) == R"(a\b)" );
+
+		// Single quotes take no escapes: a backslash stays, and the quote inside
+		// cannot end the string.
+		const auto single = perm::parse_command_line( R"(node -e 'a\"b')" );
+
+		REQUIRE( single.has_value( ) );
+		CHECK( single->at( 2 ) == R"(a\"b)" );
+	}
+
+	TEST_CASE( "an unterminated escape at the end of a string is refused", "[perm][argv]" ) {
+		// A trailing backslash inside a quote has nothing to escape, so the quote
+		// never closes and the command cannot be judged.
+		CHECK_FALSE( perm::parse_command_line( R"(node -e "abc\)" ).has_value( ) );
+	}
+
+	TEST_CASE( "the sandbox temp directory is our own, not the user's", "[perm][sandbox]" ) {
+		// The bug this guards: the child was granted the user's whole %TEMP%. On
+		// Windows a write grant is an integrity label, which propagates to every
+		// entry beneath the path, so each bash call walked and relabelled the
+		// entire temp tree -- 20.7 s of a 21.0 s spawn, and a lasting change to
+		// files unrelated to the run.
+		const auto system_temp = mcode::platform::temp_directory( );
+
+		REQUIRE( system_temp.has_value( ) );
+
+		const auto ours = mcode::platform::sandbox_temp_directory( );
+
+		REQUIRE( ours.has_value( ) );
+
+		// Inside the system temp, but a subdirectory of it -- never the root itself.
+		// `temp_directory_path` returns a path with a trailing separator, and
+		// `lexically_normal` keeps it on a root path, so it is stripped for the
+		// comparison rather than relied on to be absent.
+		const auto strip = []( std::string text ) {
+			while ( !text.empty( ) && ( text.back( ) == '\\' || text.back( ) == '/' ) ) {
+				text.pop_back( );
+			}
+
+			return text;
+		};
+
+		CHECK( strip( ours->parent_path( ).string( ) ) == strip( system_temp->string( ) ) );
+		CHECK( *ours != *system_temp );
+		CHECK( ours->filename( ).string( ).starts_with(
+			std::string{ mcode::platform::SANDBOX_TEMP_PREFIX } ) );
+
+		// Usable: created, and a directory.
+		auto error = std::error_code{ };
+		CHECK( std::filesystem::is_directory( *ours, error ) );
+		CHECK_FALSE( static_cast< bool >( error ) );
+
+		// Stable across calls, so a session leaves one directory rather than one
+		// per command.
+		const auto again = mcode::platform::sandbox_temp_directory( );
+
+		REQUIRE( again.has_value( ) );
+		CHECK( again->string( ) == ours->string( ) );
+	}

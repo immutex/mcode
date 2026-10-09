@@ -64,6 +64,13 @@ namespace mcode::perm {
 			return 0;
 		}
 
+		// sh escapes exactly these inside double quotes; every other backslash is
+		// literal, which is what keeps a Windows path intact.
+		[[nodiscard]] auto is_escaped_in_double_quotes( const char character ) noexcept -> bool {
+			return character == '"' || character == '\\' || character == '$' ||
+				character == '`' || character == '\n';
+		}
+
 		[[nodiscard]] auto is_metachar( const char character ) noexcept -> bool {
 			for ( const auto meta : SHELL_METACHARS ) {
 				if ( character == meta ) {
@@ -102,6 +109,25 @@ namespace mcode::perm {
 					auto closed = false;
 
 					while ( index < command.size( ) ) {
+						// Inside double quotes a backslash escapes the next character,
+						// so `\"` is a literal quote rather than the end of the string.
+						// Without this the quote closed early and the text after it was
+						// scanned as unquoted: `node -e "...||..."` was refused because
+						// a `|` the model had escaped into the program's argument was
+						// read as a pipe.
+						//
+						// Only the characters sh treats as escapable here, and the
+						// backslash survives before anything else. Dropping it always
+						// would turn a `"C:\Users\x"` path into `C:Usersx`.
+						if ( quote == '"' && command[ index ] == '\\' &&
+							index + 1 < command.size( ) &&
+							is_escaped_in_double_quotes( command[ index + 1 ] ) ) {
+							token += command[ index + 1 ];
+							index += 2;
+
+							continue;
+						}
+
 						if ( command[ index ] == quote ) {
 							closed = true;
 							++index;

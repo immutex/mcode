@@ -168,6 +168,14 @@ namespace mcode::platform {
 #endif
 	}
 
+	auto current_process_id( ) noexcept -> std::uint64_t {
+#if defined( _WIN32 )
+		return static_cast< std::uint64_t >( ::GetCurrentProcessId( ) );
+#else
+		return static_cast< std::uint64_t >( ::getpid( ) );
+#endif
+	}
+
 	auto terminate_process( const std::uint64_t process_id, const bool force ) -> status {
 		if ( !is_plausible_process_id( process_id ) ) {
 			return std::unexpected( fail( errc::io,
@@ -269,6 +277,39 @@ namespace mcode::platform {
 			return std::unexpected( fail( errc::io,
 				"cannot resolve the temp directory: " + error.message( ) ) );
 		}
+
+		return path;
+	}
+
+	auto sandbox_temp_directory( ) -> result< std::filesystem::path > {
+		// Created on first use and reused for the process lifetime, so a session
+		// leaves one directory rather than one per command.
+		static auto cached = std::optional< std::filesystem::path >{ };
+
+		if ( cached ) {
+			return *cached;
+		}
+
+		const auto base = temp_directory( );
+
+		if ( !base ) {
+			return std::unexpected( base.error( ) );
+		}
+
+		const auto name = std::string{ SANDBOX_TEMP_PREFIX } +
+			std::to_string( current_process_id( ) );
+		const auto path = *base / name;
+
+		auto error = std::error_code{ };
+		std::filesystem::create_directories( path, error );
+
+		if ( error ) {
+			return std::unexpected( fail( errc::io,
+				std::string{ "cannot create the sandbox temp directory " } +
+					path.string( ) + ": " + error.message( ) ) );
+		}
+
+		cached = path;
 
 		return path;
 	}

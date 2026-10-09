@@ -5,7 +5,9 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -225,9 +227,16 @@ namespace mcode::tools {
 		profile.deny_paths.push_back( context.space->root( ) / ".git" );
 		profile.deny_paths.push_back( context.space->root( ) / ".mcode" );
 
-		if ( const auto temp = platform::temp_directory( ) ) {
+		// A run-scoped temp, not the user's: see `sandbox_temp_directory`.
+		if ( const auto temp = platform::sandbox_temp_directory( ) ) {
 			profile.read_paths.push_back( *temp );
 			profile.write_paths.push_back( *temp );
+
+			// The child must be told, or a tool that asks for a temp path writes
+			// somewhere it was never granted and fails for no visible reason.
+			const auto text = temp->string( );
+			options.environment[ "TMP" ] = text;
+			options.environment[ "TEMP" ] = text;
 		}
 
 		profile.allow_network = false;

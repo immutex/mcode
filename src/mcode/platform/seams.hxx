@@ -83,13 +83,29 @@ namespace mcode::platform {
 
 	[[nodiscard]] auto apply_sandbox( const sandbox_profile& profile ) -> status;
 
+	// This process. A run-scoped path needs a suffix no concurrent run shares.
+	[[nodiscard]] auto current_process_id( ) noexcept -> std::uint64_t;
+
 	[[nodiscard]] auto terminate_process( std::uint64_t process_id, bool force ) -> status;
 	[[nodiscard]] auto terminate_process_tree( std::uint64_t process_id, bool force ) -> status;
 	[[nodiscard]] auto process_is_alive( std::uint64_t process_id ) -> bool;
 
 	[[nodiscard]] auto canonicalize( const std::filesystem::path& path )
 		-> result< std::filesystem::path>;
-	[[nodiscard]] auto temp_directory( ) -> result< std::filesystem::path>;
+	[[nodiscard]] auto temp_directory( ) -> result< std::filesystem::path >;
+
+	// A writable temp directory of our own, under the system one.
+	//
+	// The sandbox grants the child a writable temp, and on Windows a grant is an
+	// integrity label, which propagates to everything beneath the path. Granting
+	// the user's %TEMP% therefore walked and relabelled their entire temp tree on
+	// every command: 20.7 s of a 21.0 s spawn, and a lasting change to files that
+	// have nothing to do with the run. Narrow, and created once per process.
+	// Names the directory `sandbox_temp_directory` creates. The process id keeps
+	// two concurrent runs from sharing one.
+	inline constexpr std::string_view SANDBOX_TEMP_PREFIX = "mcode-run-";
+
+	[[nodiscard]] auto sandbox_temp_directory( ) -> result< std::filesystem::path >;
 	[[nodiscard]] auto case_insensitive_paths( ) noexcept -> bool;
 
 	// Windows has MAX_PATH; long paths need the \\?\ prefix. A no-op elsewhere.
