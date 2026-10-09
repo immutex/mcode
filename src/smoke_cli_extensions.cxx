@@ -18,6 +18,27 @@ using smoke::check;
 using smoke::g_failures;
 using smoke::section;
 
+namespace {
+
+	// A shipped extension is a directory holding an `ext.toml`. Counting them
+	// rather than pinning a literal means adding one does not need this edited --
+	// and a shipped extension that is silently skipped, neither loaded nor
+	// failed, is still caught, which a bare `failed.empty()` would not see.
+	[[nodiscard]] auto shipped_extension_count( ) -> std::size_t {
+		auto count = std::size_t{ 0 };
+
+		for ( const auto& entry : std::filesystem::directory_iterator{
+			std::filesystem::path{ MCODE_SMOKE_SHIPPED_EXTENSIONS } } ) {
+			if ( std::filesystem::exists( entry.path( ) / "ext.toml" ) ) {
+				++count;
+			}
+		}
+
+		return count;
+	}
+
+}
+
 auto smoke_cli_and_extensions( ) -> void {
 	section( "cli (headless surface)" );
 
@@ -224,7 +245,8 @@ auto smoke_cli_and_extensions( ) -> void {
 				failure.reason.c_str( ) );
 		}
 
-		check( shipped.report.loaded.size( ) == 2, "both shipped extensions loaded" );
+		check( shipped.report.loaded.size( ) == shipped_extension_count( ),
+			"every shipped extension directory loaded" );
 		check( shipped.report.failed.empty( ), "every shipped extension loaded" );
 		check( shipped_providers.size( ) == 3, "the providers extension declared three providers" );
 		check( shipped_providers.find( "openai-chat-completions" ) != nullptr,

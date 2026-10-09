@@ -119,6 +119,23 @@ namespace mcode {
 	}
 
 	auto event_log::append( std::string kind, std::string payload_json ) -> event {
+		// A payload that does not parse makes the line unreadable to every
+		// consumer, and it fails silently: the run looks healthy and the record
+		// is garbage. The harness builds these strings by hand, so a malformed
+		// one is a programming error, and this is the single choke point every
+		// payload passes through. The original bytes are preserved inside a
+		// valid envelope so a forensic reader still sees them.
+		if ( !payload_json.empty( ) && !json::document::parse( payload_json ) ) {
+			auto wrapped = std::string{ "{\"malformed_payload\":true,\"kind\":\"" };
+			json::append_escaped( wrapped, kind );
+			wrapped += "\",\"raw\":\"";
+			json::append_escaped( wrapped, payload_json );
+			wrapped += "\"}";
+
+			++write_failures_;
+			payload_json = std::move( wrapped );
+		}
+
 		auto recorded = event{ };
 		recorded.version = 1;
 		recorded.sequence = next_sequence_++;

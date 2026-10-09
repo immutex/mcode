@@ -10,6 +10,34 @@
 using namespace mcode;
 using namespace ext_test;
 
+namespace {
+
+	// A bundled extension is a directory holding an `ext.toml`. Counting them
+	// rather than pinning a literal means adding an extension does not require
+	// editing these tests -- and a bundled extension that fails to load is still
+	// caught, because the loaded count would come up short of it. Takes the roots
+	// the caller actually loads, since a test may load more than one.
+	[[nodiscard]] auto extension_count_in( const std::vector< std::filesystem::path >& roots )
+		-> std::size_t {
+		auto count = std::size_t{ 0 };
+
+		for ( const auto& root : roots ) {
+			if ( !std::filesystem::is_directory( root ) ) {
+				continue;
+			}
+
+			for ( const auto& entry : std::filesystem::directory_iterator{ root } ) {
+				if ( std::filesystem::exists( entry.path( ) / "ext.toml" ) ) {
+					++count;
+				}
+			}
+		}
+
+		return count;
+	}
+
+}
+
 TEST_CASE( "loading registers nothing when extensions are disabled", "[loader]" ) {
 	auto registry = tool_registry{ };
 	g_registry = &registry;
@@ -173,11 +201,12 @@ TEST_CASE( "the shipped reference providers load", "[loader]" ) {
 	auto report = ext::load_extensions( { std::filesystem::path{ MCODE_EXTENSIONS_ROOT } }, providers, hooks,
 		options );
 
-	if ( report.report.loaded.size( ) != 2 ) {
+	if ( report.report.loaded.size( ) != extension_count_in( { std::filesystem::path{ MCODE_EXTENSIONS_ROOT } } ) ) {
 		FAIL( "unexpected report:" << describe( report.report ) );
 	}
 
-	REQUIRE( report.report.loaded.size( ) == 2 );
+	REQUIRE( report.report.loaded.size( ) ==
+		extension_count_in( { std::filesystem::path{ MCODE_EXTENSIONS_ROOT } } ) );
 
 	const auto providers_entry = std::find_if( report.report.loaded.begin( ),
 		report.report.loaded.end( ), []( const ext::load_outcome& outcome ) {
@@ -333,7 +362,7 @@ TEST_CASE( "the providers extension declares three providers through the API", "
 	auto loaded = ext::load_extensions( { std::filesystem::path{ MCODE_EXTENSIONS_ROOT } }, providers, hooks,
 		options );
 
-	if ( loaded.report.loaded.size( ) != 2 ) {
+	if ( loaded.report.loaded.size( ) != extension_count_in( { std::filesystem::path{ MCODE_EXTENSIONS_ROOT } } ) ) {
 		FAIL( "unexpected report:" << describe( loaded.report ) );
 	}
 
@@ -375,7 +404,8 @@ TEST_CASE( "disabling every extension leaves a working registry", "[loader]" ) {
 	REQUIRE( loaded.report.loaded.empty( ) );
 	REQUIRE( loaded.report.failed.empty( ) );
 	REQUIRE( loaded.extensions.empty( ) );
-	REQUIRE( loaded.report.disabled == 4 );
+	REQUIRE( loaded.report.disabled ==
+		extension_count_in( { extensions_root( ), std::filesystem::path{ MCODE_EXTENSIONS_ROOT } } ) );
 
 	REQUIRE( registry.size( ) == core_count );
 	REQUIRE( registry.find( "hello" ) == nullptr );

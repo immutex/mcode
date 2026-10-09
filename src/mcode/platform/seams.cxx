@@ -1,5 +1,6 @@
 #include "mcode/platform/seams.hxx"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -289,6 +290,15 @@ namespace mcode::platform {
 			return path;
 		}
 
+		// Windows rejects a forward slash ANYWHERE in a `\\?\` path, and a
+		// relative path produced by `display_path` carries them by design. The
+		// join `root / "src/page.html"` is therefore mixed, and the prefixed
+		// result does not resolve: every read through this seam failed with
+		// "No such file or directory". Measured effect: `grep` scoped to a
+		// directory skipped every file and reported zero matches, a silent
+		// false negative the model could not distinguish from "no matches".
+		std::replace( text.begin( ), text.end( ), L'/', L'\\' );
+
 		if ( text.starts_with( L"\\\\" ) ) {
 			// A UNC path takes the \\?\UNC\ form, not \\?\.
 			return std::filesystem::path{ L"\\\\?\\UNC\\" + text.substr( 2 ) };
@@ -298,7 +308,7 @@ namespace mcode::platform {
 			return std::filesystem::path{ L"\\\\?\\" + text };
 		}
 
-		return path;
+		return std::filesystem::path{ text };
 	#else
 		return path;
 	#endif

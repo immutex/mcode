@@ -83,22 +83,14 @@ namespace mcode::perm {
 			return 0;
 		}
 
-		[[nodiscard]] auto contains_metachar( const std::string_view token ) noexcept -> bool {
-			for ( const auto character : token ) {
-				for ( const auto meta : SHELL_METACHARS ) {
-					if ( character == meta ) {
-						return true;
-					}
+		[[nodiscard]] auto is_metachar( const char character ) noexcept -> bool {
+			for ( const auto meta : SHELL_METACHARS ) {
+				if ( character == meta ) {
+					return true;
 				}
 			}
 
 			return false;
-		}
-
-		// both shells expand `$` and `%`, so the executed text would differ from the judged text.
-		[[nodiscard]] auto is_substitution( const std::string_view token ) noexcept -> bool {
-			return token.find( '$' ) != std::string_view::npos ||
-				token.find( '%' ) != std::string_view::npos;
 		}
 
 	}
@@ -147,12 +139,18 @@ namespace mcode::perm {
 					continue;
 				}
 
+				// Only an UNQUOTED metacharacter means the model expected a shell.
+				// Nothing runs a shell -- the tokens below become argv directly --
+				// so a quoted `;` or `<` is literal data the program receives.
+				// Refusing it rejected legitimate commands: a `grep -A 34 '<header>'`
+				// and every `python3 -c '...; ...'` one-liner were all refused, which
+				// cost the model five wasted turns in one measured run.
+				if ( is_metachar( character ) || character == '$' || character == '%' ) {
+					return std::nullopt;
+				}
+
 				token += character;
 				++index;
-			}
-
-			if ( contains_metachar( token ) || is_substitution( token ) ) {
-				return std::nullopt;
 			}
 
 			tokens.push_back( std::move( token ) );

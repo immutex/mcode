@@ -23,6 +23,28 @@ namespace mcode {
 		json::append_escaped( payload, call.name );
 		payload += "\",\"ok\":";
 		payload += outcome.ok ? "true" : "false";
+
+		// A failure recorded as nothing but `ok:false` is undiagnosable after the
+		// fact: the reason lived only in the message the model saw. The record
+		// carries the reason, the stable class, and how long the call took.
+		if ( !outcome.ok ) {
+			payload += ",\"error\":\"";
+			json::append_escaped( payload, outcome.error_message );
+			payload += "\"";
+
+			if ( !outcome.failure_class.empty( ) ) {
+				payload += ",\"failure_class\":\"";
+				json::append_escaped( payload, outcome.failure_class );
+				payload += "\"";
+			}
+
+			if ( outcome.permission_denied ) {
+				payload += ",\"permission_denied\":true";
+			}
+		}
+
+		payload += ",\"elapsed_ms\":";
+		payload += std::to_string( outcome.elapsed.count( ) );
 		payload += "}";
 
 		log_->append( "tool.result", std::move( payload ) );
@@ -113,6 +135,32 @@ namespace mcode {
 		cost = compute_cost( caps_, folded );
 		budget_.charge( static_cast< std::uint64_t >( total_tokens( caps_, folded ) ), cost );
 
+		// Per request, not just per run. A run total cannot show a cache that only
+		// starts hitting after the first call, and it cannot show a request whose
+		// prefix changed. Both are the failures a cache optimization is aimed at,
+		// and neither is visible in an aggregate.
+		if ( log_ != nullptr ) {
+			auto recorded = std::string{ "{\"input\":" };
+			recorded += std::to_string( folded.input );
+			recorded += ",\"output\":";
+			recorded += std::to_string( folded.output );
+			recorded += ",\"cached_read\":";
+			recorded += std::to_string( folded.cached_read );
+			recorded += ",\"cache_write\":";
+			recorded += std::to_string( folded.cache_write );
+			recorded += ",\"reasoning\":";
+			recorded += std::to_string( folded.reasoning );
+			recorded += ",\"cost_usd\":";
+			recorded += std::to_string( cost );
+			recorded += ",\"effort\":";
+			recorded += std::to_string( static_cast< int >( effort ) );
+			recorded += ",\"messages\":";
+			recorded += std::to_string( history_.size( ) );
+			recorded += '}';
+
+			log_->append( std::string{ agent::MODEL_USAGE_EVENT }, std::move( recorded ) );
+		}
+
 		auto assistant = model::message{ };
 		assistant.speaker = model::role::assistant;
 
@@ -158,6 +206,17 @@ namespace mcode {
 		history_.push_back( std::move( assistant ) );
 
 		if ( log_ != nullptr ) {
+			// The reasoning is recorded before the message, so a reader sees what
+			// the model was thinking when it chose the call that follows.
+			if ( !reasoning.empty( ) ) {
+				auto recorded = std::string{ "{\"text\":\"" };
+				json::append_escaped( recorded, reasoning );
+				recorded += "\"}";
+
+				log_->append( std::string{ agent::MESSAGE_THINKING_EVENT },
+					std::move( recorded ) );
+			}
+
 			log_->append( std::string{ agent::MESSAGE_ASSISTANT_EVENT }, agent::message_to_json( history_.back( ) ) );
 		}
 

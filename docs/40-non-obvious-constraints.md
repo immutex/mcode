@@ -1,6 +1,6 @@
 # Non-obvious constraints
 
-> TL;DR: 117 things that cost real time to discover. Docs and `AGENTS.md` cite them by number, so numbering is stable: a constraint keeps its number, and a retired one leaves a gap rather than renumbering the rest. New entries append at the end.
+> TL;DR: 125 things that cost real time to discover. Docs and `AGENTS.md` cite them by number, so numbering is stable: a constraint keeps its number, and a retired one leaves a gap rather than renumbering the rest. New entries append at the end.
 
 ## Constraints
 
@@ -984,3 +984,32 @@ Read the number you were sent to, not the whole file. Each entry states the cons
     front, and a wall-clock budget bounds the scan between lines. The refusal is
     honest — a silent 13-second stall reads as a hang — and the hint says the
     scan is incomplete, so a short result is never taken as proof of absence.
+
+122. **A `\\?\` extended path cannot contain a forward slash.** Windows rejects
+    `\\?\C:/...` outright, and `std::filesystem::path` preserves the separator
+    it was given, so `root / "src/page.html"` is mixed and the prefixed result
+    does not resolve. `to_extended_path` now normalizes separators before
+    prefixing. The failure was invisible: `grep` scoped to a directory opened no
+    files, scanned zero, and returned `{"ok":true,"matches":[],"count":0}` — a
+    well-formed empty result a reader cannot tell apart from "no matches". Any
+    seam that prefixes a caller's path must normalize it first.
+
+123. **A negative exit code is an NTSTATUS, not a return value.** `0xC0000142`
+    means the process never started, which is a different problem from a command
+    that ran and failed, and the natural response to the wrong diagnosis is to
+    retry the same binary. `bash` decodes the common ones and says which it is.
+    A bare `exit code -1073741502` in a tool result tells a model nothing.
+
+124. **`ok` in a tool result means "the tool ran", not "the command succeeded".**
+    A `bash` call whose process crashed still produces `ok: true`, because the
+    handler returned normally. A consumer that reads `ok` as success is wrong,
+    and an extension cannot condition on failure at all — there is no failure
+    signal at that layer. The payload carries `succeeded` for the command's own
+    outcome; `ok` is about the dispatch.
+
+125. **MSYS binaries fail under the Windows sandbox.** Git's `grep`, `rm` and
+    `sed` create a named object under `\BaseNamedObjects`, which the low-integrity
+    token denies, so they die with `NtCreateDirectoryObject(...) 0xC0000022` before
+    doing any work. Environmental, not a harness defect — but it is why the
+    dedicated `grep`, `glob` and `read` tools matter, and why a `bash` call to
+    coreutils is not a substitute for them on this platform.

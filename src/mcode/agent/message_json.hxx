@@ -35,4 +35,18 @@ namespace mcode::agent {
 	inline constexpr std::string_view MESSAGE_ASSISTANT_EVENT = "message.assistant";
 	inline constexpr std::string_view TOOL_RESULT_EVENT = "tool.output";
 
+	// The model's reasoning for one response, recorded for analysis only.
+	//
+	// It is deliberately NOT a `model::block` in the assistant message: reasoning
+	// is not replayed to the provider, so putting it in the history would send
+	// back text the wire format does not expect. The log keeps it because a run
+	// cannot be understood without it -- a repetition loop is visible in the
+	// reasoning long before it shows in the answer.
+	inline constexpr std::string_view MESSAGE_THINKING_EVENT = "message.thinking";
+
+	// One provider round trip's token accounting. Recorded per request, because a
+	// run total cannot show a cache that only starts hitting after the first call
+	// nor a request whose prefix changed.
+	inline constexpr std::string_view MODEL_USAGE_EVENT = "model.usage";
+
 }

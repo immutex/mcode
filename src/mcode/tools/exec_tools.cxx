@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <iostream>
 #include <string>
@@ -23,6 +24,50 @@ namespace mcode::tools {
 
 		inline constexpr std::int64_t DEFAULT_BASH_TIMEOUT_MS = 60'000;
 		inline constexpr std::int64_t MAX_BASH_TIMEOUT_MS = 600'000;
+
+		// A negative exit code is never a program's own return value: it is how
+		// the platform reports that the process did not exit normally. Naming the
+		// common ones turns "exit code -1073741502" into something a caller can
+		// act on, which matters because the natural response to a crash is to
+		// retry the same command rather than to stop using that binary.
+		[[nodiscard]] auto decode_crash_code( const int exit_code ) -> std::string {
+			if ( exit_code >= 0 ) {
+				return { };
+			}
+
+			// Windows reports an NTSTATUS; POSIX reports a signal number.
+		#if defined( _WIN32 )
+			const auto status = static_cast< std::uint32_t >( exit_code );
+
+			switch ( status ) {
+				case 0xC0000142u:
+					return "the process could not start (0xC0000142, DLL init failed). This "
+						"binary is unusable in this environment -- MSYS/Cygwin tools such as "
+						"Git's grep, rm and sed fail under the sandbox because they create a "
+						"named object it denies. Use a native tool or the dedicated grep, "
+						"glob and read tools instead; do not retry this one";
+				case 0xC0000135u:
+					return "the process could not start (0xC0000135, a required DLL was not "
+						"found). Run a native tool or the dedicated file tools instead";
+				case 0xC0000005u:
+					return "the process crashed with an access violation (0xC0000005). This is "
+						"a fault in the program, not in the command; do not retry it";
+				case 0xC0000409u:
+					return "the process aborted with a stack buffer overrun (0xC0000409); do "
+						"not retry it";
+				default: {
+					auto hex = std::array< char, 9 >{ };
+					std::snprintf( hex.data( ), hex.size( ), "%08X", status );
+
+					return std::string{ "the process did not exit normally (NTSTATUS 0x" } +
+						hex.data( ) + "); it likely crashed or was killed";
+				}
+			}
+		#else
+			return "the process was killed by signal " + std::to_string( -exit_code ) +
+				"; it did not exit on its own";
+		#endif
+		}
 
 		struct scored_tool {
 			std::string name;
@@ -212,6 +257,13 @@ namespace mcode::tools {
 
 		auto out = std::string{ "{\"ok\":true,\"exit_code\":" };
 		out += std::to_string( outcome->exit_code );
+
+		// `ok` means the tool ran, which is not what the caller wants to know: a
+		// crashed command reported `ok:true` and the model read it as success.
+		// This states the outcome in the field the reader is actually looking for.
+		out += ",\"succeeded\":";
+		out += ( outcome->exit_code == 0 && !outcome->timed_out ) ? "true" : "false";
+
 		out += ",\"timed_out\":";
 
 		out += outcome->timed_out ? "true" : "false";
@@ -228,9 +280,24 @@ namespace mcode::tools {
 			out += ",\"hint\":\"the process was killed at the " + std::to_string( timeout_ms ) +
 				" ms timeout; re-run with a larger timeout_ms if the command needs longer\"";
 		} else if ( outcome->exit_code != 0 ) {
-			out += ",\"hint\":\"the command failed with exit code " +
-				std::to_string( outcome->exit_code ) +
-				"; read stderr above before retrying -- exec calls are never auto-retried\"";
+			out += ",\"hint\":\"";
+
+			// A negative code is not a program's own return value. On Windows it
+			// is an NTSTATUS, and the common ones mean the process could not
+			// START -- which is a different problem from a command that ran and
+			// failed, and the one a model most often misreads. Measured: an MSYS
+			// `grep`/`rm` under the sandbox died with 0xC0000142, and the model
+			// retried the same shape of command rather than switching tools.
+			if ( const auto decoded = decode_crash_code( outcome->exit_code );
+				!decoded.empty( ) ) {
+				out += decoded;
+			} else {
+				out += "the command failed with exit code " +
+					std::to_string( outcome->exit_code ) +
+					"; read stderr above before retrying -- exec calls are never auto-retried";
+			}
+
+			out += "\"";
 		}
 
 		if ( outcome->output_truncated ) {

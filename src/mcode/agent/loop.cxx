@@ -103,7 +103,11 @@ namespace mcode {
 		summary += std::to_string( budget_.max_steps > budget_.steps_used.load( )
 				? budget_.max_steps - budget_.steps_used.load( )
 				: 0 );
-		summary += "\",\"remaining_usd\":";
+
+		// No leading quote: the previous field is a number, so a `"` here closes
+		// a string that was never open and makes the whole summary unparseable.
+		// Every `run.end` record was invalid JSON because of it.
+		summary += ",\"remaining_usd\":";
 		summary += std::to_string( budget_.max_usd > budget_.usd_used.load( )
 				? budget_.max_usd - budget_.usd_used.load( )
 				: 0.0 );
@@ -121,7 +125,10 @@ namespace mcode {
 		summary += to_string( terminal );
 		summary += "\",\"reason\":\"";
 		json::append_escaped( summary, reason );
-		summary += "}";
+
+		// Closes the `reason` string before the object. Without the quote the
+		// reason runs into the closing brace and the summary does not parse.
+		summary += "\"}";
 
 		log_->append( "run.end", summary );
 
@@ -262,7 +269,9 @@ namespace mcode {
 					}
 
 					if ( budget_.exhausted( ) ) {
-						finish_run( loop_state::handoff, "budget exhausted" );
+						const auto reason = budget_.exhaustion_reason( );
+
+						finish_run( loop_state::handoff, reason );
 						state_ = loop_state::handoff;
 
 						break;
@@ -321,7 +330,9 @@ namespace mcode {
 
 				case loop_state::observe: {
 					if ( budget_.exhausted( ) ) {
-						finish_run( loop_state::handoff, "budget exhausted" );
+						const auto reason = budget_.exhaustion_reason( );
+
+						finish_run( loop_state::handoff, reason );
 						state_ = loop_state::handoff;
 
 						break;

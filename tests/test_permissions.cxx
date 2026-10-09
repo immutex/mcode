@@ -359,4 +359,61 @@ namespace permission_test {
 		CHECK_FALSE( perm::is_exec_runner( "cmake" ) );
 	}
 
+	TEST_CASE( "a quoted metacharacter is data, not a shell operator", "[perm][argv]" ) {
+		// Nothing runs a shell: the tokens become argv directly. So a metacharacter
+		// inside quotes is a literal byte the program receives, and refusing it
+		// rejected real commands. A measured run lost five turns to this: every
+		// `python3 -c '...; ...'` one-liner and a `grep -A 34 '<header>'` were
+		// refused as "compound", and the model fell back to weaker tools.
+		const auto quoted = perm::parse_command_line(
+			R"(grep -n -A 34 '<header class="site-header">' src/index.html)" );
+
+		REQUIRE( quoted.has_value( ) );
+		REQUIRE( quoted->size( ) == 6 );
+		CHECK( quoted->at( 0 ) == "grep" );
+		CHECK( quoted->at( 1 ) == "-n" );
+		CHECK( quoted->at( 3 ) == "34" );
+
+		// The quotes are stripped and the inner double quotes are preserved.
+		CHECK( quoted->at( 4 ) == R"(<header class="site-header">)" );
+		CHECK( quoted->at( 5 ) == "src/index.html" );
+
+		// A one-liner whose semicolon is inside the quotes.
+		const auto script = perm::parse_command_line(
+			R"(python3 -c 'import re; print(re.sub("a", "b", "a"))')" );
+
+		REQUIRE( script.has_value( ) );
+		CHECK( script->size( ) == 3 );
+		CHECK( script->at( 2 ) == R"(import re; print(re.sub("a", "b", "a")))" );
+
+		// A multi-line script argument is still one token.
+		const auto multiline = perm::parse_command_line(
+			std::string{ "python3 -c 'line one\nline two'" } );
+
+		REQUIRE( multiline.has_value( ) );
+		CHECK( multiline->at( 2 ) == "line one\nline two" );
+
+		// A quoted dollar is literal too.
+		const auto literal_dollar = perm::parse_command_line( R"(echo '$HOME')" );
+
+		REQUIRE( literal_dollar.has_value( ) );
+		CHECK( literal_dollar->at( 1 ) == "$HOME" );
+	}
+
+	TEST_CASE( "an unquoted operator is still refused", "[perm][argv]" ) {
+		// The guard the fix must not weaken: an unquoted operator means the model
+		// expected a shell, and no shell runs, so its intent would silently not
+		// happen. These are the cases the gate exists for.
+		CHECK_FALSE( perm::parse_command_line( "echo a; echo b" ).has_value( ) );
+		CHECK_FALSE( perm::parse_command_line( "echo a && echo b" ).has_value( ) );
+		CHECK_FALSE( perm::parse_command_line( "cat a | grep b" ).has_value( ) );
+		CHECK_FALSE( perm::parse_command_line( "git log > out.txt" ).has_value( ) );
+		CHECK_FALSE( perm::parse_command_line( "echo `whoami`" ).has_value( ) );
+		CHECK_FALSE( perm::parse_command_line( "echo $HOME" ).has_value( ) );
+		CHECK_FALSE( perm::parse_command_line( "echo %PATH%" ).has_value( ) );
+
+		// A metacharacter after a closed quote is unquoted and still refused.
+		CHECK_FALSE( perm::parse_command_line( R"(echo 'a' && echo b)" ).has_value( ) );
+	}
+
 } // namespace permission_test

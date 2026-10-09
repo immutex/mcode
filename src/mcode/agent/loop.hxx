@@ -106,6 +106,27 @@ namespace mcode {
 				usd_used.load( ) >= max_usd;
 		}
 
+		// Which limit actually bound. `exhausted()` is a disjunction, and reporting
+		// all three as "budget exhausted" produced a record that contradicted
+		// itself: a run that spent its 60 steps printed "budget exhausted" next to
+		// `remaining_usd: 0.567925`. A reader concludes the cost accounting is
+		// broken, and a run stopped for steps is a different problem from one
+		// stopped for money.
+		[[nodiscard]] auto exhaustion_reason( ) const -> std::string {
+			if ( steps_used.load( ) >= max_steps ) {
+				return "step budget exhausted (" + std::to_string( steps_used.load( ) ) +
+					" of " + std::to_string( max_steps ) + " steps)";
+			}
+
+			if ( tokens_used.load( ) >= max_tokens ) {
+				return "token budget exhausted (" + std::to_string( tokens_used.load( ) ) +
+					" of " + std::to_string( max_tokens ) + " tokens)";
+			}
+
+			return "cost budget exhausted (" + std::to_string( usd_used.load( ) ) + " of " +
+				std::to_string( max_usd ) + " usd)";
+		}
+
 		[[nodiscard]] auto nearly_exhausted( ) const noexcept -> bool {
 			if ( max_usd <= 0.0 ) {
 				return exhausted( );

@@ -93,7 +93,8 @@ three places the plan was wrong.
 
 **Reference.** Read by number, never end to end.
 
-41. `40-non-obvious-constraints.md` — the 117 traps that cost real time to find, numbered and stable. Docs and `AGENTS.md` cite them by number.
+41. `40-non-obvious-constraints.md` — the 125 traps that cost real time to find, numbered and stable. Docs and `AGENTS.md` cite them by number.
+42. `41-session-analysis.md` — two live runs of one long task, dissected. Seven harness defects found by running, the model's measured behaviour, and the cache findings.
 
 **If you only read three:** `01`, `03`, `21`.
 
@@ -189,7 +190,7 @@ three places the plan was wrong.
 
 | Area | State |
 |---|---|
-| Docs `00`–`40` | Written. `40-non-obvious-constraints.md` is the numbered trap reference. |
+| Docs `00`–`41` | Written. `40-non-obvious-constraints.md` is the numbered trap reference; `41-session-analysis.md` is the live-run analysis. |
 | Code | Three batches shipped: agent loop, permissions, skills, MCP, TUI, Lua API, sandbox, sessions. |
 | Not built | Memory, subagents, OSC 52 clipboard |
 

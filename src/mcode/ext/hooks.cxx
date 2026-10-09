@@ -31,6 +31,7 @@ namespace mcode::ext {
 			{ "step.start", events::kind::step_start },
 			{ "step.end", events::kind::step_end },
 			{ "assistant.delta", events::kind::assistant_delta },
+			{ "assistant.thinking", events::kind::assistant_thinking },
 			{ "tool.pre_call", events::kind::tool_pre_call },
 			{ "tool.call", events::kind::tool_call },
 			{ "tool.result", events::kind::tool_result },
