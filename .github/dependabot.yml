@@ -22,11 +22,11 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
-    # The house style has no prefix and no scope, so both are cleared.
-    # A bump reads "Bump actions/checkout from 4 to 7".
+    # The house style has no prefix and no scope. `prefix: ""` clears the prefix.
+    # The `include` key is deliberately absent: it accepts only `scope`, which
+    # would prepend `deps`. A bump reads "Bump actions/checkout from 4 to 7".
     commit-message:
       prefix: ""
-      include: "none"
     groups:
       # One pull request for the routine bumps, so a quiet week is one review
       # rather than six. A major version still gets its own, because a major is
@@ -45,11 +45,11 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 3
-    # The house style has no prefix and no scope, so both are cleared.
-    # A bump reads "Bump actions/checkout from 4 to 7".
+    # The house style has no prefix and no scope. `prefix: ""` clears the prefix.
+    # The `include` key is deliberately absent: it accepts only `scope`, which
+    # would prepend `deps`. A bump reads "Bump actions/checkout from 4 to 7".
     commit-message:
       prefix: ""
-      include: "none"
     groups:
       tui-gate:
         patterns: ['*']
