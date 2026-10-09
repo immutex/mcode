@@ -502,6 +502,13 @@ namespace mcode {
 
 		auto observe_result( const tool_call& call, const tool_outcome& outcome ) -> void;
 
+		// The `run.end` record, built in one place so a completed run and a run
+		// that gave up carry the SAME fields. They did not: the completed path
+		// appended only `reason` and `state`, so a successful run's log had no
+		// token totals, no cost and no step count -- invisible to any consumer
+		// that reads the summary, including a later `--continue`.
+		[[nodiscard]] auto run_end_payload( std::string_view reason ) const -> std::string;
+
 		auto finish_run( const loop_state terminal, const std::string_view reason ) -> void;
 
 	private:

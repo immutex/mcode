@@ -688,3 +688,42 @@ TEST_CASE( "session budget charges tokens and usd together", "[loop]" ) {
 
 	CHECK( budget.exhausted( ) );
 }
+
+TEST_CASE( "a completed run's log carries the same summary a failed one does", "[loop]" ) {
+	// Two writers produced `run.end` with different shapes: `finish_run` wrote the
+	// goal, step count, token totals and cost, while the completed path appended
+	// only `reason` and `state`. A successful run's log therefore had no cost or
+	// token accounting at all -- invisible to anything reading the summary.
+	auto fx = fixture{ };
+	fx.connect( );
+
+	fx.client.queue( text_response( "all done" ) );
+
+	const auto outcome = fx.loop->run( "do the thing" );
+
+	REQUIRE( static_cast< bool >( outcome ) );
+
+	auto found = false;
+
+	for ( const auto& event : fx.log.events( ) ) {
+		if ( event.kind != "run.end" ) {
+			continue;
+		}
+
+		found = true;
+
+		const auto parsed = json::document::parse( event.payload_json );
+
+		REQUIRE( static_cast< bool >( parsed ) );
+
+		// The fields a consumer reads, present on a run that did not give up.
+		CHECK( parsed->pointer_string( "/reason" ).has_value( ) );
+		CHECK( parsed->pointer_string( "/state" ).has_value( ) );
+		CHECK( parsed->pointer_string( "/goal" ).has_value( ) );
+		CHECK( parsed->pointer_int( "/actions" ).has_value( ) );
+		CHECK( parsed->pointer_int( "/input_tokens" ).has_value( ) );
+		CHECK( parsed->pointer_int( "/output_tokens" ).has_value( ) );
+	}
+
+	CHECK( found );
+}

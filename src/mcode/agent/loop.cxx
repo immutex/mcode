@@ -88,11 +88,7 @@ namespace mcode {
 		handlers_.insert_or_assign( std::move( name ), std::move( handler ) );
 	}
 
-	auto agent_loop::finish_run( const loop_state terminal, const std::string_view reason )
-		-> void {
-		state_ = terminal;
-		end_reason_ = std::string{ reason };
-
+	auto agent_loop::run_end_payload( const std::string_view reason ) const -> std::string {
 		auto summary = std::string{ "{\"goal\":\"" };
 		json::append_escaped( summary, user_task_ );
 		summary += "\",\"actions\":";
@@ -122,13 +118,23 @@ namespace mcode {
 		summary += ",\"reasoning_tokens\":";
 		summary += std::to_string( run_usage_.reasoning );
 		summary += ",\"state\":\"";
-		summary += to_string( terminal );
+		summary += to_string( state_ );
 		summary += "\",\"reason\":\"";
 		json::append_escaped( summary, reason );
 
 		// Closes the `reason` string before the object. Without the quote the
 		// reason runs into the closing brace and the summary does not parse.
 		summary += "\"}";
+
+		return summary;
+	}
+
+	auto agent_loop::finish_run( const loop_state terminal, const std::string_view reason )
+		-> void {
+		state_ = terminal;
+		end_reason_ = std::string{ reason };
+
+		auto summary = run_end_payload( reason );
 
 		log_->append( "run.end", summary );
 
@@ -528,14 +534,12 @@ namespace mcode {
 					// a provider error. The event is appended directly, and the outcome keeps
 					// the empty summary that means "completed".
 					if ( end_reason_.empty( ) ) {
-						auto payload = std::string{ "{\"reason\":\"" };
-						json::append_escaped( payload, state_ == loop_state::done
-								? "turn complete" : "handed off" );
-						payload += "\",\"state\":\"";
-						payload += to_string( state_ );
-						payload += "\"}";
-
-						log_->append( "run.end", std::move( payload ) );
+						// The same builder the gave-up path uses, so a completed run
+						// carries the token totals, the cost and the step count too.
+						// It used to append only `reason` and `state`, which left a
+						// successful run's log without any of them.
+						log_->append( "run.end", run_end_payload( state_ == loop_state::done
+								? "turn complete" : "handed off" ) );
 					}
 
 					outcome.final_state = state_;
