@@ -68,21 +68,6 @@ namespace mcode::perm {
 
 	}
 
-	auto to_string( const resolution value ) -> std::string_view {
-		switch ( value ) {
-			case resolution::allowed_once: return "allowed once";
-			case resolution::allowed_session: return "allowed for the session";
-			case resolution::allowed_remembered: return "allowed (remembered)";
-			case resolution::denied_once: return "denied once";
-			case resolution::denied_session: return "denied for the session";
-			case resolution::denied_remembered: return "denied (remembered)";
-			case resolution::denied_headless: return "denied: headless run cannot ask";
-			case resolution::denied_refused: return "denied: no answer was given";
-		}
-
-		return "denied";
-	}
-
 	permission_engine::permission_engine( const mcode::workspace& space,
 		remember_store* store ) : space_( &space ), store_( store ) { }
 

@@ -85,6 +85,8 @@ namespace mcode {
 		events_.clear( );
 		next_sequence_ = 0;
 		write_failures_ = 0;
+		retained_bytes_ = 0;
+		evicted_ = 0;
 
 		sink_ = decltype( sink_ ){ file, []( std::FILE* handle ) { std::fclose( handle ); } };
 		path_ = path;
@@ -112,6 +114,13 @@ namespace mcode {
 		}
 
 		next_sequence_ = replayed->log.next_sequence_;
+
+		// Accounted but not evicted: `restore_transcript` reads this immediately
+		// after the replay, and dropping the oldest events here would silently
+		// truncate the conversation it rebuilds.
+		for ( const auto& restored : events_ ) {
+			retained_bytes_ += restored.payload_json.size( );
+		}
 
 		if ( replayed->truncated_tail ) {
 			++write_failures_;
@@ -150,7 +159,23 @@ namespace mcode {
 		recorded.sequence = next_sequence_++;
 		recorded.timestamp_ms = support::epoch_milliseconds( );
 		recorded.kind = std::move( kind );
+		recorded.run = run_;
+		recorded.turn = turn_;
+		recorded.step = step_;
 		recorded.payload_json = std::move( payload_json );
+
+		// Written to disk first, then retained only as far as the cap allows.
+		// The record is the file; this vector is a cache, and a session that runs
+		// for hours would otherwise hold every file it ever read. Nothing reads
+		// the vector while a run is in flight, so an evicted event costs nothing
+		// -- and it is still on disk for the next `open` to replay.
+		retained_bytes_ += recorded.payload_json.size( );
+
+		while ( retained_bytes_ > MAX_RETAINED_LOG_BYTES && events_.size( ) > 1 ) {
+			retained_bytes_ -= events_.front( ).payload_json.size( );
+			events_.erase( events_.begin( ) );
+			++evicted_;
+		}
 
 		events_.push_back( recorded );
 
@@ -169,6 +194,7 @@ namespace mcode {
 
 	auto event_log::restore( event recorded ) -> void {
 		next_sequence_ = std::max( next_sequence_, recorded.sequence + 1 );
+		retained_bytes_ += recorded.payload_json.size( );
 		events_.push_back( std::move( recorded ) );
 	}
 

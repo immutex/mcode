@@ -126,6 +126,50 @@ namespace mcode::mcp {
 		}
 	}
 
+	// The one place an EOF or a dead child is turned into the end of the stream. Both
+	// loops call it, so both report the same reason and both flush the same partial
+	// frame.
+	auto stdio_transport::report_end( const std::string_view detail ) -> void {
+		eof_seen_ = true;
+		flush_pending( );
+
+		if ( !detail.empty( ) ) {
+			auto tail = inbound{ };
+			tail.skipped = true;
+			tail.line_json = "transport: " + std::string{ detail };
+
+			if ( on_message ) {
+				on_message( std::move( tail ) );
+			}
+		}
+
+		if ( on_eof ) {
+			on_eof( );
+		}
+	}
+
+	auto stdio_transport::handle_read( const proc::read_result& chunk ) -> read_effect {
+		switch ( chunk.kind ) {
+			case proc::read_kind::data: {
+				dispatch_lines( chunk.data );
+
+				return eof_seen_ ? read_effect::stop : read_effect::proceed;
+			}
+
+			case proc::read_kind::timeout: {
+				return read_effect::proceed;
+			}
+
+			case proc::read_kind::eof: {
+				report_end( chunk.detail );
+
+				return read_effect::stop;
+			}
+		}
+
+		return read_effect::proceed;
+	}
+
 	auto stdio_transport::run( ) -> status {
 		if ( eof_seen_ ) {
 			return std::unexpected( fail( errc::io, "the transport already ended" ) );
@@ -138,50 +182,15 @@ namespace mcode::mcp {
 				return std::unexpected( std::move( chunk ).error( ) );
 			}
 
-			switch ( chunk->kind ) {
-				case proc::read_kind::data: {
-					dispatch_lines( chunk->data );
+			switch ( handle_read( *chunk ) ) {
+				case read_effect::proceed: break;
 
-					if ( eof_seen_ ) {
-						return { };
-					}
-
-					break;
-				}
-
-				case proc::read_kind::timeout: {
-					break;
-				}
-
-				case proc::read_kind::eof: {
-					eof_seen_ = true;
-					flush_pending( );
-
-					if ( !chunk->detail.empty( ) ) {
-						auto tail = inbound{ };
-						tail.skipped = true;
-						tail.line_json = "transport: " + chunk->detail;
-
-						if ( on_message ) {
-							on_message( std::move( tail ) );
-						}
-					}
-
-					if ( on_eof ) {
-						on_eof( );
-					}
-
-					return { };
-				}
+				case read_effect::stop:
+				case read_effect::failed: return { };
 			}
 
 			if ( !child_.running( ) ) {
-				eof_seen_ = true;
-				flush_pending( );
-
-				if ( on_eof ) {
-					on_eof( );
-				}
+				report_end( { } );
 
 				return { };
 			}
@@ -199,50 +208,17 @@ namespace mcode::mcp {
 			auto chunk = child_.read_some( std::chrono::milliseconds{ 10 } );
 
 			if ( !chunk ) {
-				eof_seen_ = true;
-				flush_pending( );
-
-				if ( on_eof ) {
-					on_eof( );
-				}
+				report_end( chunk.error( ).msg );
 
 				return;
 			}
 
-			switch ( chunk->kind ) {
-				case proc::read_kind::data: {
-					dispatch_lines( chunk->data );
-
-					if ( eof_seen_ ) {
-						return;
-					}
-
-					break;
-				}
-
-				case proc::read_kind::timeout: {
-					break;
-				}
-
-				case proc::read_kind::eof: {
-					eof_seen_ = true;
-					flush_pending( );
-
-					if ( on_eof ) {
-						on_eof( );
-					}
-
-					return;
-				}
+			if ( handle_read( *chunk ) == read_effect::stop ) {
+				return;
 			}
 
 			if ( !child_.running( ) ) {
-				eof_seen_ = true;
-				flush_pending( );
-
-				if ( on_eof ) {
-					on_eof( );
-				}
+				report_end( { } );
 
 				return;
 			}

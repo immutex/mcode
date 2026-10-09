@@ -26,6 +26,30 @@ namespace mcode::cli::detail {
 	inline constexpr std::size_t RULE_WIDTH = 62;
 	inline constexpr std::size_t MAX_DIGIT_CHOICE = 9;
 
+	// One SGR wrapper for both the painter and the reader. They each had their
+	// own copy, so a change to the escape sequence reached one and not the other.
+	[[nodiscard]] inline auto paint_text( const tui::capabilities& caps, const token colour,
+		const std::string_view text, const bool bold ) -> std::string {
+		const auto code = tui::token_color( colour, caps.depth );
+
+		if ( code.empty( ) ) {
+			return std::string{ text };
+		}
+
+		auto out = std::string{ "\x1b[0" };
+
+		if ( bold ) {
+			out += ";1";
+		}
+
+		out += ';';
+		out += code;
+		out += 'm';
+		out += text;
+		out += "\x1b[0m";
+
+		return out;
+	}
 
 	class painter {
 	public:
@@ -33,25 +57,7 @@ namespace mcode::cli::detail {
 
 		[[nodiscard]] auto paint( const token colour, const std::string_view text,
 			const bool bold = false ) const -> std::string {
-			const auto code = tui::token_color( colour, caps_.depth );
-
-			if ( code.empty( ) ) {
-				return std::string{ text };
-			}
-
-			auto out = std::string{ "\x1b[0" };
-
-			if ( bold ) {
-				out += ";1";
-			}
-
-			out += ';';
-			out += code;
-			out += 'm';
-			out += text;
-			out += "\x1b[0m";
-
-			return out;
+			return paint_text( caps_, colour, text, bold );
 		}
 
 		[[nodiscard]] auto dim( const std::string_view text ) const -> std::string {
@@ -214,25 +220,7 @@ namespace mcode::cli::detail {
 	private:
 		[[nodiscard]] auto styled( const token colour, const std::string_view text,
 			const bool bold ) const -> std::string {
-			const auto code = tui::token_color( colour, terminal_.caps( ).depth );
-
-			if ( code.empty( ) ) {
-				return std::string{ text };
-			}
-
-			auto out = std::string{ "\x1b[0" };
-
-			if ( bold ) {
-				out += ";1";
-			}
-
-			out += ';';
-			out += code;
-			out += 'm';
-			out += text;
-			out += "\x1b[0m";
-
-			return out;
+			return paint_text( terminal_.caps( ), colour, text, bold );
 		}
 
 		[[nodiscard]] auto strong( const std::string_view text ) const -> std::string {

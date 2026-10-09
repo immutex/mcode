@@ -78,7 +78,10 @@ namespace mcode {
 			platform::unique_job_windows token;
 			platform::unique_job_windows job;
 
-			void* parent_stdin = nullptr;
+			// Owned: the parent keeps it open because IOCP breaks console init, and
+			// the destructor closes it. It used to be a raw `void*` closed by hand on
+			// the success path only, so a throw in between leaked it.
+			platform::unique_handle_windows parent_stdin;
 		};
 
 		[[nodiscard]] auto make_sandbox_spawn_state( const platform::sandbox_profile& profile )
@@ -101,7 +104,7 @@ namespace mcode {
 				return std::unexpected( marked.error( ) );
 			}
 
-			return sandbox_spawn_state{ std::move( *token ), std::move( *job ) };
+			return sandbox_spawn_state{ std::move( *token ), std::move( *job ), { } };
 		}
 #endif
 
@@ -269,7 +272,7 @@ namespace mcode {
 				err.pipe.assign( raw_pipes->parent_stderr );
 
 				// stdin is NOT an asio pipe: IOCP breaks console init, so the parent holds it open
-				sandbox_state->parent_stdin = raw_pipes->parent_stdin;
+				sandbox_state->parent_stdin.reset( raw_pipes->parent_stdin );
 
 				raw_pipes->parent_stdin = nullptr;
 				raw_pipes->parent_stdout = nullptr;
@@ -366,13 +369,6 @@ namespace mcode {
 				auto ignored = boost::system::error_code{ };
 				child->terminate( ignored );
 			}
-
-#if defined( _WIN32 )
-			if ( sandbox_state && sandbox_state->parent_stdin != nullptr ) {
-				::CloseHandle( static_cast< HANDLE >( sandbox_state->parent_stdin ) );
-				sandbox_state->parent_stdin = nullptr;
-			}
-#endif
 
 			auto wait_error = boost::system::error_code{ };
 			const auto exit_status = child->wait( wait_error );

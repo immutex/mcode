@@ -365,11 +365,25 @@ namespace mcode {
 			return std::unexpected( fail( errc::io, "cannot open " + resolved->string( ) ) );
 		}
 
-		// Read one byte past the cap: the stat is only a fast reject, and the file can grow.
+		// Sized to the file, not to the cap. This used to allocate the full 8 MiB and
+		// zero-fill it for every read, which is most of a session's reads of a few
+		// kilobyte source file.
 		auto content = std::string{ };
-		content.resize( MAX_TEXT_FILE_BYTES + 1 );
+		content.resize( static_cast< std::size_t >( size ) + 1 );
 
 		input.read( content.data( ), static_cast< std::streamsize >( content.size( ) ) );
+
+		// Filling the buffer means the file is larger than the stat reported. Only
+		// then is the whole-cap buffer worth allocating, and re-reading keeps the
+		// growth handling the single-pass version had.
+		if ( input.gcount( ) == static_cast< std::streamsize >( content.size( ) ) ) {
+			content.resize( MAX_TEXT_FILE_BYTES + 1 );
+
+			input.clear( );
+			input.seekg( 0 );
+			input.read( content.data( ), static_cast< std::streamsize >( content.size( ) ) );
+		}
+
 		content.resize( static_cast< std::size_t >( input.gcount( ) ) );
 
 		if ( content.size( ) > MAX_TEXT_FILE_BYTES ) {

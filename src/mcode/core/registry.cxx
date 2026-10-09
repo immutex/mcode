@@ -8,6 +8,16 @@
 
 namespace mcode {
 
+	namespace {
+
+		// Both queries hand back a name-ordered list, so the order does not depend
+		// on the hash map's iteration order.
+		auto by_name( const tool_def* left, const tool_def* right ) -> bool {
+			return left->name < right->name;
+		}
+
+	}
+
 	auto to_string( const tool_class klass ) noexcept -> std::string_view {
 		switch ( klass ) {
 			case tool_class::read: return "read";
@@ -71,9 +81,7 @@ namespace mcode {
 			out.push_back( &definition );
 		}
 
-		std::sort( out.begin( ), out.end( ),
-			[]( const tool_def* left,
-				const tool_def* right ) { return left->name < right->name; } );
+		std::sort( out.begin( ), out.end( ), by_name );
 
 		return out;
 	}
@@ -81,6 +89,7 @@ namespace mcode {
 	auto tool_registry::owned_by( const std::string_view owner ) const
 		-> std::vector< const tool_def* > {
 		auto out = std::vector< const tool_def* >{ };
+		out.reserve( tools_.size( ) );
 
 		for ( const auto& [ name, definition ] : tools_ ) {
 			if ( definition.owner == owner ) {
@@ -88,9 +97,7 @@ namespace mcode {
 			}
 		}
 
-		std::sort( out.begin( ), out.end( ),
-			[]( const tool_def* left,
-				const tool_def* right ) { return left->name < right->name; } );
+		std::sort( out.begin( ), out.end( ), by_name );
 
 		return out;
 	}

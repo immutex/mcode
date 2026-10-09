@@ -295,6 +295,11 @@ namespace mcode::proc {
 
 					settled = true;
 
+					// Cancelled here too. Without it the timer stays pending and
+					// `context.run` below blocks until it fires, so a pipe that hit
+					// EOF immediately was still reported a full timeout later.
+					state_->timer.cancel( );
+
 					return;
 				}
 

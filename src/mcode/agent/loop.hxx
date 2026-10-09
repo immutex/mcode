@@ -34,6 +34,12 @@ namespace mcode {
 	inline constexpr double DEFAULT_MAX_USD = 5.0;
 	inline constexpr double NEARLY_EXHAUSTED_FRACTION = 0.20;
 
+	// Payload bytes the log keeps in memory before dropping the oldest. The file
+	// is the record, so an evicted event is still on disk and still replays on a
+	// resume; this only bounds what a long session holds. Generous enough that an
+	// ordinary session never evicts, which is what keeps `restore_transcript` whole.
+	inline constexpr std::uint64_t MAX_RETAINED_LOG_BYTES = 16u * 1024u * 1024u;
+
 	inline constexpr std::size_t THRASH_WINDOW = 12;
 	inline constexpr std::size_t THRASH_REPEAT_LIMIT = 3;
 
@@ -193,6 +199,24 @@ namespace mcode {
 			return write_failures_;
 		}
 
+		// Events dropped from the in-memory copy to keep a long session bounded.
+		//
+		// The FILE is the record; the vector is a cache of it. Nothing reads the
+		// vector while a run is in flight -- `restore_transcript` runs once, right
+		// after `open` replays the file -- so retaining every tool output for the
+		// life of a session bought nothing and grew without limit.
+		[[nodiscard]] auto evicted( ) const noexcept -> std::uint64_t { return evicted_; }
+
+		// The envelope's `run`, `turn` and `step`, set by the loop at each step
+		// boundary. The format declared all three and nothing ever assigned them,
+		// so every event in every session log carried `run:""`, `turn:0`, `step:0`
+		// and no consumer could group a log by turn or step.
+		auto set_position( std::string_view run, std::uint32_t turn, std::uint32_t step ) -> void {
+			run_ = std::string{ run };
+			turn_ = turn;
+			step_ = step;
+		}
+
 		auto append( const std::string kind, std::string payload_json = "{}" ) -> event;
 
 		// Not append(): this preserves the recorded sequence and must not renumber.
@@ -219,6 +243,14 @@ namespace mcode {
 		std::unique_ptr< std::FILE, void ( * )( std::FILE* ) > sink_{ nullptr, nullptr };
 		std::filesystem::path path_;
 		std::uint64_t write_failures_ = 0;
+
+		// Payload bytes currently held in `events_`, and how many were dropped.
+		std::uint64_t retained_bytes_ = 0;
+		std::uint64_t evicted_ = 0;
+
+		std::string run_;
+		std::uint32_t turn_ = 0;
+		std::uint32_t step_ = 0;
 	};
 
 	struct replay_result {
@@ -331,15 +363,6 @@ namespace mcode {
 	private:
 		std::vector< std::string > window_;
 		std::size_t current_repeats_ = 0;
-	};
-
-	struct compaction_result {
-		std::string summary;
-		std::vector< std::string > pinned_facts;
-		std::vector< std::string > decisions;
-		std::vector< std::string > open_questions;
-
-		std::vector< model::message > kept;
 	};
 
 	class agent_loop {
@@ -562,6 +585,11 @@ namespace mcode {
 		std::string platform_name_;
 		snapshot_store* snapshots_ = nullptr;
 		std::string snapshot_run_id_;
+
+		// Which turn this process is on, for the log envelope. A session that
+		// resumes continues the count rather than restarting it, so the turns in
+		// one file stay distinct.
+		std::uint32_t turn_index_ = 0;
 
 		thrash_detector thrash_;
 		std::string last_failure_;

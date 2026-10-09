@@ -46,6 +46,20 @@ namespace mcode::mcp {
 
 		auto fail_oversized( ) -> void;
 
+		// What one read did to the loop. `run` and `pump` were the same loop
+		// written twice, and they had already drifted: `pump` dropped the
+		// OS-level reason an EOF carried, so a transport that died during a
+		// `pump` reported nothing.
+		enum class read_effect {
+			proceed,
+			stop,
+			failed,
+		};
+
+		[[nodiscard]] auto handle_read( const proc::read_result& chunk ) -> read_effect;
+
+		auto report_end( const std::string_view detail ) -> void;
+
 		proc::session child_;
 		std::string pending_;
 		bool eof_seen_ = false;

@@ -66,8 +66,6 @@ namespace mcode {
 		[[nodiscard]] auto size( ) const noexcept -> std::size_t { return tools_.size( ); }
 		[[nodiscard]] auto empty( ) const noexcept -> bool { return tools_.empty( ); }
 
-		auto clear( ) noexcept -> void { tools_.clear( ); }
-
 	private:
 		using tool_map = ankerl::unordered_dense::map< std::string, tool_def, string_hash,
 			std::equal_to<> >;

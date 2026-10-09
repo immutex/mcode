@@ -132,17 +132,6 @@ TEST_CASE( "a removed name can be re-registered", "[registry]" ) {
 	CHECK( registry.size( ) == 1 );
 }
 
-TEST_CASE( "clear empties the registry", "[registry]" ) {
-	auto registry = tool_registry{ };
-	REQUIRE( registry.add( make( "read", tool_source::core ) ) );
-	CHECK_FALSE( registry.empty( ) );
-
-	registry.clear( );
-
-	CHECK( registry.empty( ) );
-	CHECK( registry.size( ) == 0 );
-}
-
 TEST_CASE( "class and source render as stable strings", "[registry]" ) {
 	CHECK( mcode::to_string( tool_class::read ) == "read" );
 	CHECK( mcode::to_string( tool_class::exec ) == "exec" );

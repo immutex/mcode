@@ -233,3 +233,39 @@ TEST_CASE( "an unwritable path fails at open, not at append", "[eventlog]" ) {
 
 	std::filesystem::remove_all( directory );
 }
+
+TEST_CASE( "a long session does not retain every payload in memory", "[eventlog]" ) {
+	// `events_` held every payload for the life of the process -- a session that
+	// reads a few hundred files kept all of them. The file is the record and the
+	// vector is a cache, so the cache is now bounded and the oldest go first.
+	const auto path = scratch_dir( ) / "bounded.jsonl";
+	std::filesystem::remove( path );
+
+	auto log = event_log{ };
+
+	REQUIRE( static_cast< bool >( log.open( path ) ) );
+
+	// One event larger than the whole cap, then many small ones.
+	const auto big = std::string( MAX_RETAINED_LOG_BYTES + 1024, 'x' );
+	log.append( "tool.output", big );
+
+	for ( auto index = 0; index < 200; ++index ) {
+		log.append( "tool.call", "{\"index\":" + std::to_string( index ) + "}" );
+	}
+
+	CHECK( log.evicted( ) > 0 );
+
+	// Bounded, not emptied: the newest are still there for a reader.
+	CHECK( log.events( ).size( ) < 201 );
+
+	// Every event is on disk regardless of what memory kept -- that is the point.
+	const auto on_disk = line_count( read_all( path ) );
+
+	CHECK( on_disk == 201 );
+
+	// A reopen replays the file whole, so nothing was lost by the eviction.
+	auto reopened = event_log{ };
+
+	REQUIRE( static_cast< bool >( reopened.open( path ) ) );
+	CHECK( reopened.events( ).size( ) == 201 );
+}

@@ -117,7 +117,7 @@ namespace mcode::skills {
 			entry.description = std::move( parsed->description );
 			entry.directory = directory;
 			entry.file = file;
-			entry.body_offset = *frontmatter_span( *head );
+			entry.body_offset = parsed->body_offset;
 			entry.origin = origin;
 			entry.disable_model_invocation = parsed->disable_model_invocation;
 

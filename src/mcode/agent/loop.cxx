@@ -199,6 +199,12 @@ namespace mcode {
 		// A fresh capture group per run, so /undo undoes this run and not the previous one.
 		mint_run_id( );
 
+		++turn_index_;
+
+		if ( log_ != nullptr ) {
+			log_->set_position( snapshot_run_id_, turn_index_, 0 );
+		}
+
 		auto task_message = model::message{ };
 		task_message.speaker = model::role::user;
 
@@ -226,12 +232,19 @@ namespace mcode {
 
 		publish( events::kind::turn_start, "{}" );
 
-		// `turn_end` must fire on EVERY exit, including the early returns below.
+		// `turn_end` must fire on EVERY exit, including the early returns below, and
+		// the step count must be reported on every one of them. It was set only on
+		// the done/handoff branch, so an interrupted or provider-failed run told the
+		// caller it had taken zero steps.
 		struct turn_end_guard {
 			agent_loop* self;
+			turn_outcome* outcome;
 
-			~turn_end_guard( ) { self->publish( events::kind::turn_end, "{}" ); }
-		} const guard{ this };
+			~turn_end_guard( ) {
+				outcome->steps = self->budget_.steps_used.load( );
+				self->publish( events::kind::turn_end, "{}" );
+			}
+		} const guard{ this, &outcome };
 
 		while ( true ) {
 			// Checked at the step boundary, which is the honest bound: a request
@@ -243,6 +256,12 @@ namespace mcode {
 				outcome.summary_json = "interrupted";
 
 				return outcome;
+			}
+
+			// Every event from here until the next boundary is this step's.
+			if ( log_ != nullptr ) {
+				log_->set_position( snapshot_run_id_, turn_index_,
+					budget_.steps_used.load( ) + 1 );
 			}
 
 			publish( events::kind::step_start, std::string{ "{\"state\":\"" }
@@ -544,7 +563,6 @@ namespace mcode {
 
 					outcome.final_state = state_;
 					outcome.visited = visited_;
-					outcome.steps = budget_.steps_used.load( );
 					outcome.summary_json = end_reason_;
 
 					return outcome;

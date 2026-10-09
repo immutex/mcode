@@ -28,8 +28,12 @@ namespace mcode::platform {
 		}
 	};
 
+	// Any owned Win32 handle, not only a Job. Named for the general case because a
+	// hand-held raw handle has no owner and leaks on the first throw past it.
+	using unique_handle_windows = std::unique_ptr< void, handle_closer >;
+
 	// kill-on-close: closing the last handle terminates every process in the job.
-	using unique_job_windows = std::unique_ptr< void, handle_closer >;
+	using unique_job_windows = unique_handle_windows;
 
 #endif
 

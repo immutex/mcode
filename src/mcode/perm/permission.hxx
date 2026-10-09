@@ -48,19 +48,6 @@ namespace mcode::perm {
 		permission_decision decision = permission_decision::ask;
 	};
 
-	enum class resolution {
-		allowed_once,
-		allowed_session,
-		allowed_remembered,
-		denied_once,
-		denied_session,
-		denied_remembered,
-		denied_headless,
-		denied_refused,
-	};
-
-	[[nodiscard]] auto to_string( const resolution value ) -> std::string_view;
-
 	struct permission_verdict {
 		permission_decision decision = permission_decision::deny;
 		rule_match matched;

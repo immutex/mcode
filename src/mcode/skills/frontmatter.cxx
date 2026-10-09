@@ -137,6 +137,8 @@ namespace mcode::skills {
 			? block.rfind( '\n', block.size( ) - 5 ) : 0;
 
 		auto parsed = frontmatter{ };
+		parsed.body_offset = *span;
+
 		auto saw_name = false;
 		auto saw_description = false;
 

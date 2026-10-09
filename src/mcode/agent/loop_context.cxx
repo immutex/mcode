@@ -174,16 +174,14 @@ namespace mcode {
 			--pinned;
 		}
 
-		auto result = compaction_result{ };
-
-		result.pinned_facts.push_back( user_task_ );
+		auto kept = std::vector< model::message >{ };
 
 		for ( auto index = std::size_t{ 0 }; index < pinned; ++index ) {
-			result.kept.push_back( history_[ index ] );
+			kept.push_back( history_[ index ] );
 		}
 
 		for ( auto index = tail_start; index < history_.size( ); ++index ) {
-			result.kept.push_back( history_[ index ] );
+			kept.push_back( history_[ index ] );
 		}
 
 		// The pinned prefix and the tail can meet, covering the whole history --
@@ -191,13 +189,13 @@ namespace mcode {
 		// that triggers compaction. Rebuilding the identical vector and recording
 		// that a compaction happened would report a drop that did not occur, and
 		// `kept_tokens` would describe a result that is not smaller.
-		if ( result.kept.size( ) >= history_.size( ) ) {
+		if ( kept.size( ) >= history_.size( ) ) {
 			return status{ };
 		}
 
-		const auto dropped = history_.size( ) - result.kept.size( );
+		const auto dropped = history_.size( ) - kept.size( );
 
-		history_ = std::move( result.kept );
+		history_ = std::move( kept );
 
 		auto payload = std::string{ "{\"reason\":\"80pct\",\"kept_tokens\":" };
 		payload += std::to_string( kept_tokens );
