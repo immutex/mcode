@@ -139,12 +139,26 @@ namespace mcode::platform {
 		void* process_handle = nullptr;
 	};
 
+	// The three stream handles and the two owned handles the launcher needs. A
+	// struct rather than five more positional parameters: `stdin_read`,
+	// `stdout_write` and `stderr_write` were three consecutive `const void*`, so
+	// passing them in the wrong order compiled silently and produced a child whose
+	// stdin was its own stdout.
+	struct sandbox_spawn_windows_handles {
+		const void* stdin_read = nullptr;
+		const void* stdout_write = nullptr;
+		const void* stderr_write = nullptr;
+
+		// not owned; both must outlive the spawn call
+		void* job = nullptr;
+		const void* token = nullptr;
+	};
+
 	// argv is quoted the way the CRT expects; no shell is involved.
 	[[nodiscard]] auto sandbox_windows_spawn( const std::filesystem::path& executable,
 		const std::vector< std::string >& arguments,
 		const std::filesystem::path& working_directory,
 		const std::map< std::string, std::string, std::less<> >& environment,
-		const void* stdin_read, const void* stdout_write, const void* stderr_write,
-		void* job, const void* token ) -> result< sandbox_spawn_windows >;
+		const sandbox_spawn_windows_handles& handles ) -> result< sandbox_spawn_windows >;
 
 }

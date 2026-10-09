@@ -253,11 +253,18 @@ namespace mcode {
 
 			if ( sandbox_state ) {
 				// boost's launcher takes no token, so the pipes are made here and handed over raw
+				const auto handles = platform::sandbox_spawn_windows_handles{
+					.stdin_read = in_handle,
+					.stdout_write = out_handle,
+					.stderr_write = err_handle,
+					.job = sandbox_state->job.get( ),
+					.token = sandbox_state->token.get( ),
+				};
+
 				auto raw = platform::sandbox_windows_spawn(
 					std::filesystem::path{ options.executable }, options.args,
 					std::filesystem::path{ options.working_directory },
-					environment_map, in_handle, out_handle, err_handle,
-					sandbox_state->job.get( ), sandbox_state->token.get( ) );
+					environment_map, handles );
 
 				if ( !raw ) {
 					platform::sandbox_windows_close_pipes( *raw_pipes );

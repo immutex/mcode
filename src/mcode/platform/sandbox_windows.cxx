@@ -431,8 +431,16 @@ namespace mcode::platform {
 		const std::vector< std::string >& arguments,
 		const std::filesystem::path& working_directory,
 		const std::map< std::string, std::string, std::less<> >& environment,
-		const void* stdin_read, const void* stdout_write, const void* stderr_write,
-		void* job, const void* token ) -> result< sandbox_spawn_windows > {
+		const sandbox_spawn_windows_handles& handles ) -> result< sandbox_spawn_windows > {
+		const auto stdin_read = handles.stdin_read;
+		const auto stdout_write = handles.stdout_write;
+		const auto stderr_write = handles.stderr_write;
+
+		// Not `const`: `UpdateProcThreadAttribute` takes the address of the handle,
+		// and `&` on a `void* const` is a `void* const*`.
+		auto job = handles.job;
+
+		const auto token = handles.token;
 #if !defined( _WIN32 )
 		(void)executable;
 		(void)arguments;
