@@ -151,18 +151,26 @@ namespace mcode::cli {
 			auto api_key = std::string{ };
 			auto should_verify = true;
 
-			for ( auto index = std::size_t{ 0 }; index < arguments.size( ); ++index ) {
+			// Returns the flag's value, or nothing when the flag is last. A missing
+			// value used to call `std::exit` from inside this lambda, which skipped
+			// every destructor and made the path impossible to test.
+			auto missing_value = false;
+			auto index = std::size_t{ 0 };
+
+			const auto value_for = [&]( const std::string_view flag ) -> std::string {
+				if ( index + 1 >= arguments.size( ) ) {
+					std::fprintf( stderr, "mcode: %s needs a value\n",
+						std::string{ flag }.c_str( ) );
+					missing_value = true;
+
+					return { };
+				}
+
+				return arguments[ ++index ];
+			};
+
+			for ( ; index < arguments.size( ); ++index ) {
 				const auto& argument = arguments[ index ];
-
-				const auto value_for = [&]( const std::string_view flag ) -> std::string {
-					if ( index + 1 >= arguments.size( ) ) {
-						std::fprintf( stderr, "mcode: %s needs a value\n",
-							std::string{ flag }.c_str( ) );
-						std::exit( 2 );
-					}
-
-					return arguments[ ++index ];
-				};
 
 				if ( argument == "--provider" ) {
 					provider = value_for( argument );
@@ -183,6 +191,10 @@ namespace mcode::cli {
 						argument.c_str( ) );
 					std::fputs( setup_usage_text( ).c_str( ), stderr );
 
+					return 2;
+				}
+
+				if ( missing_value ) {
 					return 2;
 				}
 			}

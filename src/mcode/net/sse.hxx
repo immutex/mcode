@@ -13,6 +13,12 @@ namespace mcode::net {
 		std::string event;
 		std::string data;
 		std::string id;
+
+		// The server's reconnect hint. Parsed because a field the parser does not
+		// recognise would be read as event data, and nothing consumes it: mcode
+		// streams one response rather than holding an EventSource open, so there is
+		// no reconnect to schedule. `Retry-After` on a 429 is a different mechanism
+		// and is handled in the model client.
 		std::string retry;
 	};
 
