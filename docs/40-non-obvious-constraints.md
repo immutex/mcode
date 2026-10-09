@@ -1045,3 +1045,28 @@ Read the number you were sent to, not the whole file. Each entry states the cons
     failed all five on MSVC. Names beginning with `[` are unaffected, because
     Catch2 parses a leading bracket group as a tag. Rename to start with a word --
     "the extensions command reports ...".
+129. **A Windows integrity label propagates to everything beneath the path, so
+    labelling a directory is not a constant-cost operation.** The sandbox grants
+    the child a writable temp by setting `LABEL_SECURITY_INFORMATION` with
+    `SetNamedSecurityInfoW`. Granting the user's `%TEMP%` therefore walked and
+    relabelled their entire temp tree -- and left it that way -- on **every**
+    `bash` call. Measured: 20,770 ms of a 21,015 ms spawn, on a real run where 13
+    bash calls took 238.8 s of a 437 s session (mean 18.4 s each) for commands
+    that run in milliseconds. After giving the child a directory of our own under
+    the system temp, named with the process id and created once per process: 1 ms
+    and 23 ms end to end. Two lessons. The cost is in the *grant*, not the spawn,
+    so instrument the phases before assuming process startup is slow. And a
+    sandbox grant must be as narrow as the work needs, because on Windows its
+    price scales with the size of what you granted.
+
+130. **Backslash escapes inside double quotes are not optional to model, and not
+    sh's either.** `parse_command_line` scanned quoted text for the closing quote
+    without honouring `\"`, so `node -e "...||..."` ended the string early and
+    the `||` was read as an *unquoted* pipe: the gate refused a command as
+    "compound" when nothing about it was, and the model lost a turn to it. The
+    fix is not "consume every backslash" -- that turns a quoted `"C:\Users\x"`
+    into `C:Usersx`. Only the characters sh escapes inside double quotes
+    (`"` `\` `$` `` ` `` and newline) are consumed; every other backslash is
+    literal, which is what keeps a Windows path intact. Single quotes take no
+    escapes at all, as in sh.
+

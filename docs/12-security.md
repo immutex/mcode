@@ -29,7 +29,7 @@ Every rule in this section keys off "inside workspace", so the boundary is defin
 | Multi-root | Supported via `--add-dir`; each root gets the same rules. No nested-root precedence |
 | Path comparison | Canonical (realpath) + case-folded on Windows/macOS. `..` segments resolved before the check. UNC paths (`\\server\share`) are **always outside** and always prompt (`12` §Traps) |
 | Outside the workspace | Reads: `ask`. Writes: `ask`, never auto-persisted. Deletes: `deny` |
-| Temp | The OS temp dir is writable without prompting; it is never a read source for project content |
+| Temp | A run-scoped directory under the OS temp dir is writable without prompting; it is never a read source for project content. Not the OS temp dir itself: on Windows a write grant is an integrity label, which propagates to every entry beneath the path, so granting `%TEMP%` relabelled the user's whole temp tree on every command -- 20.7 s per spawn (`40` §129) |
 
 When no git root and no explicit root exist (e.g. `/` or a home directory), mcode **refuses to start in write mode** and says why. A workspace boundary that resolves to the whole filesystem is not a boundary.
 
