@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <string_view>
 
@@ -32,6 +33,12 @@ namespace mcode::text {
 	// permission floor decides what a command IS -- they have to agree.
 	[[nodiscard]] auto program_basename( std::string_view program ) -> std::string;
 
+	// A byte count as a reader compares it: `12 MB`, not `12288 KB`. The ladder is
+	// the point -- a session log and a per-extension memory budget are read side
+	// by side, and a number that has to be converted before it can be compared is
+	// not doing its job.
+	[[nodiscard]] auto human_bytes( std::uint64_t bytes ) -> std::string;
+
 	[[nodiscard]] auto is_valid_utf8( std::string_view input ) noexcept -> bool;
 	[[nodiscard]] auto codepoint_count( std::string_view input ) noexcept -> std::size_t;
 

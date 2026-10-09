@@ -288,7 +288,7 @@ namespace mcode::cli {
 				description += "  ";
 			}
 
-			description += human_bytes( session.size_bytes );
+			description += mcode::text::human_bytes( session.size_bytes );
 
 			// The opening request is what actually identifies a session to a
 			// person: an id and a timestamp do not. Empty for a log written before

@@ -271,6 +271,72 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 		repaint( );
 	};
 
+	// One turn, start to finish: echo what was submitted, run it on a worker so
+	// the UI keeps painting, pump until it reports done, then record what it cost
+	// and drain the keys typed during it. Extracted from the loop body, which did
+	// all of this inline and read as though the loop itself were the turn.
+	const auto run_one_turn = [ & ]( const std::string& submitted_text,
+		const std::string& prompt_text ) {
+			{
+				const auto held = std::lock_guard< std::mutex >{ render_gate };
+
+				coordinator.queue_text(
+					std::string{ mcode::tui::USER_GUTTER } + " " + submitted_text,
+					mcode::tui::token::accent );
+			}
+
+			show_prompt( );
+
+			turn_done.store( false );
+			interrupted.store( false );
+			turn_started = std::chrono::steady_clock::now( );
+
+			// The wheel is reported only while a turn runs: at the prompt the
+			// terminal's own scrollback is the better target, and taking the wheel
+			// there would freeze it.
+			session_tty->set_mouse_reporting( true );
+
+			worker = std::thread{ [ & ]( ) {
+				last_code = turn.run_turn( prompt_text );
+				turn_done.store( true );
+			} };
+
+			pump_until_done( );
+			worker.join( );
+
+			session_tty->set_mouse_reporting( false );
+
+			// The turn is over: a window that is not in front gets told, and one
+			// that is gets an invisible notification the terminal discards.
+			mcode::tui::notify_terminal( "mcode",
+				last_code == mcode::cli::exit_code::success ? "turn complete" : "turn failed" );
+
+			last_turn_elapsed_ms = static_cast< std::uint64_t >( std::chrono::duration_cast<
+				std::chrono::milliseconds >( std::chrono::steady_clock::now( )
+					- turn_started ).count( ) );
+			turn_started = std::chrono::steady_clock::time_point{ };
+
+			if ( interrupted.exchange( false ) ) {
+				last_code = mcode::cli::exit_code::interrupted;
+
+				const auto held = std::lock_guard< std::mutex >{ render_gate };
+
+				coordinator.queue_text( std::string{ INTERRUPTED_NOTICE },
+					mcode::tui::token::warn );
+			}
+
+			// Draining during the turn would race the approval prompt reading the same console.
+			while ( true ) {
+				const auto pressed = session_tty->read_key( 0 );
+
+				if ( pressed.type == mcode::tui::key_event::kind::timeout ) {
+					break;
+				}
+			}
+
+			show_prompt( );
+	};
+
 	{
 		const auto held = std::lock_guard< std::mutex >{ render_gate };
 
@@ -647,64 +713,7 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 			prompt = *result.submit_prompt;
 		}
 
-		{
-			const auto held = std::lock_guard< std::mutex >{ render_gate };
-
-			coordinator.queue_text(
-				std::string{ mcode::tui::USER_GUTTER } + " " + *submitted,
-				mcode::tui::token::accent );
-		}
-
-		show_prompt( );
-
-		turn_done.store( false );
-		interrupted.store( false );
-		turn_started = std::chrono::steady_clock::now( );
-
-		// The wheel is reported only while a turn runs: at the prompt the
-		// terminal's own scrollback is the better target, and taking the wheel
-		// there would freeze it.
-		session_tty->set_mouse_reporting( true );
-
-		worker = std::thread{ [ & ]( ) {
-			last_code = turn.run_turn( prompt );
-			turn_done.store( true );
-		} };
-
-		pump_until_done( );
-		worker.join( );
-
-		session_tty->set_mouse_reporting( false );
-
-		// The turn is over: a window that is not in front gets told, and one
-		// that is gets an invisible notification the terminal discards.
-		mcode::tui::notify_terminal( "mcode",
-			last_code == mcode::cli::exit_code::success ? "turn complete" : "turn failed" );
-
-		last_turn_elapsed_ms = static_cast< std::uint64_t >( std::chrono::duration_cast<
-			std::chrono::milliseconds >( std::chrono::steady_clock::now( )
-				- turn_started ).count( ) );
-		turn_started = std::chrono::steady_clock::time_point{ };
-
-		if ( interrupted.exchange( false ) ) {
-			last_code = mcode::cli::exit_code::interrupted;
-
-			const auto held = std::lock_guard< std::mutex >{ render_gate };
-
-			coordinator.queue_text( std::string{ INTERRUPTED_NOTICE },
-				mcode::tui::token::warn );
-		}
-
-		// Draining during the turn would race the approval prompt reading the same console.
-		while ( true ) {
-			const auto pressed = session_tty->read_key( 0 );
-
-			if ( pressed.type == mcode::tui::key_event::kind::timeout ) {
-				break;
-			}
-		}
-
-		show_prompt( );
+		run_one_turn( *submitted, prompt );
 	}
 
 	// The destructor restores the console, but the wheel must be handed back

@@ -245,4 +245,31 @@ namespace mcode::text {
 
 		return ascii_lower( base );
 	}
+
+	// Per-extension memory is a budget the project tracks (`docs/28` measured
+	// ~320 KB per VM), and a session's log size is what tells a reader whether it
+	// is the one they want. One implementation so the two reports cannot disagree.
+	auto human_bytes( const std::uint64_t bytes ) -> std::string {
+		constexpr auto BYTES_PER_KILOBYTE = std::uint64_t{ 1024 };
+		constexpr auto BYTES_PER_MEGABYTE = BYTES_PER_KILOBYTE * 1024;
+		constexpr auto BYTES_PER_GIGABYTE = BYTES_PER_MEGABYTE * 1024;
+
+		// The ladder matters for the values this is used on: a 12 MB session log
+		// rendered as "12288 KB" is a number a reader has to convert before they
+		// can compare it with the next row.
+		if ( bytes >= BYTES_PER_GIGABYTE ) {
+			return std::to_string( bytes / BYTES_PER_GIGABYTE ) + " GB";
+		}
+
+		if ( bytes >= BYTES_PER_MEGABYTE ) {
+			return std::to_string( bytes / BYTES_PER_MEGABYTE ) + " MB";
+		}
+
+		if ( bytes >= BYTES_PER_KILOBYTE ) {
+			return std::to_string( bytes / BYTES_PER_KILOBYTE ) + " KB";
+		}
+
+		return std::to_string( bytes ) + " B";
+	}
+
 }

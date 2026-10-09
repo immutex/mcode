@@ -172,8 +172,6 @@ namespace mcode::cli {
 	// Bytes as a short human figure. Shared by `/extensions`, which reports each
 	// extension's VM memory, and the `/resume` picker, which reports each
 	// session's size; one implementation, so the two cannot disagree.
-	[[nodiscard]] auto human_bytes( std::uint64_t bytes ) -> std::string;
-
 	// What `/extensions` prints. Pure: the report is the whole input, so the
 	// rendering is testable without loading an extension.
 	[[nodiscard]] auto extensions_text( const mcode::ext::load_report& report ) -> std::string;
