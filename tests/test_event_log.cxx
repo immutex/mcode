@@ -160,6 +160,47 @@ TEST_CASE( "reopening a log continues its sequence numbering", "[eventlog]" ) {
 	std::filesystem::remove_all( directory );
 }
 
+TEST_CASE( "opening a second log replaces the first, it does not merge",
+	"[eventlog]" ) {
+	// Switching sessions reuses one `event_log` object and repoints it at another
+	// file, because the loop holds a pointer to it. `open` cleared its state only
+	// when the target file was empty, so opening a non-empty second file kept the
+	// first file's events in memory: `restore_transcript` then rebuilt a
+	// conversation from two different sessions concatenated.
+	const auto directory = scratch_dir( );
+
+	const auto first_path = directory / "first.jsonl";
+	const auto second_path = directory / "second.jsonl";
+
+	{
+		auto writer = event_log{ };
+		REQUIRE( static_cast< bool >( writer.open( first_path ) ) );
+		writer.append( "first.event" );
+		writer.close( );
+
+		REQUIRE( static_cast< bool >( writer.open( second_path ) ) );
+		writer.append( "second.event" );
+		writer.close( );
+	}
+
+	auto reopened = event_log{ };
+	REQUIRE( static_cast< bool >( reopened.open( second_path ) ) );
+
+	REQUIRE( reopened.size( ) == 1 );
+	REQUIRE( reopened.events( ).front( ).kind == "second.event" );
+
+	// The sequence restarts with the new file, because the two logs are
+	// independent sessions rather than one continuing record.
+	REQUIRE( reopened.next_sequence( ) == 1 );
+
+	// Closed before the directory goes: Windows will not remove a file a handle
+	// is still open on, and the failure reads as a broken test rather than a
+	// held handle.
+	reopened.close( );
+
+	std::filesystem::remove_all( directory );
+}
+
 TEST_CASE( "an unopened log still works in memory", "[eventlog]" ) {
 	// the log is usable without a file so a session that cannot write degrades
 	auto log = event_log{ };

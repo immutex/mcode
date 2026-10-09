@@ -162,10 +162,17 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 	const auto& commands = mcode::cli::builtin_commands( );
 	auto palette = mcode::tui::slash_palette{ };
 
-	// One palette, three sources: slash commands, the file picker, and the
-	// Ctrl+R history search. The rows, the filter and the renderer are shared.
+	// The `/resume` picker's rows, rebuilt each time the picker opens. Owned here
+	// rather than by the controller: `list_sessions` returns a fresh vector, so
+	// the controller's pointer has to outlive the call, and a local inside the
+	// opener would dangle before the picker is drawn.
+	auto session_picker_rows = std::vector< mcode::tui::slash_command >{ };
+
+	// One palette, four sources: slash commands, the file picker, the Ctrl+R
+	// history search, and the session picker. The rows, the filter and the
+	// renderer are shared.
 	auto palette_controller = mcode::cli::palette_controller{ { &commands, &files,
-		&editor.history( ) } };
+		&editor.history( ), &session_picker_rows } };
 
 	// The input as it was before Ctrl+R took over the prompt, so Esc restores
 	// it rather than losing what the user had half-typed.
@@ -546,6 +553,78 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 				editor.set_text( "@" );
 				palette_controller.reset( );
 				sync_palette( );
+				show_prompt( );
+
+				continue;
+			}
+
+			if ( result.open_session_picker ) {
+				auto sessions = workspace_sessions( );
+
+				if ( !sessions ) {
+					{
+						const auto held = std::lock_guard< std::mutex >{ render_gate };
+
+						coordinator.queue_text( sessions.error( ).msg, mcode::tui::token::warn );
+					}
+
+					show_prompt( );
+
+					continue;
+				}
+
+				session_picker_rows = mcode::cli::session_rows( *sessions );
+
+				if ( session_picker_rows.empty( ) ) {
+					// Opening an empty list would look like a picker with no rows
+					// rather than a workspace with no sessions.
+					{
+						const auto held = std::lock_guard< std::mutex >{ render_gate };
+
+						coordinator.queue_text( "no sessions recorded for this workspace yet",
+							mcode::tui::token::warn );
+					}
+
+					show_prompt( );
+
+					continue;
+				}
+
+				editor.set_text( "/resume " );
+				palette_controller.open_sessions( palette, editor.text( ) );
+
+				// `sync_palette`, not `show_prompt`: opening the picker changes the
+				// palette's contents, and only `sync_palette` pushes them to the
+				// coordinator. `show_prompt` alone repaints the stale closed palette
+				// it already had, which is what made `/resume` look like it did
+				// nothing.
+				sync_palette( );
+				show_prompt( );
+
+				continue;
+			}
+
+			// The session swap. Only between turns -- the log, the budget and the
+			// history are not safe to move under a running one, and this branch is
+			// reached before the worker starts.
+			if ( result.start_new_session || result.adopt_session_id.has_value( ) ) {
+				auto swapped = result.start_new_session
+					? start_new_session( loop )
+					: adopt_session( loop, *result.adopt_session_id );
+				{
+					const auto held = std::lock_guard< std::mutex >{ render_gate };
+
+					if ( !swapped ) {
+						coordinator.queue_text( swapped.error( ).msg, mcode::tui::token::warn );
+					} else {
+						// A boundary, so the transcript above is not read as this
+						// session's. The coordinator keeps the previous session's
+						// rows and has no clear, so a separator is what tells them
+						// apart.
+						coordinator.queue_text( *swapped, mcode::tui::token::accent );
+					}
+				}
+
 				show_prompt( );
 
 				continue;

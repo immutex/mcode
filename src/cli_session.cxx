@@ -53,11 +53,11 @@ namespace {
 	// returned loop; this points at them. Null until a session is built.
 	const mcode::ext::load_report* g_session_extensions = nullptr;
 
-}
-
-auto build_interactive_loop( const mcode::cli::exec_options& parsed,
-	mcode::perm::approval_source* interactive_approval )
-	-> mcode::result< mcode::agent_loop > {
+	// Everything one interactive session owns, at file scope rather than inside
+	// the builder, because three more entry points need it: `/extensions` reads
+	// the load report and `/resume`, `/continue` and `/new` repoint the log. It
+	// was a function-local static, which meant the only way to reach any of it was
+	// through the function that built it.
 	struct session_parts {
 		mcode::model::provider_registry providers;
 		mcode::events::bus bus;
@@ -74,7 +74,7 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 
 		// The extension surface borrows `skills`, and the surfaces live on in
 		// `extensions` and are invoked on every later turn -- so the report has to
-		// outlive this function. It was a plain local, and every other field that
+		// outlive the builder. It was a plain local, and every other field that
 		// must outlive the returned loop was already parked here for that reason.
 		mcode::skills::session_context skills_context;
 
@@ -94,8 +94,15 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 		session_parts( ) : hooks( bus ), client( transport ) { }
 	};
 
-	static auto parts = std::optional< session_parts >{ };
+	// One session per process: a second build would make an unwired loop over
+	// these shared parts.
+	auto parts = std::optional< session_parts >{ };
 
+}
+
+auto build_interactive_loop( const mcode::cli::exec_options& parsed,
+	mcode::perm::approval_source* interactive_approval )
+	-> mcode::result< mcode::agent_loop > {
 	// A second call would build an unwired loop over shared parts, so it is refused.
 	if ( parts ) {
 		return std::unexpected( mcode::fail( mcode::errc::config,
@@ -375,6 +382,20 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 
 	std::fputs( mcode::cli::start_session_log( parts->log, *session, resumed ).c_str( ), stderr );
 
+	// A resumed session continues its conversation. The headless path has always
+	// rebuilt the transcript here; the interactive one opened the log, reported
+	// how many messages it held, and then left `history_` empty -- so
+	// `--continue` in the TUI restored the file and forgot the conversation, and
+	// the model started from nothing while the report said it had carried N
+	// messages. Seeded before the first turn, exactly as `run_exec` does it.
+	if ( resumed ) {
+		auto restored = mcode::cli::restore_transcript( parts->log );
+
+		if ( !restored.empty( ) ) {
+			loop.seed_history( std::move( restored ) );
+		}
+	}
+
 	for ( auto& [ name, handler ] : sink.take( ) ) {
 		loop.register_handler( name, std::move( handler ) );
 	}
@@ -401,4 +422,68 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 
 auto session_extensions( ) -> const mcode::ext::load_report* {
 	return g_session_extensions;
+}
+
+auto adopt_session( mcode::agent_loop& loop, const std::string_view id )
+	-> mcode::result< std::string > {
+	if ( !parts ) {
+		return std::unexpected( mcode::fail( mcode::errc::config,
+			"no interactive session is running" ) );
+	}
+
+	// An unknown id is a named error from here and never falls back to a fresh
+	// session; an empty one is the workspace's newest, which is `/continue`.
+	auto session = mcode::cli::resolve_session( parts->space->root( ), id );
+
+	if ( !session ) {
+		return std::unexpected( session.error( ) );
+	}
+
+	// Repoint first: `restore_transcript` reads the log's own events, so it must
+	// see the new file and nothing else. `event_log::open` clears the previous
+	// session's events, which is what stops the two transcripts merging.
+	if ( auto opened = parts->log.open( session->path ); !opened ) {
+		return std::unexpected( opened.error( ) );
+	}
+
+	auto restored = mcode::cli::restore_transcript( parts->log );
+	auto report = mcode::cli::start_session_log( parts->log, *session, true );
+
+	loop.reset_session( std::move( restored ) );
+
+	return report;
+}
+
+auto start_new_session( mcode::agent_loop& loop ) -> mcode::result< std::string > {
+	if ( !parts ) {
+		return std::unexpected( mcode::fail( mcode::errc::config,
+			"no interactive session is running" ) );
+	}
+
+	auto session = mcode::cli::new_session_ref( parts->space->root( ) );
+
+	if ( !session ) {
+		return std::unexpected( session.error( ) );
+	}
+
+	// `open` with a path that does not exist yet creates it.
+	if ( auto opened = parts->log.open( session->path ); !opened ) {
+		return std::unexpected( opened.error( ) );
+	}
+
+	auto report = mcode::cli::start_session_log( parts->log, *session, false );
+
+	// An empty history, not the previous session's: this is a new conversation.
+	loop.reset_session( { } );
+
+	return report;
+}
+
+auto workspace_sessions( ) -> mcode::result< std::vector< mcode::cli::session_ref > > {
+	if ( !parts ) {
+		return std::unexpected( mcode::fail( mcode::errc::config,
+			"no interactive session is running" ) );
+	}
+
+	return mcode::cli::list_sessions( parts->space->root( ) );
 }

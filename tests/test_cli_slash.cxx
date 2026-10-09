@@ -6,6 +6,7 @@
 #include <string_view>
 #include <vector>
 
+#include "mcode/agent/message_json.hxx"
 #include "mcode/cli/slash.hxx"
 #include "mcode/model/types.hxx"
 #include "mcode/tui/mention.hxx"
@@ -575,4 +576,168 @@ TEST_CASE( "the init command refuses to regenerate over an existing AGENTS.md", 
 	}
 
 	std::filesystem::remove_all( directory );
+}
+
+TEST_CASE( "the resume picker's rows name the command that opens them",
+	"[cli][slash]" ) {
+	const auto directory = test::scratch_directory( "mcode-session-rows" );
+
+	std::filesystem::create_directories( directory );
+
+	const auto path = directory / "abc123-1791500000000.jsonl";
+
+	{
+		auto log = event_log{ };
+		REQUIRE( static_cast< bool >( log.open( path ) ) );
+
+		auto message = model::message{ };
+		message.speaker = model::role::user;
+
+		auto block = model::block{ };
+		block.kind = model::block_kind::text;
+		block.text = "add a retry to the uploader\nand keep the backoff";
+		message.blocks.push_back( std::move( block ) );
+
+		log.append( std::string{ agent::MESSAGE_USER_EVENT },
+			agent::message_to_json( message ) );
+		log.close( );
+	}
+
+	auto session = cli::session_ref{ };
+	session.id = "abc123-1791500000000";
+	session.path = path;
+	session.started_ms = 1791500000000;
+	session.size_bytes = 2048;
+
+	const auto rows = cli::session_rows( { session } );
+
+	REQUIRE( rows.size( ) == 1 );
+
+	// The row's name is the command's own argument, so submitting it runs
+	// `/resume <id>` -- exactly what typing the command would do.
+	CHECK( rows.front( ).name == "resume abc123-1791500000000" );
+
+	// The description carries what a reader needs to choose, and the opening
+	// request is what actually identifies a session to a person.
+	CHECK( rows.front( ).description.find( "add a retry to the uploader" ) != std::string::npos );
+
+	// A newline would break the row it is rendered into.
+	CHECK( rows.front( ).description.find( '\n' ) == std::string::npos );
+	CHECK( rows.front( ).description.find( "and keep the backoff" ) != std::string::npos );
+
+	std::filesystem::remove_all( directory );
+}
+
+TEST_CASE( "a session row without a recorded prompt says so", "[cli][slash]" ) {
+	// A log written before transcript recording has no user message. An empty
+	// description would read as a row with nothing to say rather than a session
+	// whose prompt was never recorded.
+	const auto directory = test::scratch_directory( "mcode-session-rows-empty" );
+
+	std::filesystem::create_directories( directory );
+
+	const auto path = directory / "old.jsonl";
+
+	{
+		auto log = event_log{ };
+		REQUIRE( static_cast< bool >( log.open( path ) ) );
+		log.append( "session.start" );
+		log.close( );
+	}
+
+	auto session = cli::session_ref{ };
+	session.id = "old";
+	session.path = path;
+	session.started_ms = 0;
+
+	const auto rows = cli::session_rows( { session } );
+
+	REQUIRE( rows.size( ) == 1 );
+	CHECK( rows.front( ).description.find( "no recorded prompt" ) != std::string::npos );
+
+	std::filesystem::remove_all( directory );
+}
+
+TEST_CASE( "the session picker filters on a word inside the opening request",
+	"[cli][slash]" ) {
+	// A session is identified by something remembered from what was asked, which
+	// is not a prefix of anything -- so the filter is a substring, not the ranked
+	// prefix match the command palette uses.
+	const auto rows = std::vector< mcode::tui::slash_command >{
+		{ "resume aaa-1", "10:00  2 KB  add a retry to the uploader" },
+		{ "resume bbb-2", "11:00  4 KB  fix the dark mode toggle" },
+	};
+
+	auto palette = mcode::tui::slash_palette{ };
+
+	cli::refresh_sessions_palette( palette, rows, "" );
+	CHECK( palette.matches.size( ) == 2 );
+
+	cli::refresh_sessions_palette( palette, rows, "dark" );
+	REQUIRE( palette.matches.size( ) == 1 );
+	CHECK( palette.matches.front( ).name == "resume bbb-2" );
+
+	// Case-insensitive, and it matches the id too.
+	cli::refresh_sessions_palette( palette, rows, "AAA" );
+	REQUIRE( palette.matches.size( ) == 1 );
+	CHECK( palette.matches.front( ).name == "resume aaa-1" );
+
+	cli::refresh_sessions_palette( palette, rows, "nothing matches this" );
+	CHECK( palette.matches.empty( ) );
+}
+
+TEST_CASE( "a session row is submitted, not inserted", "[cli][slash]" ) {
+	// The row's name is a command argument, so Enter must run it. Inserting it
+	// into the prompt would leave `/resume <id>` typed but unexecuted, and the
+	// user would have to press Enter a second time with no indication why.
+	CHECK( cli::submits( cli::palette_source::sessions ) );
+	CHECK( cli::submits( cli::palette_source::commands ) );
+
+	// The two that insert are unchanged.
+	CHECK_FALSE( cli::submits( cli::palette_source::mentions ) );
+	CHECK_FALSE( cli::submits( cli::palette_source::history ) );
+
+	const auto row = mcode::tui::slash_command{ "resume abc", "" };
+
+	// Tab on a session row still writes the command, so it can be edited.
+	CHECK( cli::inserted_line( cli::palette_source::sessions, "", row ) == "/resume abc" );
+}
+
+TEST_CASE( "the session commands ask the REPL to act", "[cli][slash]" ) {
+	// The command cannot switch the session itself: `run_command` takes a
+	// `const agent_loop&`, and the log, budget and history live behind the
+	// session's own parts. It returns an intent the REPL performs.
+	auto deps = agent_loop::dependencies{ };
+	auto loop = agent_loop{ deps };
+	const auto& builtins = cli::builtin_commands( );
+
+	const auto resume_named = cli::run_command(
+		cli::match_command( "/resume abc123", builtins ), loop, builtins );
+
+	REQUIRE( resume_named.adopt_session_id.has_value( ) );
+	CHECK( *resume_named.adopt_session_id == "abc123" );
+	CHECK_FALSE( resume_named.open_session_picker );
+
+	// `/resume` with no id opens the picker rather than guessing: reopening the
+	// newest would silently discard the session the user is in.
+	const auto resume_bare = cli::run_command(
+		cli::match_command( "/resume", builtins ), loop, builtins );
+
+	CHECK( resume_bare.open_session_picker );
+	CHECK_FALSE( resume_bare.adopt_session_id.has_value( ) );
+
+	// `/continue` is the newest for the workspace, which the REPL resolves: an
+	// empty id means "newest", and only the session knows the workspace root.
+	const auto continued = cli::run_command(
+		cli::match_command( "/continue", builtins ), loop, builtins );
+
+	REQUIRE( continued.adopt_session_id.has_value( ) );
+	CHECK( continued.adopt_session_id->empty( ) );
+
+	const auto fresh = cli::run_command(
+		cli::match_command( "/new", builtins ), loop, builtins );
+
+	CHECK( fresh.start_new_session );
+	CHECK_FALSE( fresh.adopt_session_id.has_value( ) );
+	CHECK( fresh.output.empty( ) );
 }

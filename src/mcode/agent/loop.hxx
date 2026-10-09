@@ -443,6 +443,27 @@ namespace mcode {
 		// continues the work rather than starting from an empty history.
 		auto seed_history( std::vector< model::message > restored ) -> void;
 
+		// Adopts a different session in place: the conversation becomes `restored`
+		// and the budget counters start again from zero.
+		//
+		// `seed_history` alone is not enough for a swap. Three things are read
+		// BETWEEN turns, and all three would otherwise still describe the session
+		// the user just left:
+		//
+		//  - `run_id()` is the capture group `/undo` restores. Minted only at the
+		//    top of `run()`, so after a swap it names the previous session's last
+		//    run and `/undo` would revert files the user did not ask about.
+		//  - `budget()` is cumulative and `run()` never resets it, so `/cost` and
+		//    the status meter would report the previous session's spend, and a
+		//    session that had already spent its budget would refuse the first turn.
+		//  - `state()` still reports the previous session's terminal state.
+		//
+		// The budget LIMITS are kept: those come from the command line and describe
+		// this process, not the session. A resumed session's prior spend is not in
+		// the log, so starting the counters at zero is the honest reading rather
+		// than a guess.
+		auto reset_session( std::vector< model::message > restored ) -> void;
+
 		// The approval mode the engine is running under (`never`, `on-request`,
 		// `always`), for a UI that has to state it. Empty when no engine is wired.
 		[[nodiscard]] auto approval_mode( ) const noexcept -> std::string_view;

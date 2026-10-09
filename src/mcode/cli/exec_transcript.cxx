@@ -1,6 +1,7 @@
 #include "mcode/cli/exec.hxx"
 
 #include <algorithm>
+#include <fstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -110,6 +111,83 @@ namespace mcode::cli {
 		}
 
 		return history;
+	}
+
+
+	// The first user message in a log, flattened to one line and cut to `max_chars`.
+	// This is what makes a session picker usable: an id and a timestamp do not tell
+	// a reader which session they want, and the opening request does.
+	auto session_opening_line( const std::filesystem::path& path, const std::size_t max_chars )
+		-> std::string {
+		auto stream = std::ifstream{ path, std::ios::binary };
+
+		if ( !stream ) {
+			return { };
+		}
+
+		// Line by line rather than a full replay: a picker lists many sessions and
+		// only the first user message is wanted, so this stops at the first hit
+		// instead of parsing every tool output in every log.
+		auto line = std::string{ };
+
+		while ( std::getline( stream, line ) ) {
+			if ( line.find( mcode::agent::MESSAGE_USER_EVENT ) == std::string::npos ) {
+				continue;
+			}
+
+			auto recorded = json::document::parse( line );
+
+			if ( !recorded ) {
+				continue;
+			}
+
+			const auto payload = recorded->pointer_raw( "/payload" );
+
+			if ( !payload ) {
+				continue;
+			}
+
+			auto message = mcode::agent::message_from_json( *payload );
+
+			if ( !message ) {
+				continue;
+			}
+
+			auto text = std::string{ };
+
+			for ( const auto& block : message->blocks ) {
+				if ( block.kind == model::block_kind::text ) {
+					text = block.text;
+
+					break;
+				}
+			}
+
+			// Newlines would break the row it is rendered into.
+			for ( auto& character : text ) {
+				if ( character == '\n' || character == '\r' || character == '\t' ) {
+					character = ' ';
+				}
+			}
+
+			while ( !text.empty( ) && text.back( ) == ' ' ) {
+				text.pop_back( );
+			}
+
+			if ( text.size( ) <= max_chars ) {
+				return text;
+			}
+
+			// Cut on a word boundary when there is one close to the limit, so the
+			// row does not end mid-word.
+			auto cut = text.rfind( ' ', max_chars );
+			text.resize( cut != std::string::npos && cut > max_chars / 2 ? cut : max_chars );
+			text += "...";
+
+			return text;
+		}
+
+		return { };
 	}
 
 }

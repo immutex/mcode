@@ -145,6 +145,22 @@ namespace mcode {
 		history_ = std::move( restored );
 	}
 
+	auto agent_loop::reset_session( std::vector< model::message > restored ) -> void {
+		history_ = std::move( restored );
+
+		// Zero the counters, not the limits: `max_steps` and friends come from the
+		// command line and describe this process.
+		budget_.steps_used.store( 0 );
+		budget_.tokens_used.store( 0 );
+		budget_.usd_used.store( 0.0 );
+
+		// A fresh capture group, so `/undo` before the next turn finds nothing
+		// rather than reverting the previous session's last run.
+		mint_run_id( );
+
+		state_ = loop_state::idle;
+	}
+
 	auto agent_loop::approval_mode( ) const noexcept -> std::string_view {
 		return permissions_ != nullptr ? permissions_->approval_mode( ) : std::string_view{ };
 	}

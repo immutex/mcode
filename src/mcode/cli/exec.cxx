@@ -323,16 +323,8 @@ namespace mcode::cli {
 		return sessions->front( );
 	}
 
-	auto open_session_for_run( const exec_options& options,
-		const std::filesystem::path& workspace_root ) -> result< session_ref > {
-		if ( !options.resume_session.empty( ) ) {
-			return resolve_session( workspace_root, options.resume_session );
-		}
-
-		if ( options.continue_session ) {
-			return resolve_session( workspace_root, { } );
-		}
-
+	auto new_session_ref( const std::filesystem::path& workspace_root )
+		-> result< session_ref > {
 		auto directory = session_directory( );
 
 		if ( !directory ) {
@@ -353,6 +345,19 @@ namespace mcode::cli {
 		session.path = *directory / detail::session_file_name( session.id );
 
 		return session;
+	}
+
+	auto open_session_for_run( const exec_options& options,
+		const std::filesystem::path& workspace_root ) -> result< session_ref > {
+		if ( !options.resume_session.empty( ) ) {
+			return resolve_session( workspace_root, options.resume_session );
+		}
+
+		if ( options.continue_session ) {
+			return resolve_session( workspace_root, { } );
+		}
+
+		return new_session_ref( workspace_root );
 	}
 
 	auto start_session_log( event_log& log, const session_ref& session, const bool resumed )

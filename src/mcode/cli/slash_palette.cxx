@@ -6,6 +6,8 @@
 #include <string_view>
 #include <vector>
 
+#include "exec_internal.hxx"
+
 namespace mcode::cli {
 
 	namespace {
@@ -72,6 +74,9 @@ namespace mcode::cli {
 			{ "rewind", "Restore every captured file and report the count" },
 			{ "init", "Generate an AGENTS.md for this repository, from what is actually in it" },
 			{ "extensions", "Show the loaded extensions, their tools and their memory" },
+			{ "new", "Start a fresh session, keeping the current one on disk" },
+			{ "continue", "Reopen the newest session for this workspace" },
+			{ "resume", "Reopen a session: /resume picks one, /resume <id> names it" },
 			{ "doctor", "Report what is loaded: model, tools, context, instructions" },
 			{ "mention", "Pick a workspace file to mention as @path" },
 			{ "exit", "End the session" },
@@ -192,6 +197,30 @@ namespace mcode::cli {
 		}
 	}
 
+	// What the `/resume` picker filters on: the input with the command word and
+	// its separator removed, so typing after `/resume ` narrows the rows. The
+	// command palette keeps its own sigil handling; this is the same idea for a
+	// command whose argument is the selection.
+	[[nodiscard]] auto session_query( const std::string_view input ) -> std::string_view {
+		auto query = input;
+
+		if ( query.starts_with( COMMAND_PREFIX ) ) {
+			query.remove_prefix( COMMAND_PREFIX.size( ) );
+		}
+
+		constexpr auto COMMAND_WORD = std::string_view{ "resume" };
+
+		if ( query.starts_with( COMMAND_WORD ) ) {
+			query.remove_prefix( COMMAND_WORD.size( ) );
+		}
+
+		while ( !query.empty( ) && query.front( ) == ' ' ) {
+			query.remove_prefix( 1 );
+		}
+
+		return query;
+	}
+
 	auto inserted_line( const palette_source source, const std::string_view input,
 		const mcode::tui::slash_command& row ) -> std::string {
 		switch ( source ) {
@@ -199,6 +228,10 @@ namespace mcode::cli {
 				return mcode::tui::mention_completion( input, row.name );
 			case palette_source::history:
 				return row.name;
+			case palette_source::sessions:
+				// Tab on a session row puts the command in the prompt rather than
+				// running it, so it can be edited -- the same form Enter submits.
+				return std::string{ "/" } + row.name;
 			case palette_source::commands:
 				break;
 		}
@@ -225,6 +258,8 @@ namespace mcode::cli {
 
 		if ( source_ == palette_source::history ) {
 			refresh_history_palette( palette, *sources_.history, input );
+		} else if ( source_ == palette_source::sessions && sources_.sessions != nullptr ) {
+			refresh_sessions_palette( palette, *sources_.sessions, session_query( input ) );
 		} else if ( source_ == palette_source::commands && sources_.commands != nullptr ) {
 			refresh_palette( palette, *sources_.commands, input );
 		}
@@ -237,6 +272,98 @@ namespace mcode::cli {
 		source_ = palette_source::history;
 
 		refresh_history_palette( palette, *sources_.history, query );
+
+		return source_;
+	}
+
+	auto session_rows( const std::vector< session_ref >& sessions )
+		-> std::vector< mcode::tui::slash_command > {
+		auto rows = std::vector< mcode::tui::slash_command >{ };
+
+		for ( const auto& session : sessions ) {
+			auto description = std::string{ };
+
+			if ( session.started_ms > 0 ) {
+				description += detail::format_utc( session.started_ms );
+				description += "  ";
+			}
+
+			description += human_bytes( session.size_bytes );
+
+			// The opening request is what actually identifies a session to a
+			// person: an id and a timestamp do not. Empty for a log written before
+			// transcript recording, which is itself worth seeing in the row.
+			if ( auto opening = mcode::cli::session_opening_line( session.path );
+				!opening.empty( ) ) {
+				description += "  ";
+				description += opening;
+			} else {
+				description += "  (no recorded prompt)";
+			}
+
+			// The row's name is the command's own argument, so submitting the row
+			// runs `/resume <id>` -- the same line typing it would produce.
+			rows.push_back( mcode::tui::slash_command{
+				"resume " + session.id, std::move( description ) } );
+		}
+
+		return rows;
+	}
+
+	auto refresh_sessions_palette( mcode::tui::slash_palette& palette,
+		const std::vector< mcode::tui::slash_command >& rows, const std::string_view query ) -> void {
+		palette.open = true;
+		palette.query = std::string{ query };
+		palette.prefix.clear( );
+		palette.matches.clear( );
+
+		// A substring over the whole row, not the ranked match the command palette
+		// uses: a session is identified by a word inside its opening request, which
+		// is not a prefix of anything.
+		auto folded_query = std::string{ query };
+		std::transform( folded_query.begin( ), folded_query.end( ), folded_query.begin( ),
+			[]( const unsigned char character ) {
+				return static_cast< char >( std::tolower( character ) );
+			} );
+
+		for ( const auto& row : rows ) {
+			if ( folded_query.empty( ) ) {
+				palette.matches.push_back( row );
+
+				continue;
+			}
+
+			auto haystack = row.name + " " + row.description;
+			std::transform( haystack.begin( ), haystack.end( ), haystack.begin( ),
+				[]( const unsigned char character ) {
+					return static_cast< char >( std::tolower( character ) );
+				} );
+
+			if ( haystack.find( folded_query ) != std::string::npos ) {
+				palette.matches.push_back( row );
+			}
+		}
+
+		if ( palette.selected >= palette.matches.size( ) ) {
+			palette.selected = 0;
+		}
+	}
+
+	auto palette_controller::open_sessions( mcode::tui::slash_palette& palette,
+		const std::string_view query ) -> palette_source {
+		source_ = palette_source::sessions;
+
+		// A picker with no source wired stays on the commands rather than opening
+		// an empty list, which would look like a workspace with no sessions.
+		if ( sources_.sessions == nullptr ) {
+			source_ = palette_source::commands;
+
+			refresh_palette( palette, *sources_.commands, query );
+
+			return source_;
+		}
+
+		refresh_sessions_palette( palette, *sources_.sessions, session_query( query ) );
 
 		return source_;
 	}

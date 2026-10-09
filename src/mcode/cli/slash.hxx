@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "mcode/agent/loop.hxx"
+#include "mcode/cli/exec.hxx"
 #include "mcode/ext/loader.hxx"
 #include "mcode/model/types.hxx"
 #include "mcode/tui/mention.hxx"
@@ -39,19 +40,34 @@ namespace mcode::cli {
 	auto refresh_history_palette( mcode::tui::slash_palette& palette,
 		const std::vector< std::string >& entries, std::string_view query ) -> void;
 
-	// Which source fills the one palette: slash commands, the file picker, or
-	// the session history. The widget, the renderer and the selection rules are
-	// shared; only the rows and the prefix differ.
+	// The rows the `/resume` picker shows. The row's name is `resume <id>`, so
+	// submitting the row runs exactly the command that id names, and its
+	// description carries what a reader needs to choose: when it ran, how large it
+	// is, and what it was asked for.
+	[[nodiscard]] auto session_rows( const std::vector< session_ref >& sessions )
+		-> std::vector< mcode::tui::slash_command >;
+
+	// Fills the palette from those rows. The filter is a substring over the whole
+	// row, so a word remembered from the opening request finds the session.
+	auto refresh_sessions_palette( mcode::tui::slash_palette& palette,
+		const std::vector< mcode::tui::slash_command >& rows, std::string_view query ) -> void;
+
+	// Which source fills the one palette: slash commands, the file picker, the
+	// session history, or the session picker. The widget, the renderer and the
+	// selection rules are shared; only the rows and the prefix differ.
 	enum class palette_source {
 		commands,
 		mentions,
 		history,
+		sessions,
 	};
 
-	// Only a slash command runs. A mention and a history entry are inserted
-	// into the prompt instead, so neither is a submission.
+	// Only a command runs, and a session row runs one: it is a `/resume <id>`
+	// line, so selecting it submits exactly what typing that command would. A
+	// mention and a history entry are inserted into the prompt instead, because
+	// the model reads the file itself and a recalled command is usually edited.
 	[[nodiscard]] constexpr auto submits( const palette_source source ) noexcept -> bool {
-		return source == palette_source::commands;
+		return source == palette_source::commands || source == palette_source::sessions;
 	}
 
 	// The text the highlighted row puts in the prompt. A command is completed
@@ -66,6 +82,11 @@ namespace mcode::cli {
 		const std::vector< mcode::tui::slash_command >* commands = nullptr;
 		const mcode::tui::mention_index* files = nullptr;
 		const std::vector< std::string >* history = nullptr;
+
+		// The `/resume` rows, built once when the picker opens and owned by the
+		// caller: `list_sessions` returns a fresh vector each call, so a pointer to
+		// a temporary would dangle the moment the picker is drawn.
+		const std::vector< mcode::tui::slash_command >* sessions = nullptr;
 	};
 
 	// Owns which source the one palette is showing and fills it from that
@@ -83,6 +104,11 @@ namespace mcode::cli {
 
 		// Ctrl+R: the history search, seeded with whatever is typed.
 		auto open_history( mcode::tui::slash_palette& palette, std::string_view query )
+			-> palette_source;
+
+		// `/resume` with no argument: the session picker. Its rows are supplied by
+		// the caller, because listing them reads the sessions directory.
+		auto open_sessions( mcode::tui::slash_palette& palette, std::string_view query )
 			-> palette_source;
 
 		[[nodiscard]] auto source( ) const noexcept -> palette_source { return source_; }
@@ -122,6 +148,19 @@ namespace mcode::cli {
 		// line, and echoing a few thousand characters of it would bury the turn.
 		std::optional< std::string > submit_prompt;
 
+		// A session the command wants adopted. The command cannot switch it
+		// itself: `run_command` takes a `const agent_loop&` and the log, budget and
+		// history live behind the session's own parts, so the REPL performs the
+		// swap. Set by `/resume <id>` and `/continue`.
+		std::optional< std::string > adopt_session_id;
+
+		// `/resume` with no argument: open the session picker rather than acting,
+		// the same shape as `open_mention`.
+		bool open_session_picker = false;
+
+		// `/new`: start a fresh session, keeping the current one on disk.
+		bool start_new_session = false;
+
 		std::string output;
 	};
 
@@ -129,6 +168,11 @@ namespace mcode::cli {
 	// Pure, so it is testable without a live session.
 	[[nodiscard]] auto render_transcript_markdown(
 		const std::vector< mcode::model::message >& history ) -> std::string;
+
+	// Bytes as a short human figure. Shared by `/extensions`, which reports each
+	// extension's VM memory, and the `/resume` picker, which reports each
+	// session's size; one implementation, so the two cannot disagree.
+	[[nodiscard]] auto human_bytes( std::uint64_t bytes ) -> std::string;
 
 	// What `/extensions` prints. Pure: the report is the whole input, so the
 	// rendering is testable without loading an extension.

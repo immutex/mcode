@@ -400,18 +400,6 @@ because I have to review this file before it is worth anything.)AGENTS";
 		// long extension name would break.
 		inline constexpr std::size_t EXTENSION_COLUMN_GAP = 2;
 
-		// Per-extension memory is a budget the project tracks (`docs/28` measured
-		// ~320 KB per VM), so it is reported rather than hidden.
-		inline constexpr std::uint64_t BYTES_PER_KILOBYTE = 1024;
-
-		[[nodiscard]] auto human_bytes( const std::uint64_t bytes ) -> std::string {
-			if ( bytes < BYTES_PER_KILOBYTE ) {
-				return std::to_string( bytes ) + " B";
-			}
-
-			return std::to_string( bytes / BYTES_PER_KILOBYTE ) + " KB";
-		}
-
 		// A name padded to `width` so columns line up. A name already longer than
 		// the column keeps its own length rather than being cut.
 		[[nodiscard]] auto padded( const std::string_view text, const std::size_t width )
@@ -425,6 +413,19 @@ because I have to review this file before it is worth anything.)AGENTS";
 			return out;
 		}
 
+	}
+
+	// Per-extension memory is a budget the project tracks (`docs/28` measured
+	// ~320 KB per VM), and a session's log size is what tells a reader whether it
+	// is the one they want. One implementation so the two reports cannot disagree.
+	auto human_bytes( const std::uint64_t bytes ) -> std::string {
+		constexpr auto BYTES_PER_KILOBYTE = std::uint64_t{ 1024 };
+
+		if ( bytes < BYTES_PER_KILOBYTE ) {
+			return std::to_string( bytes ) + " B";
+		}
+
+		return std::to_string( bytes / BYTES_PER_KILOBYTE ) + " KB";
 	}
 
 	auto extensions_text( const mcode::ext::load_report& report ) -> std::string {
@@ -593,6 +594,21 @@ auto run_command( const command_match& match, const agent_loop& loop,
 			result.output = extensions == nullptr
 				? std::string{ "extensions: no session to read; none loaded in this process" }
 				: extensions_text( *extensions );
+		} else if ( match.name == "resume" ) {
+			if ( match.arguments.empty( ) ) {
+				// No id names the picker rather than the newest session: choosing
+				// which one to reopen is the whole point, and guessing would
+				// silently discard the session the user is in.
+				result.open_session_picker = true;
+			} else {
+				result.adopt_session_id = std::string{ match.arguments };
+			}
+		} else if ( match.name == "continue" ) {
+			// An empty id means "the newest for this workspace", which is what the
+			// REPL resolves -- it has the workspace root, this does not.
+			result.adopt_session_id = std::string{ };
+		} else if ( match.name == "new" ) {
+			result.start_new_session = true;
 		} else if ( match.name == "doctor" ) {
 			result.output = doctor_text( loop );
 		} else if ( match.name == "mention" ) {

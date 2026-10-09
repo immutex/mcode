@@ -121,6 +121,19 @@ namespace mcode::cli {
 	[[nodiscard]] auto open_session_for_run( const exec_options& options,
 		const std::filesystem::path& workspace_root ) -> result< session_ref >;
 
+	// A fresh session for `workspace_root`: a new id and a path under the sessions
+	// directory, which this creates. The file itself is written by `event_log::open`.
+	// Split out of `open_session_for_run` so `/new` starts one the same way a
+	// no-flag run does, rather than a second implementation that could drift.
+	[[nodiscard]] auto new_session_ref( const std::filesystem::path& workspace_root )
+		-> result< session_ref >;
+
+	// The first user message in a session log, on one line and truncated, for a
+	// picker row. Empty when the log holds none. Reads only until it finds one, so
+	// a picker over many sessions does not parse every log in full.
+	[[nodiscard]] auto session_opening_line( const std::filesystem::path& path,
+		std::size_t max_chars = 72 ) -> std::string;
+
 	// Appends the run's opening event and returns the one-line report the callers
 	// print. A resume restores the event log and nothing else: the log records tool
 	// calls, tool results and run summaries, so the model's own user and assistant

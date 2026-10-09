@@ -74,6 +74,18 @@ namespace mcode {
 			return std::unexpected( fail( errc::io, "could not open session log: " + path.string( ) ) );
 		}
 
+		// The object represents ONE log, so opening a different file replaces what
+		// it holds. This mattered the moment a session could be switched from
+		// inside a running REPL: the loop holds a pointer to the log, so a swap
+		// repoints this same object, and the replay below appends. Without the
+		// clear, the first session's events stayed in memory and
+		// `restore_transcript` rebuilt a conversation from two sessions at once.
+		// After the open, so a path that cannot be opened leaves the object as it
+		// was rather than half-cleared.
+		events_.clear( );
+		next_sequence_ = 0;
+		write_failures_ = 0;
+
 		sink_ = decltype( sink_ ){ file, []( std::FILE* handle ) { std::fclose( handle ); } };
 		path_ = path;
 
@@ -84,9 +96,6 @@ namespace mcode {
 		const auto size = std::ftell( file );
 
 		if ( size == 0 ) {
-			next_sequence_ = 0;
-			events_.clear( );
-
 			return status{ };
 		}
 
