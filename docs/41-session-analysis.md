@@ -1,6 +1,6 @@
 # Session analysis: a long run against DeepSeek V4 Flash
 
-> TL;DR: Two runs of the same six-file website task — one before the fixes and one after. Nine defects surfaced, **all of them in the harness rather than the model**: every `bash` call was refused, every directory-scoped `grep` silently returned zero matches, and every `run.end` record was invalid JSON. Seven came from the run; two more came from CI, including a screen gate that had never once passed there. The model made **zero** malformed tool calls in either run, so tool-call robustness is not this model's problem. The environment reporting was.
+> TL;DR: Two runs of the same six-file website task — one before the fixes and one after. Ten defects surfaced, **all of them in the harness rather than the model**: every `bash` call was refused, every directory-scoped `grep` silently returned zero matches, and every `run.end` record was invalid JSON. Seven came from the run; three more came from CI, including a screen gate that had never once passed there. The model made **zero** malformed tool calls in either run, so tool-call robustness is not this model's problem. The environment reporting was.
 
 ## Method
 
@@ -94,9 +94,9 @@ Run totals: run 1 was 807535 input / 44829 output / 791296 cached, a 98.0% hit r
 
 The `bash` row is the whole story. In run 1 every shell call was refused before it ran; in run 2 the model's verification harness executed. The two non-output calls in run 2 were environmental — an MSYS binary the sandbox denies `\BaseNamedObjects` to, and a `cmd`/`powershell` invocation the permission engine refuses by policy — and neither is a harness defect.
 
-## Two defects found after the session, by CI
+## Three defects found after the session, by CI
 
-Running the session found the seven above. Pushing found two more, and they are worth separating because neither is visible from a log.
+Running the session found the seven above. Pushing found three more, and they are worth separating because none is visible from a log.
 
 **The `tui-screen` gate only passed on a configured machine.** It spawns the real binary under a ConPTY and asserts on the screen it draws, but it inherited `%APPDATA%` — so on a clean runner `mcode` exited with "no provider configured" before drawing a frame. It had never passed on CI: the run that added it also failed it, and the failure predates this work. The report it produced was
 
@@ -127,6 +127,19 @@ mcode: no provider configured.
 ```
 
 This is the same defect an earlier report described as *"it doesn't open when I use it in PATH, just loads for a while then quits no logs"* — the message existed, but it did not lead anywhere.
+
+**The gate then failed while reporting.** With the config fixed, the startup assertions passed on CI and the gate exited non-zero anyway:
+
+```
+[ok  ] the prompt is the last row and bare -- '>'
+Traceback (most recent call last):
+  ...
+UnicodeEncodeError: 'charmap' codec can't encode character '\u25b8'
+```
+
+It quotes the screen it captured, the meter carries `▸` (U+25B8), and a CI runner's stdout defaults to cp1252. So the gate crashed printing its own verdict. Fixed with `sys.stdout.reconfigure(encoding="utf-8")`; `PYTHONIOENCODING` is not enough, because the environment that would set it is the one getting the default wrong. Reproduced exactly with `PYTHONIOENCODING=cp1252`.
+
+All three of these share a shape worth naming: **a gate failed for a reason that was not a breach, and the failure looked like a product defect.** The config one read as a rendering bug, the encoding one as a crash. A gate that cannot tell you what it actually checked is worse than no gate, because it teaches you to ignore it.
 
 ## Tools worth adding
 
