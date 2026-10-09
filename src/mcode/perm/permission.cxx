@@ -14,25 +14,12 @@
 #include "mcode/support/glob.hxx"
 #include "mcode/support/json.hxx"
 #include "mcode/support/logging.hxx"
+#include "mcode/support/text.hxx"
 
 namespace mcode::perm {
 
 	namespace {
 
-		[[nodiscard]] auto base_program( const std::string_view program ) -> std::string {
-			const auto slash = program.find_last_of( "/\\" );
-			auto name = std::string{ slash == std::string_view::npos
-				? program
-				: program.substr( slash + 1 ) };
-
-			for ( auto& character : name ) {
-				if ( character >= 'A' && character <= 'Z' ) {
-					character = static_cast< char >( character - 'A' + 'a' );
-				}
-			}
-
-			return name;
-		}
 
 		// `find . -exec rm {} +` runs a program, so `find` is exec-capable when it carries `-exec`.
 		[[nodiscard]] auto is_exec_capable( const std::vector< std::string >& raw_argv ) -> bool {
@@ -46,7 +33,7 @@ namespace mcode::perm {
 				return true;
 			}
 
-			const auto program = base_program( argv.front( ) );
+			const auto program = mcode::text::program_basename( argv.front( ) );
 
 			if ( program != "find" && program != "find.exe" ) {
 				return false;

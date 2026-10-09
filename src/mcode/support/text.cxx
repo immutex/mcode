@@ -214,4 +214,35 @@ namespace mcode::text {
 		return out;
 	}
 
+
+	auto ascii_lower( const std::string_view input ) -> std::string {
+		auto out = std::string{ };
+		out.reserve( input.size( ) );
+
+		for ( const auto character : input ) {
+			// Arithmetic rather than `std::tolower`: that one is locale-sensitive,
+			// so the same byte folds differently in a Turkish locale.
+			out.push_back( character >= 'A' && character <= 'Z'
+				? static_cast< char >( character - 'A' + 'a' )
+				: character );
+		}
+
+		return out;
+	}
+
+	auto is_ascii_space( const char character ) noexcept -> bool {
+		return character == ' ' || character == '\t' || character == '\n'
+			|| character == '\r' || character == '\f' || character == '\v';
+	}
+
+	auto program_basename( const std::string_view program ) -> std::string {
+		// Both separators, because a Windows path reaches here from a config or a
+		// command line and may carry either.
+		const auto slash = program.find_last_of( "/\\" );
+		const auto base = slash == std::string_view::npos
+			? program
+			: program.substr( slash + 1 );
+
+		return ascii_lower( base );
+	}
 }

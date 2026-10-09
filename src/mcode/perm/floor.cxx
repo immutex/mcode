@@ -6,6 +6,7 @@
 #include <cstdlib>
 
 #include "mcode/platform/seams.hxx"
+#include "mcode/support/text.hxx"
 
 namespace mcode::perm {
 
@@ -33,33 +34,14 @@ namespace mcode::perm {
 	inline constexpr std::string_view TILDE_SLASH = "~/";
 	inline constexpr std::string_view HOME_ENV = "HOME";
 
-	[[nodiscard]] auto lower_ascii( const std::string_view text ) -> std::string {
-		auto out = std::string{ text };
-
-		for ( auto& character : out ) {
-			if ( character >= 'A' && character <= 'Z' ) {
-				character = static_cast< char >( character - 'A' + 'a' );
-			}
-		}
-
-		return out;
-	}
-
 	[[nodiscard]] auto token_equals( const std::string_view token,
 		const std::string_view expected ) -> bool {
-		return lower_ascii( token ) == lower_ascii( expected );
+		return mcode::text::ascii_lower( token ) == mcode::text::ascii_lower( expected );
 	}
 
-	// path-stripped and lowercased, so `/bin/sudo` and `SUDO` land on the floor.
 	[[nodiscard]] auto program_name( const std::vector< std::string >& argv )
 		-> std::string {
-		const auto& raw = argv.front( );
-		const auto slash = raw.find_last_of( "/\\" );
-		const auto base = slash == std::string::npos
-			? raw
-			: std::string_view{ raw }.substr( slash + 1 );
-
-		return lower_ascii( base );
+		return mcode::text::program_basename( argv.front( ) );
 	}
 
 	// unconditional, so `rm -rf /` still fires with no HOME set and --yolo cannot allow it.
@@ -304,7 +286,7 @@ namespace mcode::perm {
 				continue;
 			}
 
-			const auto target = lower_ascii( token.substr( DD_OF_PREFIX.size( ) ) );
+			const auto target = mcode::text::ascii_lower( token.substr( DD_OF_PREFIX.size( ) ) );
 
 			if ( target.starts_with( DEV_PREFIX ) || target.starts_with( NVME_PREFIX ) ||
 				target.starts_with( PHYSICALDRIVE_PREFIX ) ) {

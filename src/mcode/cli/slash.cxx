@@ -6,6 +6,7 @@
 
 #include "mcode/fs/snapshot.hxx"
 #include "mcode/fs/workspace.hxx"
+#include "mcode/support/text.hxx"
 #include "mcode/support/time.hxx"
 
 namespace mcode::cli {
@@ -15,8 +16,8 @@ namespace mcode::cli {
 
 		inline constexpr std::uint64_t PERCENT_SCALE = 100;
 
-		// Bytes per token, the same estimate the loop's budget uses.
-		inline constexpr std::size_t SCHEMA_BYTES_PER_TOKEN = 4;
+		// Bytes per token: the shared estimate, not a fourth copy of it.
+		inline constexpr std::size_t SCHEMA_BYTES_PER_TOKEN = mcode::text::CHARS_PER_TOKEN;
 
 		// One exported block is capped at this, cut on a newline so the file
 		// stays valid UTF-8. A tool result can be megabytes of JSON.

@@ -313,10 +313,18 @@ auto run_smoke( ) -> int {
 		auto parser = mcode::net::sse_parser{
 			[&]( mcode::net::sse_event&& event ) { events.push_back( std::move( event ) ); } };
 
-		parser.feed( "event: message\ndata: {\"delta\":\"he" );
-		parser.feed( "llo\"}\n\n" );
-		parser.feed( ": keep-alive\n\n" );
-		parser.feed( "data: {\"delta\":\" world\"}\n\n" );
+		// Checked, not discarded: a refused feed means the stream was
+		// unparseable, which is a failure of the parser under test.
+		auto fed = true;
+
+		for ( const auto* chunk : { "event: message\ndata: {\"delta\":\"he",
+			"llo\"}\n\n", ": keep-alive\n\n", "data: {\"delta\":\" world\"}\n\n" } ) {
+			if ( !parser.feed( chunk ) ) {
+				fed = false;
+			}
+		}
+
+		check( fed, "every chunk was accepted by the parser" );
 		parser.finish( );
 
 		check( events.size( ) == 2, "parsed exactly 2 events across 4 chunk boundaries" );

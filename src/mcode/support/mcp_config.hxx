@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "mcode/core/error.hxx"
+#include "mcode/support/text.hxx"
 #include "mcode/support/toml.hxx"
 
 namespace mcode::mcp {
@@ -16,7 +17,7 @@ namespace mcode::mcp {
 	inline constexpr std::int64_t MCP_SCHEMA_TOKEN_WARNING = 8192;
 
 	// characters per token, the same heuristic the loop's budget accounting uses.
-	inline constexpr std::int64_t MCP_CHARS_PER_TOKEN = 4;
+	inline constexpr std::int64_t MCP_CHARS_PER_TOKEN = static_cast< std::int64_t >( text::CHARS_PER_TOKEN );
 
 	enum class server_source {
 		config,

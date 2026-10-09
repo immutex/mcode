@@ -3,6 +3,7 @@
 #include "mcode/perm/permission.hxx"
 
 #include "mcode/support/glob.hxx"
+#include "mcode/support/text.hxx"
 
 #include <algorithm>
 
@@ -18,35 +19,23 @@ namespace mcode::perm {
 				: path.substr( slash + 1 );
 		}
 
-		// Windows and macOS file systems are case-insensitive, so a name test
-		// that is not folded lets `.ENV` past a rule written for `.env`.
-		[[nodiscard]] auto fold_case( const std::string_view text ) -> std::string {
-			auto lowered = std::string{ text };
-
-			for ( auto& character : lowered ) {
-				if ( character >= 'A' && character <= 'Z' ) {
-					character = static_cast< char >( character - 'A' + 'a' );
-				}
-			}
-
-			return lowered;
-		}
 
 		// segment-wise, so a sibling directory sharing the prefix is not the credential one.
 		[[nodiscard]] auto has_segment( const std::string_view path,
 			const std::string_view name ) -> bool {
 			const auto segments = support::glob_segments( path );
-			const auto wanted = fold_case( name );
+			const auto wanted = mcode::text::ascii_lower( name );
 
 			return std::any_of( segments.begin( ), segments.end( ),
 				[ &wanted ]( const std::string_view segment ) {
-					return fold_case( segment ) == wanted;
+					return mcode::text::ascii_lower( segment ) == wanted;
 				} );
 		}
 
 		[[nodiscard]] auto name_matches( const std::string_view path,
 			const std::string_view pattern ) -> bool {
-			return support::wildcard_match( fold_case( pattern ), fold_case( base_name( path ) ) );
+			return support::wildcard_match( mcode::text::ascii_lower( pattern ),
+				mcode::text::ascii_lower( base_name( path ) ) );
 		}
 
 		// A folded whole-name test: the secret names below are matched as
@@ -54,12 +43,13 @@ namespace mcode::perm {
 		// their `*` and `?` a meaning they do not have.
 		[[nodiscard]] auto name_is( const std::string_view path,
 			const std::string_view name ) -> bool {
-			return fold_case( base_name( path ) ) == fold_case( name );
+			return mcode::text::ascii_lower( base_name( path ) ) == mcode::text::ascii_lower( name );
 		}
 
 		[[nodiscard]] auto name_starts_with( const std::string_view path,
 			const std::string_view prefix ) -> bool {
-			return fold_case( base_name( path ) ).starts_with( fold_case( prefix ) );
+			return mcode::text::ascii_lower( base_name( path ) ).starts_with(
+				mcode::text::ascii_lower( prefix ) );
 		}
 
 	}

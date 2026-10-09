@@ -19,6 +19,7 @@
 #include "mcode/events/bus.hxx"
 #include "mcode/model/client.hxx"
 #include "mcode/model/types.hxx"
+#include "mcode/support/text.hxx"
 
 namespace mcode::perm {
 	class permission_engine;
@@ -72,7 +73,9 @@ namespace mcode {
 	inline constexpr std::int64_t SKILL_INDEX_TOKEN_BUDGET = 1'500;
 	inline constexpr std::int64_t SESSION_START_TOKEN_BUDGET = 8'500;
 
-	inline constexpr std::size_t CHARS_PER_TOKEN_ESTIMATE = 4;
+	// One definition, in `support/text.hxx`, so this and the MCP schema
+	// estimate cannot disagree about the same bytes.
+	inline constexpr std::size_t CHARS_PER_TOKEN_ESTIMATE = mcode::text::CHARS_PER_TOKEN;
 
 	inline constexpr std::size_t COMPACTION_KEEP_FIRST_EVENTS = 4;
 	inline constexpr std::size_t COMPACTION_KEEP_LAST_TURNS = 3;

@@ -32,13 +32,21 @@ namespace mcode::ext {
 		// JSON. `tool_args::parse` is strict, so every call took the failure branch
 		// and `mcode.fs.read` could never succeed at all.
 		auto arguments_document = mcode::json::document::make_object( );
-		arguments_document.set_string( "path", path );
+
+		// The status is checked, not discarded: a writer that failed would leave a
+		// document missing the very field the tool requires.
+		if ( const auto set = arguments_document.set_string( "path", path ); !set ) {
+			lua_pushnil( state );
+			lua_pushliteral( state, "mcode.fs.read could not build its arguments" );
+
+			return 2;
+		}
 
 		const auto arguments = arguments_document.dump( );
 
 		if ( !arguments ) {
 			lua_pushnil( state );
-			lua_pushliteral( state, "mcode.fs.read could not build its arguments" );
+			lua_pushliteral( state, "mcode.fs.read could not serialize its arguments" );
 
 			return 2;
 		}
@@ -95,14 +103,27 @@ namespace mcode::ext {
 		const auto data = std::string{ data_text != nullptr ? data_text : "", length };
 
 		auto arguments_document = mcode::json::document::make_object( );
-		arguments_document.set_string( "path", path );
-		arguments_document.set_string( "content", data );
+
+		if ( const auto set_path = arguments_document.set_string( "path", path ); !set_path ) {
+			lua_pushnil( state );
+			lua_pushliteral( state, "mcode.fs.write could not build its arguments" );
+
+			return 2;
+		}
+
+		if ( const auto set_content = arguments_document.set_string( "content", data );
+			!set_content ) {
+			lua_pushnil( state );
+			lua_pushliteral( state, "mcode.fs.write could not build its arguments" );
+
+			return 2;
+		}
 
 		const auto arguments = arguments_document.dump( );
 
 		if ( !arguments ) {
 			lua_pushnil( state );
-			lua_pushliteral( state, "mcode.fs.write could not build its arguments" );
+			lua_pushliteral( state, "mcode.fs.write could not serialize its arguments" );
 
 			return 2;
 		}

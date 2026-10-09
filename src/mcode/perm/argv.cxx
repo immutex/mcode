@@ -1,4 +1,5 @@
 #include "mcode/perm/argv.hxx"
+#include "mcode/support/text.hxx"
 
 #include <array>
 
@@ -22,28 +23,8 @@ namespace mcode::perm {
 
 		inline constexpr std::string_view ENV_ASSIGNMENT = "=";
 
-		[[nodiscard]] auto lower_ascii( const std::string_view text ) -> std::string {
-			auto out = std::string{ text };
-
-			for ( auto& character : out ) {
-				if ( character >= 'A' && character <= 'Z' ) {
-					character = static_cast< char >( character - 'A' + 'a' );
-				}
-			}
-
-			return out;
-		}
-
-		// path-stripped and lowercased, so `/usr/bin/timeout` and `TIMEOUT` both strip.
-		[[nodiscard]] auto program_name( const std::string_view program ) -> std::string {
-			const auto slash = program.find_last_of( "/\\" );
-			const auto base = slash == std::string_view::npos ? program : program.substr( slash + 1 );
-
-			return lower_ascii( base );
-		}
-
 		[[nodiscard]] auto is_wrapper( const std::string_view program ) -> bool {
-			const auto name = program_name( program );
+			const auto name = mcode::text::program_basename( program );
 
 			for ( const auto wrapper : WRAPPER_PROGRAMS ) {
 				if ( name == wrapper ) {
@@ -59,14 +40,14 @@ namespace mcode::perm {
 		}
 
 		[[nodiscard]] auto is_timeout( const std::string_view program ) -> bool {
-			const auto name = program_name( program );
+			const auto name = mcode::text::program_basename( program );
 
 			return name == "timeout" || name == "timeout.exe";
 		}
 
 		[[nodiscard]] auto flag_operand_count( const std::string_view program,
 			const std::string_view flag ) -> std::size_t {
-			const auto name = program_name( program );
+			const auto name = mcode::text::program_basename( program );
 
 			if ( name == "env" || name == "env.exe" ) {
 				return flag == "-u" || flag == "-C" || flag == "-S" ? 1 : 0;
@@ -165,7 +146,7 @@ namespace mcode::perm {
 
 	auto is_exec_runner( const std::string_view program ) noexcept -> bool {
 		// `/bin/sh`, `C:\...\cmd.exe` and `CMD` must all land on the runner list.
-		const auto name = program_name( program );
+		const auto name = mcode::text::program_basename( program );
 
 		for ( const auto runner : EXEC_RUNNERS ) {
 			if ( name == runner ) {

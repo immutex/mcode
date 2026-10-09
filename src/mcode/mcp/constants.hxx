@@ -5,6 +5,8 @@
 #include <string>
 #include <string_view>
 
+#include "mcode/support/text.hxx"
+
 namespace mcode::mcp {
 
 	// enforced in client::call on every request: a silent server must not block the loop forever
@@ -27,7 +29,7 @@ namespace mcode::mcp {
 	inline constexpr std::string_view CLIENT_VERSION = "0.0.1";
 
 	// chars/4, matching the loop's own budget math
-	inline constexpr std::size_t CHARS_PER_TOKEN_ESTIMATE = 4;
+	inline constexpr std::size_t CHARS_PER_TOKEN_ESTIMATE = mcode::text::CHARS_PER_TOKEN;
 
 	// tool descriptions and results are attacker-controlled input; the delimiters are ours
 	inline constexpr std::string_view UNTRUSTED_BEGIN = "<mcode:untrusted>";

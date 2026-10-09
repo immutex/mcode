@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -18,7 +19,9 @@ namespace {
 
 		harness( ) : parser{ [this]( sse_event&& event ) { events.push_back( std::move( event ) ); } } { }
 
-		auto feed( const std::string_view chunk ) -> void { parser.feed( chunk ); }
+		// `[[nodiscard]]`, and the tests that care about a refusal call the
+		// parser directly; this helper is for the ones that do not.
+		auto feed( const std::string_view chunk ) -> void { std::ignore = parser.feed( chunk ); }
 	};
 
 }
