@@ -93,7 +93,7 @@ three places the plan was wrong.
 
 **Reference.** Read by number, never end to end.
 
-41. `40-non-obvious-constraints.md` — the 126 traps that cost real time to find, numbered and stable. Docs and `AGENTS.md` cite them by number.
+41. `40-non-obvious-constraints.md` — the 127 traps that cost real time to find, numbered and stable. Docs and `AGENTS.md` cite them by number.
 42. `41-session-analysis.md` — two live runs of one long task, dissected. Seven harness defects found by running, the model's measured behaviour, and the cache findings.
 
 **If you only read three:** `01`, `03`, `21`.

@@ -1,6 +1,6 @@
 # Non-obvious constraints
 
-> TL;DR: 126 things that cost real time to discover. Docs and `AGENTS.md` cite them by number, so numbering is stable: a constraint keeps its number, and a retired one leaves a gap rather than renumbering the rest. New entries append at the end.
+> TL;DR: 127 things that cost real time to discover. Docs and `AGENTS.md` cite them by number, so numbering is stable: a constraint keeps its number, and a retired one leaves a gap rather than renumbering the rest. New entries append at the end.
 
 ## Constraints
 
@@ -1024,3 +1024,12 @@ Read the number you were sent to, not the whole file. Each entry states the cons
     config into a private `APPDATA` and `LOCALAPPDATA` and sets the credential
     variable its fixture names. Any gate that spawns the product must own every
     piece of state the product reads.
+127. **A tool that echoes captured terminal content must force UTF-8 stdout.** The
+    `tui-screen` gate quotes the screen it read, and the meter contains `▸`
+    (U+25B8). A CI runner's stdout defaults to a legacy code page — cp1252 on
+    Windows — so `print` raised `UnicodeEncodeError: 'charmap' codec can't encode
+    character '\u25b8'` and the gate failed *while reporting its verdict*, with a
+    traceback where the verdict should have been. Every startup assertion had
+    passed. `sys.stdout.reconfigure(encoding="utf-8")` at the top of the tool is
+    the fix; `PYTHONIOENCODING` alone is not enough, because the environment that
+    sets it is the same one that gets it wrong.

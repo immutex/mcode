@@ -106,7 +106,18 @@ reason. A model named in both places takes the config's values. `price_input`
 and `price_output` are USD per million tokens; the remaining fields are
 optional and default to the built-in table's values for the id, or the struct
 defaults when the id is new. The refusal message prints the exact section to
-write, because the section is not guessable from the error alone. A **combo**
+write, because the section is not guessable from the error alone.
+
+**The same rule covers a missing config file.** A machine with no `config.toml`
+is the first thing a new user hits, and the refusal is the only thing they see —
+mcode exits 2 without drawing a terminal. The message therefore names the
+resolved path of the user-scope file, the key to set, and `mcode setup`, which
+writes one. The earlier text (`set [model] provider in config.toml`) named
+neither the file's location nor the command, and a reader with no config had no
+way to act on it. Both call sites print the same string, from
+`config::unconfigured_message`.
+
+A **combo**
 (`combo/<slug>`) is a router-side alias that picks one member per request, so it
 has a price *range*, not a price. Price it at the top of that range: the highest
 figure any member can charge is the only one that cannot under-estimate, and an

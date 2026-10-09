@@ -43,6 +43,15 @@ except ImportError as error:  # pragma: no cover - depends on the host
     print("tui-check: pip install -r tools/tui_check/requirements.txt", file=sys.stderr)
     sys.exit(2)
 
+# The report quotes the screen it captured, and the meter carries `▸` (U+25B8).
+# A CI runner's stdout defaults to a legacy code page -- cp1252 on Windows -- so
+# printing the diagnostic raised UnicodeEncodeError and the gate failed *while
+# reporting*, with a traceback instead of a verdict. Measured on CI: the startup
+# assertions passed and the gate still exited non-zero.
+for stream in (sys.stdout, sys.stderr):
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="replace")
+
 # A row of the live region while a turn is in flight.
 SPINNER = re.compile(r"[\u2800-\u28ff]\s+\S+")
 
