@@ -12,6 +12,15 @@
 6. **Prove Lua by dogfooding.** M7 builds real capability *only* in Lua — workflow tools (git commit conventions, GitHub flows) that were deliberately kept out of the C++ core. If the Lua API cannot express them, the API is wrong.
 7. **No milestone is "done" without a smoke run** against a fixture repo and a recorded transcript.
 
+> **Where the tree actually is.** M0–M2 and the skills/MCP half of M7 have
+> shipped; M3/M4/M5 are partial; M6 and M8 are untouched. `docs/43-fourth-batch.md`
+> is the plan for the next batch and it reorders the remaining work by risk:
+> the M6 trust gate first (cheapest, and it closes a proven execution path), then
+> the M6 egress proxy (highest value, hardest), then the measurement spine, then
+> the context controller, MCP HTTP, memory and subagents. Where `43` and this
+> document disagree, `43` is newer — the rows below marked `43` were corrected
+> against it.
+
 ## Milestones
 
 ### M0 — Skeleton (weeks 1–3)
@@ -116,12 +125,12 @@
 
 | Deliverable | Notes |
 |---|---|
-| Trust grant UX | View-then-grant, hash-pinned, per-file; persisted trust DB (`12`) |
+| Trust grant UX | View-then-grant, **hash-pinned per extension tree** (not per file — a runtime `require` graph needs the *set* pinned too), no TOCTOU window; persisted trust DB (`12`, `43` D1) |
 | Project-extension gating | `.mcode/extensions/` inert until granted; `--no-extensions` for CI |
 | Manifest permissions | `fs_read`/`fs_write`/`spawn`/`net` declarations enforced on the API surface |
 | `mcode ext doctor` | Per-extension health, error counts, permission audit (`19`) |
 | Disable list | Config-level and runtime disable without file edits |
-| Sandbox hardening | **Full three-platform enforcement**: Windows restricted token + Job Object; macOS Seatbelt via `sandbox_init_with_parameters` (deny-default profile). Plus the egress proxy with domain allowlist, env scrubbing, UNC path prompts |
+| Sandbox hardening | **Full three-platform enforcement**: Windows restricted token + Job Object; macOS Seatbelt via `sandbox_init_with_parameters` (deny-default profile). Plus the egress proxy with domain allowlist, env scrubbing, UNC path prompts. **Windows network enforcement is `best_effort`, not `enforced`** — WFP needs admin, so `43` D3 splits the capability enum rather than claiming parity (`12`, `43` D3) |
 
 **Exit criteria:** a cloned repo containing a malicious extension cannot execute code; the grant flow shows exactly what will load.
 
@@ -149,7 +158,7 @@
 | Prompt-cache optimization | Per-provider breakpoint strategies; measured hit rate (`15`) |
 | Model tiering | Cheap model for compaction/titling/search; frontier for planning/edits |
 | Subagents | Read-only fan-out, one-shot specs, artifact spillover (`10`) |
-| Memory | `MEMORY.md` + FTS5 index, approval-gated writes (`09`) |
+| Memory | **A user-authored single-file ledger, agent-read** — one pointer line plus `grep`, no index, no FTS5, no automatic writes (`09`, `43` D7). `09`'s FTS5 design is rejected: it contradicts `01`, `03` and `14`, and the measured evidence has memory systems failing to beat memory-off in 11 of 12 matched pairings |
 | ACP / editor integration | Protocol, not a GUI |
 | Distribution | Signed static binaries, package managers, checksums |
 | **Registry + install** | The index, `mcode ext install`, the **lockfile format**, and the update UX (`25`). These are declared *irreversible* choices (`25` §Versioning), so they need a milestone, not just a design |

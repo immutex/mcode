@@ -24,7 +24,7 @@ Core membership is decided by three tests (`06` §Core tool set): **guaranteed**
 | `todo` | extension | Session-state wrapper; recitation reads session state directly, so it survives disabling |
 | `web_search`, `fetch` | extension | Network; provider-specific; not universally needed |
 | `skill_read` | extension | Wraps the C++ skills subsystem |
-| `memory_search` | extension | Wraps the C++ memory index |
+| `memory_search` | extension | Greps the user-authored notes ledger — **no C++ index** (`09`, `43` D7) |
 | `git`, `github` | extension | Workflow tools that were never going to be core |
 | `browser`, `docker`, `db`, language-specific | extension | Third-party territory; ship two or three as worked examples |
 
@@ -37,7 +37,7 @@ Core membership is decided by three tests (`06` §Core tool set): **guaranteed**
 | `task` | `task` | — | **Load-bearing.** Lua shell over the core spawn primitives. Enabled by default; a load failure is a loud session-start warning, not a silent absence |
 | `fs-extra` | `todo` | — | Plan tracking over session state. Smallest useful example |
 | `skills` | `skill_read` | skills discovered | Wraps `mcode.skill.*` (`08`) |
-| `memory` | `memory_search` | memory non-empty | Wraps `mcode.memory.*` (`09`) |
+| `memory` | `memory_search` | notes ledger non-empty | Greps `notes.md`; takes a query string, never a path (`09`, `43` D7) |
 | `web` | `web_search`, `fetch` | network configured | The canonical network example |
 | `git` | `git_status`, `git_diff`, `git_commit` | git repo | Workflow tools composing `bash` |
 | `github` | `gh_pr`, `gh_issue`, `gh_review` | `gh` CLI + auth | Real capability, non-trivial surface |

@@ -96,6 +96,7 @@ three places the plan was wrong.
 41. `40-non-obvious-constraints.md` — the 128 traps that cost real time to find, numbered and stable. Docs and `AGENTS.md` cite them by number.
 42. `41-session-analysis.md` — two live runs of one long task, dissected. Seven harness defects found by running, the model's measured behaviour, and the cache findings.
 43. `42-agents-md-research.md` — what makes an AGENTS.md good and bad, from 8 primary papers and the vendor guidance. The research `/init` generates from.
+44. `43-fourth-batch.md` — **the batch record, planned not shipped**: the extension trust gate, network egress, `ext install`, the verification gate and the measurement spine, the context controller, MCP over HTTP, memory, and read-only subagents. Read before starting any of them.
 
 **If you only read three:** `01`, `03`, `21`.
 
@@ -104,6 +105,11 @@ three places the plan was wrong.
 > are the second batch's per-slice briefs and `37`–`39` the third's. `32` owns
 > the permission defaults and `36` the sandbox's per-platform limits — read the
 > owning doc before changing either.
+>
+> **A fourth batch is planned and not started** (`43`). It is the batch that
+> makes three claims true that are currently documentation: the repo-local trust
+> gate and the egress proxy in `12`, and `ext install` in `25`. Do not treat
+> those sections as describing shipped behaviour until `43` lands.
 >
 > The deviations a reader would otherwise get wrong are in
 > [`docs/40`](40-non-obvious-constraints.md) (items 48–67): workspace writes are
@@ -191,7 +197,7 @@ three places the plan was wrong.
 
 | Area | State |
 |---|---|
-| Docs `00`–`42` | Written. `40-non-obvious-constraints.md` is the numbered trap reference; `41-session-analysis.md` is the live-run analysis. |
+| Docs `00`–`43` | Written. `40-non-obvious-constraints.md` is the numbered trap reference; `41-session-analysis.md` is the live-run analysis; `43-fourth-batch.md` is the planned fourth batch. |
 | Code | Three batches shipped: agent loop, permissions, skills, MCP, TUI, Lua API, sandbox, sessions. |
 | Not built | Memory, subagents, OSC 52 clipboard |
 

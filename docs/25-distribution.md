@@ -1,5 +1,14 @@
 # Distribution, Registry & Docs
 
+> **Status: `mcode ext install` is specified here and does not exist in the tree.**
+> `docs/43-fourth-batch.md` Decision 2 is the implementation plan: resolve the
+> peeled commit with `git ls-remote` before fetching, refuse `.gitmodules`,
+> validate with the *same* manifest loader used at load time, and write both the
+> grant and the lockfile. The install **is** the grant, because the user typed
+> the command — the position this doc already takes. The lockfile records
+> `commit` **and** `tree_sha256`, because a `.gitattributes` EOL filter makes the
+> working tree differ from the committed blob while the commit ID stays valid.
+
 > TL;DR: The extension site is an **index, not a registry** — no artifact hosting, no accounts; install coordinates point at git and a lockfile pins the SHA. Trust comes from the runtime hash-pinned grant (`12`), not from review, because review-gating measurably fails. Docs are MkDocs Material with the Lua reference **generated from LuaLS annotations** so types, editor intellisense, and the website share one source.
 
 ## The index, not a registry

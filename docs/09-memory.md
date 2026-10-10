@@ -1,5 +1,20 @@
 # Memory Architecture for mcode
 
+> **Status: the recommended design below is superseded by `docs/43-fourth-batch.md`
+> Decision 7.** Two of its load-bearing choices do not survive the evidence. It
+> ships SQLite FTS5 by default, which contradicts `01` ("Not a vector database.
+> Retrieval is agentic search first; lexical index only if measured necessary"),
+> `03` ("FTS5 if we ever need it"), `14` ("Premature") and this doc's own Traps
+> section — and it would be the **10th direct dependency** against a budget of
+> ≤12 with size binding. It also always-injects a `MEMORY.md` index, the design
+> that measured worst for poisoning (64.70% RSR vs 17.40% for tool-invoked
+> retrieval) and costs ~6.2K tokens, ~73% of mcode's whole session-start budget.
+> The measured record is worse than that: under a matched toggle, four existing
+> memory systems failed to beat memory-off in **11 of 12** pairings
+> (`arXiv:2609.23570`). `43` replaces this with a user-authored single-file
+> ledger, one pointer line, and `grep`. **Read `43` D7 before implementing any of
+> the sections below.**
+
 > TL;DR: Ship memory as plain markdown files (user-authored `AGENTS.md` + agent-authored index + topic files) with an optional SQLite FTS5 index for BM25 retrieval; gate all automatic writes behind user-visible approval; never embed vectors or graphs by default.
 
 ## State of the field

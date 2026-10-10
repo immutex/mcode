@@ -146,10 +146,12 @@ Consolidated. `mcode <command> [flags]`, and running with a bare prompt implies 
 | `mcode sessions list\|show\|rm` | Session management |
 | `mcode config check\|show` | Validate / print merged config with provenance |
 | `mcode ext list\|doctor\|disable <name>` | Extension introspection (`19`) |
+| `mcode ext install git:owner/repo@<ref>` | Clone, validate, grant, and record the resolved SHA (`25`, `43` D2) |
+| `mcode ext trust\|update <name>` | Grant a discovered project extension; re-resolve and diff an update (`12`, `43` D1) |
+| `mcode eval <suite>` | Run the fixture suite; prints `false_success_rate` (`11`, `43` D4) |
 | `mcode skill list\|validate` | Skill discovery and linting (`08`) |
-| `mcode memory show\|reindex\|gc` | Memory inspection (`09`) |
+| `mcode note show` | Memory inspection; **no `reindex`/`gc`** — there is no index and no eviction policy (`09`, `43` D7) |
 | `mcode prompt lint` | System-prompt interference check (`21`) |
-| `mcode eval <suite>` | Run the fixture suite (`11`) |
 
 Global flags: `--model`, `--max-budget-usd`, `--max-steps`, `--sandbox`, `--approval`, `--yolo`, `--no-sandbox`, `--no-extensions`, `--config key=value`, `--cwd`, `-v/--verbose`, `--version`.
 

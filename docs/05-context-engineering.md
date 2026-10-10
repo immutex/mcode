@@ -1,5 +1,15 @@
 # Context Engineering
 
+> **Status: the recommended design below is a specification, not a description.**
+> The tree does not implement it. `TOOL_CLEAR_TRIGGER_FRACTION`,
+> `CLEAR_AT_LEAST_FRACTION`, `MAX_POST_COMPACT_REREADS` and
+> `POST_COMPACT_REREAD_TOKENS` are declared in `loop.hxx:68–74` and **read
+> nowhere**; `maybe_compact` truncates (keeps the first 4 events and the newest
+> tail, drops the middle) rather than summarizing; and the context meter reports
+> **cumulative spend**, not window occupancy, so it can read 400% in a long
+> session. `docs/43-fourth-batch.md` Decision 5 is the plan that implements the
+> table below and fixes the meter; where the two disagree, `43` is newer.
+
 > TL;DR: Context is a finite, degrading resource — budget it like memory in a real-time system: clear tool results early, compact at ~80% fill, externalize state to files, isolate exploration in subagents, and build the prompt append-only for KV-cache hits.
 
 ## State of the field

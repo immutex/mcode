@@ -297,6 +297,14 @@ docs win. Start at the index.
 `/session`, `/reload` commands. The docs describe them; the tree does not ship
 them.
 
+**Three further gaps are security claims the docs make and the tree does not
+keep:** a repo-local extension trust gate, network egress control, and
+`mcode ext install`. `docs/43-fourth-batch.md` is the plan that closes them, plus
+the verification gate (which exists but has no caller), the context controller,
+MCP over HTTP, memory and read-only subagents. Treat `docs/12` §Repo-shipped
+extensions and §Layer 2, and `docs/25` §Install, as design rather than shipped
+behaviour until that batch lands.
+
 ## Architecture
 
 ```

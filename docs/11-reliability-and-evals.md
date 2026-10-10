@@ -1,5 +1,18 @@
 # Reliability and Evals
 
+> **Status: the verification gate mechanism exists but cannot be armed.**
+> `agent_loop::set_verification_command` (`loop.hxx:448`) has **zero callers**,
+> so every run takes `Verify --no_tests--> Handoff` and no run is ever verified.
+> `eval/suite.hxx` declares `verdict: pass|fail|error` and nothing about
+> ground-truth or hack flags, though this doc specifies both.
+> `docs/43-fourth-batch.md` Decision 4 wires the command from config and CLI,
+> adds the `verified | claimed | failed | no_tests` vocabulary, and publishes
+> **`false_success_rate`** as the trustworthiness number this doc argues for.
+> The measured context for that number: GPT-5 submits on **100%** of runs and
+> resolves 44% (`arXiv:2603.25764`); false success is **45–48%** of failures in
+> τ²-bench (`arXiv:2606.09863`); and o3 reward-hacks at **30.4%** where the
+> scoring function is visible versus **0.7%** where it is not (METR).
+
 > TL;DR: Reliability comes from grounding every claim in a tool result and grading every run with deterministic verifiers; evals are a cheap fixture-suite plus pass^k consistency tracking, with explicit anti-reward-hacking checks.
 
 ## State of the field
