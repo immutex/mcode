@@ -26,7 +26,7 @@ namespace mcode::mcp {
 	inline constexpr std::string_view PROTOCOL_VERSION = "2025-06-18";
 
 	inline constexpr std::string_view CLIENT_NAME = "mcode";
-	inline constexpr std::string_view CLIENT_VERSION = "0.0.1";
+	inline constexpr std::string_view CLIENT_VERSION = "0.0.3";
 
 	// chars/4, matching the loop's own budget math
 	inline constexpr std::size_t CHARS_PER_TOKEN_ESTIMATE = mcode::text::CHARS_PER_TOKEN;
