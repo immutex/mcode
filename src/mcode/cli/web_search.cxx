@@ -1,6 +1,7 @@
 #include "mcode/cli/web_search.hxx"
 
 #include <cstdint>
+#include <cstdlib>
 #include <string>
 #include <vector>
 

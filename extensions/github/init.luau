@@ -63,10 +63,10 @@ local function shell(command: string): (string?, string?)
 
 	if result.succeeded == true then
 		if type(stdout) ~= "string" or stdout == "" then
-			return "(no output)"
+			return "(no output)", nil
 		end
 
-		return stdout
+		return stdout, nil
 	end
 
 	-- `gh` puts the reason on stderr: "not logged in", "no pull requests found",
@@ -290,10 +290,10 @@ local registered: boolean = pcall(function()
 			local checks, _ = shell("gh pr checks " .. shown)
 
 			if checks == nil then
-				return comments
+				return comments, nil
 			end
 
-			return comments .. "\n\n--- checks ---\n" .. checks
+			return comments .. "\n\n--- checks ---\n" .. checks, nil
 		end,
 	})
 end)

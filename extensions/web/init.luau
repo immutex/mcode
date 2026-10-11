@@ -55,7 +55,7 @@ if have_search then
 				end
 
 				if #results == 0 then
-					return "no results for '" .. query .. "'"
+					return "no results for '" .. query .. "'", nil
 				end
 
 				local lines: { string } = {}
@@ -69,7 +69,7 @@ if have_search then
 					end
 				end
 
-				return table.concat(lines, "\n")
+				return table.concat(lines, "\n"), nil
 			end,
 		})
 	end)
@@ -123,7 +123,7 @@ if fetch ~= nil then
 				local body = response.body
 
 				if body == nil or body == "" then
-					return "HTTP " .. tostring(response.status) .. " with an empty body"
+					return "HTTP " .. tostring(response.status) .. " with an empty body", nil
 				end
 
 				if response.truncated then
@@ -131,7 +131,7 @@ if fetch ~= nil then
 				end
 
 				return "HTTP " .. tostring(response.status) .. " " .. response.content_type
-					.. "\n\n" .. body
+					.. "\n\n" .. body, nil
 			end,
 		})
 	end)

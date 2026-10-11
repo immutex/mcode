@@ -160,8 +160,9 @@ namespace mcode::ext {
 		command_registry* commands = nullptr;
 
 		// The run's own state, so `session.snapshot` reports the session rather than
-		// whatever the extension believes it knows.
-		const std::function< session_state( ) >* session_state = nullptr;
+		// whatever the extension believes it knows. Qualified: the member name
+		// shadows the type in this scope (gcc -Wchanges-meaning).
+		const std::function< mcode::ext::session_state( ) >* session_state = nullptr;
 
 		// The harness owns the gated client; an extension cannot construct its own.
 		mcode::net::http_client* http_client = nullptr;

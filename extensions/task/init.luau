@@ -104,7 +104,7 @@ local registered: boolean = pcall(function()
 					.. "exceeded the return budget]"
 			end
 
-			return summary
+			return summary, nil
 		end,
 	})
 end)

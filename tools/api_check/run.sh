@@ -84,7 +84,8 @@ echo "ok: invalid.luau was rejected as expected"
 echo
 echo "== shipped and fixture extensions must type-check =="
 for extension in "${repo_root}"/extensions/*/init.luau \
-                 "${repo_root}"/tests/fixtures/extensions/*/init.luau; do
+                 "${repo_root}"/tests/fixtures/extensions/*/init.luau \
+                 "${repo_root}"/tests/fixtures/wiring/*/init.luau; do
     [ -e "${extension}" ] || continue
 
     name="$(basename "$(dirname "${extension}")")"

@@ -1146,5 +1146,14 @@ Read the number you were sent to, not the whole file. Each entry states the cons
     any entry, so `read` is listed and every call fails at dispatch. The
     capability boundary held — which is what made it look correct — while the
     capability itself was gone.
+140. **GCC rejects a declaration whose own name appears unqualified in its type,
+    and clang does not warn.** `const std::function< session_state( ) >*
+    session_state` compiled clean here and failed the Linux leg with
+    `-Wchanges-meaning`; qualifying the type fixes it. `_clgate.py` compiles with
+    `_WIN32` defined and clang makes no complaint, so the gate's preflight is the
+    only place it could be caught — and a textual rule for it flagged
+    `measured > 1 ? measured - 1 : measured` and a dozen other expressions before
+    being dropped. The CI round trip is the honest detector until the gate has a
+    parser.
 
 

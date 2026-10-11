@@ -124,10 +124,10 @@ local registered: boolean = pcall(function()
 			local done = tostring(completed) .. "/" .. tostring(#items) .. " complete"
 
 			if completed == #items then
-				return "plan recorded (" .. done .. "); every step is done"
+				return "plan recorded (" .. done .. "); every step is done", nil
 			end
 
-			return "plan recorded (" .. done .. ")"
+			return "plan recorded (" .. done .. ")", nil
 		end,
 	})
 end)

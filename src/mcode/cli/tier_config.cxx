@@ -1,5 +1,7 @@
 #include "mcode/cli/tier_config.hxx"
 
+#include <string>
+
 #include "mcode/model/capabilities.hxx"
 
 namespace mcode::cli {

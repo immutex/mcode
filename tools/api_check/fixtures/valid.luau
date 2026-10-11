@@ -21,12 +21,16 @@ local tool_id = mcode.tool.register({
 	end,
 })
 
+-- A command's return value is its output, and there is no error channel: a
+-- failure prints its reason, so the handler answers one `string?`.
 mcode.cmd.register("gst", function(rest)
 	local status = mcode.fs.read("git-status.txt")
 
-	if status then
-		mcode.notify(status, "info")
+	if not status then
+		return "git-status.txt could not be read"
 	end
+
+	return status
 end, { description = "git status" })
 
 mcode.on("tool.pre_call", function(event)
@@ -40,8 +44,14 @@ mcode.on("tool.pre_call", function(event)
 end, { once = false })
 
 local handle = mcode.timer.every(1000, function()
-	local snapshot = mcode.session.snapshot()
-	mcode.log.debug("seq", snapshot.seq)
+	-- `snapshot` is (value, err): the value is optional until checked.
+	local snapshot, snapshot_err = mcode.session.snapshot()
+
+	if snapshot then
+		mcode.log.debug("seq", snapshot.seq)
+	else
+		mcode.log.warn(snapshot_err)
+	end
 end)
 handle:stop()
 

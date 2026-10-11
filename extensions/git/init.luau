@@ -66,10 +66,10 @@ local function shell(command: string): (string?, string?)
 
 	if result.succeeded == true then
 		if type(stdout) ~= "string" or stdout == "" then
-			return "(no output)"
+			return "(no output)", nil
 		end
 
-		return stdout
+		return stdout, nil
 	end
 
 	-- git writes its diagnostics to stderr; a failure that reported only stdout
@@ -189,11 +189,16 @@ local registered: boolean = pcall(function()
 			required = { "message", "paths" },
 		},
 		run = function(args: { [string]: any }, _context: any): (string?, string?)
-			local message = args.message
+			-- Validated as `any`, then annotated: a `type()` check does not narrow an
+			-- `any` far enough for a method call, and the annotation states what the
+			-- check above it has already established.
+			local raw_message = args.message
 
-			if type(message) ~= "string" or message == "" then
+			if type(raw_message) ~= "string" or raw_message == "" then
 				return nil, "message is required and must be a non-empty string"
 			end
+
+			local message: string = raw_message
 
 			if message:find("\n") ~= nil then
 				return nil, "message must be a single line"
@@ -220,7 +225,7 @@ local registered: boolean = pcall(function()
 			local staged, stage_error = shell("git add -- " .. table.concat(quoted, " "))
 
 			if staged == nil then
-				return nil, "staging failed: " .. stage_error
+				return nil, "staging failed: " .. (stage_error or "")
 			end
 
 			return shell("git commit -m " .. safe_message)

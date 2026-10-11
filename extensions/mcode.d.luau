@@ -61,9 +61,11 @@ declare mcode: {
 	},
 
 	cmd: {
-		-- Registers a slash command. `opts.complete` is optional and returns
-		-- candidate completions for the argument prefix.
-		register: (name: string, run: (args: string) -> (), opts: {
+		-- Registers a slash command. `run` receives the arguments and its return
+		-- value is the command's output, so a handler that returns nothing is a
+		-- command that prints nothing. `opts.complete` returns candidate
+		-- completions for the argument prefix.
+		register: (name: string, run: (args: string) -> string?, opts: {
 			description: string?,
 			complete: ((prefix: string) -> { string })?,
 		}?) -> number,
@@ -130,13 +132,14 @@ declare mcode: {
 	},
 
 	session: {
-		-- A plain-data copy of session state. Never a live reference.
-		snapshot: () -> {
+		-- A plain-data copy of session state. Never a live reference. `nil, err`
+		-- when no session context was installed with this surface.
+		snapshot: () -> ({
 			session: string,
 			seq: number,
 			steps: number,
 			goal: string?,
-		},
+		}?, string?),
 
 		-- Branches the event log at `at_seq`. Append-only: records a
 		-- branch.created event and copies nothing. Requires the `session_fork`
