@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <charconv>
+#include <chrono>
 #include <memory>
 #include <string>
 #include <thread>
@@ -175,16 +176,68 @@ namespace mcode::net {
 			}
 		}
 
-		auto handle_http( tcp::socket client ) -> void {
-			auto buffer = std::vector< char >( MAX_REQUEST_BYTES );
-			auto error = boost::system::error_code{ };
-			const auto read = client.read_some( asio::buffer( buffer ), error );
+		// Reads until the end of the request headers, under a deadline. A single
+		// `read_some` may return a partial request -- on Linux the whole `CONNECT`
+		// line is not guaranteed in one segment, and parsing a truncated line would
+		// answer 400 to a request that was merely split.
+		//
+		// The deadline matters because `stop` joins this thread: a client that
+		// connects and says nothing would otherwise block the worker forever and
+		// hang shutdown. Non-blocking plus a poll step keeps that bounded without
+		// platform-specific socket options.
+		auto read_request_head( tcp::socket& client, std::string& out ) -> bool {
+			constexpr std::string_view TERMINATOR = "\r\n\r\n";
+			constexpr auto DEADLINE = std::chrono::seconds{ 10 };
 
-			if ( error || read == 0 ) {
+			auto error = boost::system::error_code{ };
+			client.non_blocking( true, error );
+
+			auto buffer = std::vector< char >( MAX_REQUEST_BYTES );
+			const auto give_up_at = std::chrono::steady_clock::now( ) + DEADLINE;
+
+			while ( out.size( ) < MAX_REQUEST_BYTES ) {
+				if ( std::chrono::steady_clock::now( ) >= give_up_at ) {
+					break;
+				}
+
+				const auto read = client.read_some( asio::buffer( buffer ), error );
+
+				if ( read > 0 ) {
+					out.append( buffer.data( ), read );
+					error.clear( );
+
+					if ( out.find( TERMINATOR ) != std::string::npos ) {
+						client.non_blocking( false, error );
+
+						return true;
+					}
+
+					continue;
+				}
+
+				if ( error == asio::error::would_block || error == asio::error::try_again ) {
+					error.clear( );
+					std::this_thread::sleep_for( std::chrono::milliseconds{ 2 } );
+
+					continue;
+				}
+
+				return false;
+			}
+
+			client.non_blocking( false, error );
+
+			return out.find( TERMINATOR ) != std::string::npos;
+		}
+
+		auto handle_http( tcp::socket client ) -> void {
+			auto error = boost::system::error_code{ };
+			auto request = std::string{ };
+
+			if ( !read_request_head( client, request ) ) {
 				return;
 			}
 
-			const auto request = std::string{ buffer.data( ), read };
 			auto destination = target{ };
 
 			if ( !parse_http_request( request, destination ) ) {
@@ -336,6 +389,10 @@ namespace mcode::net {
 			relay( client, upstream );
 		}
 
+		// Non-blocking accept with a poll step, not a blocking accept woken by
+		// closing the acceptor. Closing a socket another thread is blocked in
+		// `accept()` on wakes it on Windows and does NOT reliably wake it on Linux,
+		// so the blocking form hung every Linux run while passing on Windows.
 		auto accept_loop( tcp::acceptor& acceptor, const bool is_http ) -> void {
 			while ( !stopping.load( ) ) {
 				auto error = boost::system::error_code{ };
@@ -346,6 +403,11 @@ namespace mcode::net {
 				if ( error ) {
 					if ( stopping.load( ) ) {
 						return;
+					}
+
+					if ( error == asio::error::would_block
+						|| error == asio::error::try_again ) {
+						std::this_thread::sleep_for( std::chrono::milliseconds{ 5 } );
 					}
 
 					continue;
@@ -394,6 +456,11 @@ namespace mcode::net {
 			return std::unexpected( fail( errc::io,
 				"cannot bind the SOCKS listener: " + error.message( ) ) );
 		}
+
+		// Non-blocking: the accept loop polls the stop flag, because closing a socket
+		// another thread is blocked in `accept()` on is not a reliable wakeup on Linux.
+		proxy.self_->http_acceptor->non_blocking( true, error );
+		proxy.self_->socks_acceptor->non_blocking( true, error );
 
 		return proxy;
 	}
