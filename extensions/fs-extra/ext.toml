@@ -1,0 +1,5 @@
+name = "fs-extra"
+version = "0.1.0"
+api_version = 1
+description = "Plan tracking over session state"
+permissions = []

@@ -9,6 +9,7 @@
 #include "mcode/mcp/client.hxx"
 #include "mcode/mcp/constants.hxx"
 #include "mcode/mcp/source.hxx"
+#include "mcode/support/json.hxx"
 #include "mcode/support/mcp_config.hxx"
 
 namespace mcode::mcp {
@@ -62,6 +63,69 @@ namespace mcode::mcp {
 			};
 		}
 
+		// A resource is not a tool: the server names it and the client reads it by URI,
+		// so the model needs a way to see the list. One tool per server keeps the
+		// always-loaded schema to a single entry however many resources there are.
+		auto make_resource_handler( supervisor& board, const std::string& server_name )
+			-> std::function< result< std::string >( std::string_view ) > {
+			return [ &board, server_name ]( const std::string_view arguments_json )
+				-> result< std::string > {
+				board.pump( std::chrono::milliseconds{ 0 } );
+
+				auto* client = board.client_ptr( );
+
+				if ( client == nullptr || !client->is_alive( ) ) {
+					return std::unexpected( fail( errc::io,
+						"mcp server '" + server_name + "' is not running" ) );
+				}
+
+				const auto parsed = json::document::parse( arguments_json.empty( )
+					? std::string_view{ "{}" } : std::string_view{ arguments_json } );
+
+				auto uri = std::string{ };
+
+				if ( parsed ) {
+					uri = parsed->pointer_string( "/uri" ).value_or( std::string{ } );
+				}
+
+				if ( uri.empty( ) ) {
+					auto listed = client->list_resources( );
+
+					if ( !listed ) {
+						return std::unexpected( listed.error( ) );
+					}
+
+					auto out = std::string{ };
+
+					for ( const auto& resource : *listed ) {
+						out += resource.uri;
+
+						if ( !resource.name.empty( ) ) {
+							out += "  ";
+							out += resource.name;
+						}
+
+						if ( !resource.description.empty( ) ) {
+							out += "\n    ";
+							out += resource.description;
+						}
+
+						out += '\n';
+					}
+
+					return wrap_untrusted( out );
+				}
+
+				auto body = client->read_resource( uri );
+
+				if ( !body ) {
+					return std::unexpected( body.error( ) );
+				}
+
+				return wrap_untrusted( body->text );
+			};
+		}
+
 		// empty on success; a disabled server is a no-op that also returns empty
 		auto connect_one( const server_config& server, const connect_input& input )
 			-> std::string {
@@ -74,10 +138,12 @@ namespace mcode::mcp {
 
 			auto board = std::make_unique< supervisor >( server, supervisor::handlers{
 				[ registry = input.registry, name = server.name, registration_error ](
-					const std::vector< server_tool >& tools ) {
+					const std::vector< server_tool >& tools,
+					const server_capabilities& capabilities ) {
 					auto registrar = source{ *registry };
 
-					if ( const auto registered = registrar.register_server( name, tools );
+					if ( const auto registered = registrar.register_server( name, tools,
+							capabilities.resources );
 						!registered && registration_error->empty( ) ) {
 						*registration_error = registered.error( ).msg;
 					}
@@ -115,6 +181,16 @@ namespace mcode::mcp {
 				input.loop->register_handler(
 					qualified_tool_name( server.name, tool.name ),
 					make_handler( *board, tool.name ) );
+			}
+
+			// The registry entry comes from `register_server` in the ready callback; this
+			// is the loop-side handler, and it exists only when the server declared the
+			// capability, so a server with no resources has no entry to fail on.
+			if ( auto* client = board->client_ptr( );
+				client != nullptr && client->capabilities( ).resources ) {
+				input.loop->register_handler(
+					qualified_tool_name( server.name, "resources" ),
+					make_resource_handler( *board, server.name ) );
 			}
 
 			input.owned->add( std::move( board ) );

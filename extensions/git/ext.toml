@@ -1,0 +1,5 @@
+name = "git"
+version = "0.1.0"
+api_version = 1
+description = "Git-aware tools: git_status, git_diff and git_commit"
+permissions = ["spawn"]

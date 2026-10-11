@@ -59,6 +59,7 @@ add_executable(mcode_tests
     test_hooks.cxx
     test_hooks_safety.cxx
     test_api_surface.cxx
+    test_api_wiring.cxx
     test_skills.cxx
     test_instruct_chain.cxx
     test_mcp.cxx
@@ -102,6 +103,7 @@ target_link_libraries(mcode_tests
 target_compile_definitions(mcode_tests PRIVATE
     MCODE_FIXTURE_REPO="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/fixture-repo"
     MCODE_FIXTURE_EXTENSIONS="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/extensions"
+    MCODE_WIRING_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/wiring"
     MCODE_EXTENSIONS_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/../extensions"
     MCODE_MCP_ECHO="$<TARGET_FILE:mcp_echo>")
 

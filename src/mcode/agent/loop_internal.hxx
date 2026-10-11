@@ -13,6 +13,22 @@ namespace mcode::loop_internal {
 	inline constexpr std::string_view NEAR_BUDGET_NOTE =
 		"budget nearly exhausted - wrap up or report blockers";
 
+	// Recall first, precision second: a generic summary loses exactly the tokens a
+	// coding agent needs most, so the demand is explicit.
+	inline constexpr std::string_view COMPACTION_SUMMARY_PROMPT =
+		"You compress the earlier part of a coding session so it can be dropped from"
+		" the context window. The agent keeps working from your summary alone, so"
+		" losing a detail it needs later is the failure mode to avoid.\n\n"
+		"Keep, verbatim where they exist:\n"
+		"- file paths, and what changed in each\n"
+		"- symbol, type and function names\n"
+		"- exact error messages and command lines\n"
+		"- decisions taken and the reason, including approaches rejected and why\n"
+		"- unresolved questions, failing tests, and what was about to be tried\n\n"
+		"Drop: narration, restated tool output, and anything already visible in the"
+		" files. Write it as terse notes, not prose. Never invent a path or an"
+		" identifier that was not in the transcript.";
+
 	// Arguments cut off by the output limit are a valid prefix of a call that was
 	// never finished, so no repair can recover them.
 	inline constexpr std::string_view TRUNCATION_STOP_REASONS[] = {

@@ -97,6 +97,14 @@ namespace mcode::ext {
 
 		// fires every loaded extension's due timers; the host drives it once per loop step.
 		auto pump_timers( ) -> void;
+
+		// runs every extension's queued `mcode.defer` callbacks, on the same step.
+		auto pump_deferred( ) -> void;
+
+		// Runs a command `commands` holds on the surface that registered it. The
+		// registry knows the owner, so the caller does not have to track it.
+		[[nodiscard]] auto invoke_command( const command_registry& commands,
+			std::string_view name, std::string_view arguments ) -> result< std::string >;
 	};
 
 
@@ -147,6 +155,44 @@ namespace mcode::ext {
 		mcode::workspace* space = nullptr;
 		tools::session_reads* reads = nullptr;
 		perm::permission_engine* permissions = nullptr;
+
+		// Omitted, `mcode.cmd.register` raises rather than degrading.
+		command_registry* commands = nullptr;
+
+		// The run's own state, so `session.snapshot` reports the session rather than
+		// whatever the extension believes it knows.
+		const std::function< session_state( ) >* session_state = nullptr;
+
+		// The harness owns the gated client; an extension cannot construct its own.
+		mcode::net::http_client* http_client = nullptr;
+		const std::function< search_result( const std::string& ) >* web_searcher = nullptr;
+
+		const std::function< void( const std::string&, const std::string&,
+			const std::string& ) >* notifier = nullptr;
+
+		const std::function< void( const std::string&, const std::string& ) >*
+			instruction_sink = nullptr;
+
+		const std::function< result< std::uint64_t >( const mcode::skills::skill_entry&,
+			std::string_view ) >* skill_sink = nullptr;
+
+		// Omitted, `mcode.task` returns nil rather than raising: the `task` tool is a
+		// bundled extension and may be absent, unlike the command registry.
+		const std::function< result< mcode::subagent_report >( const mcode::subagent_spec& ) >*
+			subagent_runner = nullptr;
+
+		// Omitted, `mcode.bash` returns nil: an extension that does not declare the
+		// `spawn` permission has no way to run a command.
+		const std::function< result< std::string >( const std::string&, std::int64_t ) >*
+			bash_runner = nullptr;
+
+		// Omitted, `mcode.plan.set` returns nil: the `todo` tool is a bundled
+		// extension and may be absent.
+		const std::function< void( std::string_view ) >* plan_sink = nullptr;
+
+		// Omitted, `mcode.fetch` returns nil: the `web` extension is not load-bearing.
+		const std::function< result< fetch_result >( const std::string&, std::int64_t ) >*
+			fetch_runner = nullptr;
 	};
 
 	[[nodiscard]] auto default_register_api( tool_registry& registry,

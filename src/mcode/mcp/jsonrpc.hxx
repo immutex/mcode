@@ -24,6 +24,11 @@ namespace mcode::mcp::jsonrpc {
 	inline constexpr std::string_view INITIALIZED_NOTIFICATION = "notifications/initialized";
 	inline constexpr std::string_view TOOLS_LIST = "tools/list";
 	inline constexpr std::string_view TOOLS_CALL = "tools/call";
+	inline constexpr std::string_view RESOURCES_LIST = "resources/list";
+	inline constexpr std::string_view RESOURCES_READ = "resources/read";
+	inline constexpr std::string_view RESOURCES_TEMPLATES_LIST = "resources/templates/list";
+	inline constexpr std::string_view PROMPTS_LIST = "prompts/list";
+	inline constexpr std::string_view PROMPTS_GET = "prompts/get";
 	inline constexpr std::string_view PING = "ping";
 	inline constexpr std::string_view CANCELLED_NOTIFICATION = "notifications/cancelled";
 

@@ -1,5 +1,6 @@
 #include "mcode/agent/loop.hxx"
 #include "mcode/cli/exec.hxx"
+#include "mcode/cli/active_loop.hxx"
 #include "mcode/cli/approval.hxx"
 #include "mcode/cli/slash.hxx"
 #include "mcode/cli/repl_events.hxx"
@@ -110,6 +111,8 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 	}
 
 	auto& loop = *built;
+	mcode::cli::set_active_loop( &loop );
+
 	auto turn = mcode::cli::session{ loop };
 
 	// Esc or Ctrl+C: the delta subscriber drops the rest of the response, and the
@@ -137,7 +140,9 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 
 	auto exiting = false;
 
-	const auto& commands = mcode::cli::builtin_commands( );
+	const auto* session_rows = session_commands( );
+	const auto& commands = session_rows != nullptr
+		? *session_rows : mcode::cli::builtin_commands( );
 	auto palette = mcode::tui::slash_palette{ };
 
 	// Owned here, not by the controller: `list_sessions` returns a fresh vector, so
@@ -421,8 +426,14 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 		auto prompt = *submitted;
 
 		if ( match.is_command ) {
+			const auto invoke_extension = mcode::cli::extension_command_invoker{
+				[ ]( const std::string_view name, const std::string_view arguments ) {
+					return session_invoke_command( name, arguments );
+				} };
+
 			const auto result = mcode::cli::run_command( match, loop, commands,
-				session_extensions( ), &mention_root );
+				session_extensions( ), &mention_root, &invoke_extension,
+				session_mcp_servers( ) );
 
 			if ( result.should_exit ) {
 				exiting = true;

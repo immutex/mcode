@@ -2,6 +2,7 @@
 
 #include "mcode/agent/message_json.hxx"
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <string>
@@ -93,6 +94,14 @@ namespace mcode {
 		const auto captured = snapshots_->capture( workspace_root_, absolute, snapshot_run_id_ );
 
 		if ( captured ) {
+			// The pinned block names what this run changed, so a compaction keeps it.
+			const auto recorded = std::filesystem::relative( absolute, workspace_root_ )
+				.generic_string( );
+
+			if ( std::ranges::find( modified_files_, recorded ) == modified_files_.end( ) ) {
+				modified_files_.push_back( recorded );
+			}
+
 			return;
 		}
 

@@ -6,7 +6,9 @@
 #include "mcode/agent/loop.hxx"
 #include "mcode/cli/exec.hxx"
 #include "mcode/ext/loader.hxx"
+#include "mcode/mcp/connect.hxx"
 #include "mcode/perm/approval.hxx"
+#include "mcode/tui/palette.hxx"
 
 namespace mcode::cli {
 
@@ -28,6 +30,19 @@ namespace mcode::cli {
 
 // Null when no session was built; lives on the session's parts, not the loop.
 [[nodiscard]] auto session_extensions( ) -> const mcode::ext::load_report*;
+
+// Builtins plus every command the loaded extensions registered. Owned by the
+// session, so a palette pointer into it stays valid across a refresh.
+[[nodiscard]] auto session_commands( ) -> const std::vector< mcode::tui::slash_command >*;
+
+// Runs a command an extension registered. A name no loaded extension owns is an
+// error, never a silent no-op.
+[[nodiscard]] auto session_invoke_command( std::string_view name, std::string_view arguments )
+	-> mcode::result< std::string >;
+
+// The connected MCP servers, so `/prompt` can reach their prompts. Null when no
+// session was built.
+[[nodiscard]] auto session_mcp_servers( ) -> const mcode::mcp::server_set*;
 
 // An empty id means the workspace's newest session. In place, because the parts
 // are process-static and a second build is refused. Only between turns.

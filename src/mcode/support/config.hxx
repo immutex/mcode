@@ -50,6 +50,7 @@ namespace mcode::config {
 		std::string_view{ "models" },
 		std::string_view{ "verify" },
 		std::string_view{ "egress" },
+		std::string_view{ "web" },
 	};
 
 	struct layer {

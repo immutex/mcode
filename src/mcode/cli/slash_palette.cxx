@@ -78,6 +78,7 @@ namespace mcode::cli {
 			{ "resume", "Reopen a session: /resume picks one, /resume <id> names it" },
 			{ "doctor", "Report what is loaded: model, tools, context, instructions" },
 			{ "mention", "Pick a workspace file to mention as @path" },
+			{ "prompt", "List an MCP server's prompts, or fill one: /prompt <name> [json args]" },
 			{ "exit", "End the session" },
 		};
 

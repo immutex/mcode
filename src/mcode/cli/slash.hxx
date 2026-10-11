@@ -9,6 +9,7 @@
 #include "mcode/agent/loop.hxx"
 #include "mcode/cli/exec.hxx"
 #include "mcode/ext/loader.hxx"
+#include "mcode/mcp/connect.hxx"
 #include "mcode/model/types.hxx"
 #include "mcode/tui/mention.hxx"
 #include "mcode/tui/palette.hxx"
@@ -127,11 +128,29 @@ namespace mcode::cli {
 	// an extension.
 	[[nodiscard]] auto extensions_text( const mcode::ext::load_report& report ) -> std::string;
 
+	// `/prompt`: lists what the connected servers offer, or fills one and hands the
+	// text back for the REPL to submit as the next turn. `submit` is set only on the
+	// fill path, so the caller can tell the two apart without a second call.
+	[[nodiscard]] auto prompt_text( const mcode::mcp::server_set* servers,
+		std::string_view arguments, std::optional< std::string >& submit ) -> std::string;
+
+	// Runs a command an extension registered. The REPL supplies it so this file stays
+	// free of the extension loader; null means no extensions are loaded.
+	using extension_command_invoker = std::function< result< std::string >(
+		std::string_view name, std::string_view arguments ) >;
+
+	// The builtin table plus every command the loaded extensions registered, so the
+	// palette lists them and `/help` names them.
+	[[nodiscard]] auto all_commands( const mcode::ext::command_registry& extensions )
+		-> std::vector< mcode::tui::slash_command >;
+
 	// May be null when no session was built; `/extensions` reports that rather than an
 	// empty list, because "nothing loaded" and "nothing to read" are different answers.
 	[[nodiscard]] auto run_command( const command_match& match, const agent_loop& loop,
 		const std::vector< mcode::tui::slash_command >& commands,
 		const mcode::ext::load_report* extensions = nullptr,
-		const std::filesystem::path* workspace = nullptr ) -> command_result;
+		const std::filesystem::path* workspace = nullptr,
+		const extension_command_invoker* invoke_extension = nullptr,
+		const mcode::mcp::server_set* mcp_servers = nullptr ) -> command_result;
 
 }

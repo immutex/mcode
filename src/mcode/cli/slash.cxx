@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 
+#include "mcode/ext/api_cmd.hxx"
 #include "mcode/fs/snapshot.hxx"
 #include "mcode/fs/workspace.hxx"
 #include "mcode/memory/ledger.hxx"
@@ -64,6 +65,9 @@ namespace mcode::cli {
 			out += '\n';
 		}
 
+		// Splits `/prompt <name> [json]` into the name and the argument object. The
+		// rest of the line is taken verbatim as JSON: re-quoting it here would make
+		// one argument shape impossible to express.
 		[[nodiscard]] auto help_text( const std::vector< mcode::tui::slash_command >& commands )
 			-> std::string {
 			auto out = std::string{ };
@@ -411,11 +415,32 @@ namespace mcode::cli {
 		return out;
 	}
 
-auto run_command( const command_match& match, const agent_loop& loop,
+	auto all_commands( const mcode::ext::command_registry& extensions )
+		-> std::vector< mcode::tui::slash_command > {
+		auto rows = builtin_commands( );
+
+		for ( const auto& command : extensions.all( ) ) {
+			// A builtin wins a name collision: the extension cannot shadow `/exit`.
+			const auto clashes = std::any_of( rows.begin( ), rows.end( ),
+				[ &command ]( const mcode::tui::slash_command& existing ) {
+					return existing.name == command.name;
+				} );
+
+			if ( !clashes ) {
+				rows.push_back( mcode::tui::slash_command{ command.name, command.description } );
+			}
+		}
+
+		return rows;
+	}
+
+	auto run_command( const command_match& match, const agent_loop& loop,
 		const std::vector< mcode::tui::slash_command >& commands,
 		const mcode::ext::load_report* extensions,
-		const std::filesystem::path* workspace ) -> command_result {
-	auto result = command_result{ };
+		const std::filesystem::path* workspace,
+		const extension_command_invoker* invoke_extension,
+		const mcode::mcp::server_set* mcp_servers ) -> command_result {
+		auto result = command_result{ };
 
 		if ( match.entry == nullptr ) {
 			result.output = "unknown command: /" + std::string{ match.name } +
@@ -493,6 +518,16 @@ auto run_command( const command_match& match, const agent_loop& loop,
 			result.output = doctor_text( loop );
 		} else if ( match.name == "mention" ) {
 			result.open_mention = true;
+		} else if ( match.name == "prompt" ) {
+			result.output = prompt_text( mcp_servers, match.arguments,
+				result.submit_prompt );
+		} else if ( match.name == "help" ) {
+			result.output = help_text( commands );
+		} else if ( invoke_extension != nullptr ) {
+			// In the table but not builtin, so an extension registered it.
+			const auto invoked = ( *invoke_extension )( match.name, match.arguments );
+
+			result.output = invoked ? *invoked : invoked.error( ).msg;
 		} else {
 			result.output = help_text( commands );
 		}

@@ -52,6 +52,8 @@ namespace mcode {
 		: registry_( deps.registry ), client_( deps.client ),
 		log_( deps.log ), bus_( deps.bus ), budget_( deps.budget ),
 		model_name_( deps.model_name ), caps_( deps.caps ),
+		plan_tier_( std::move( deps.plan_tier ) ), act_tier_( std::move( deps.act_tier ) ),
+		side_tier_( std::move( deps.side_tier ) ),
 		provider_( deps.provider ), api_key_( deps.api_key ),
 		workspace_root_( deps.workspace_root ),
 		platform_name_( deps.platform_name ),
@@ -59,7 +61,10 @@ namespace mcode {
 		permissions_( deps.permissions ),
 		instruction_chain_( deps.instruction_chain ),
 		skill_index_( deps.skill_index ),
-		pump_timers_( std::move( deps.pump_timers ) ) {
+		pump_timers_( std::move( deps.pump_timers ) ),
+		pump_deferred_( std::move( deps.pump_deferred ) ) {
+		default_tier_ = tier_model{ .name = model_name_, .caps = caps_, .configured = true };
+
 		if ( registry_ == nullptr ) {
 			registry_ = &owned_registry_;
 		}
@@ -94,93 +99,9 @@ namespace mcode {
 		bus_->publish( std::move( value ) );
 	}
 
-	auto agent_loop::register_handler( const std::string name, tool_handler handler ) -> void {
-		handlers_.insert_or_assign( std::move( name ), std::move( handler ) );
-	}
-
-	auto agent_loop::run_end_payload( const std::string_view reason ) const -> std::string {
-		auto summary = std::string{ "{\"goal\":\"" };
-		json::append_escaped( summary, user_task_ );
-		summary += "\",\"actions\":";
-		summary += std::to_string( budget_.steps_used.load( ) );
-		summary += ",\"last_failure\":\"";
-		json::append_escaped( summary, last_failure_ );
-		summary += "\",\"remaining_steps\":";
-		summary += std::to_string( budget_.max_steps > budget_.steps_used.load( )
-				? budget_.max_steps - budget_.steps_used.load( )
-				: 0 );
-
-		// No leading quote: the previous field is a number, so a `"` here would close
-		// a string that was never open.
-		summary += ",\"remaining_usd\":";
-		summary += std::to_string( budget_.max_usd > budget_.usd_used.load( )
-				? budget_.max_usd - budget_.usd_used.load( )
-				: 0.0 );
-		summary += ",\"input_tokens\":";
-		summary += std::to_string( run_usage_.input );
-		summary += ",\"output_tokens\":";
-		summary += std::to_string( run_usage_.output );
-		summary += ",\"cached_read_tokens\":";
-		summary += std::to_string( run_usage_.cached_read );
-		summary += ",\"cache_write_tokens\":";
-		summary += std::to_string( run_usage_.cache_write );
-		summary += ",\"reasoning_tokens\":";
-		summary += std::to_string( run_usage_.reasoning );
-		summary += ",\"state\":\"";
-		summary += to_string( state_ );
-		summary += "\",\"verification\":\"";
-		summary += to_string( verdict_ );
-
-		if ( !verification_detail_.empty( ) ) {
-			summary += "\",\"verification_detail\":\"";
-			json::append_escaped( summary, verification_detail_ );
-		}
-
-		summary += "\",\"reason\":\"";
-		json::append_escaped( summary, reason );
-
-		summary += "\"}";
-
-		return summary;
-	}
-
-	auto agent_loop::finish_run( const loop_state terminal, const std::string_view reason )
-		-> void {
-		state_ = terminal;
-		end_reason_ = std::string{ reason };
-
-		auto summary = run_end_payload( reason );
-
-		log_->append( "run.end", summary );
-
-		// The bus has a kind for a failed run that nothing else publishes.
-		if ( terminal == loop_state::failed ) {
-			publish( events::kind::error, std::move( summary ) );
-		}
-	}
-
-	auto agent_loop::seed_history( std::vector< model::message > restored ) -> void {
-		history_ = std::move( restored );
-	}
-
-	auto agent_loop::reset_session( std::vector< model::message > restored ) -> void {
-		history_ = std::move( restored );
-
-		budget_.steps_used.store( 0 );
-		budget_.tokens_used.store( 0 );
-		budget_.usd_used.store( 0.0 );
-
-		mint_run_id( );
-
-		state_ = loop_state::idle;
-	}
-
-	auto agent_loop::approval_mode( ) const noexcept -> std::string_view {
-		return permissions_ != nullptr ? permissions_->approval_mode( ) : std::string_view{ };
-	}
-
 	auto agent_loop::run( const std::string_view user_task ) -> result< turn_outcome > {
 		user_task_ = std::string{ user_task };
+		task_ = std::string{ user_task };
 		visited_.clear( );
 		pending_calls_.clear( );
 		plan_answered_ = false;
@@ -203,6 +124,10 @@ namespace mcode {
 		previous_texts_.clear( );
 		repetition_steers_ = 0;
 		last_response_text_.clear( );
+
+		// A fresh run restates the goal; the plan survives, because it is session state.
+		modified_files_.clear( );
+		refresh_pinned_state( );
 
 		// A fresh capture group per run, so /undo undoes this run and not the previous one.
 		mint_run_id( );
@@ -272,6 +197,15 @@ namespace mcode {
 				pump_timers_( );
 			}
 
+			if ( pump_deferred_ ) {
+				pump_deferred_( );
+			}
+
+			// Every N steps: cheap, and it is what keeps a long plan from drifting.
+			if ( budget_.steps_used.load( ) >= last_recitation_step_ + RECITATION_INTERVAL_STEPS ) {
+				refresh_pinned_state( );
+			}
+
 			visited_.push_back( state_ );
 
 			switch ( state_ ) {
@@ -282,7 +216,7 @@ namespace mcode {
 						break;
 					}
 
-					auto planned = request_and_fold( model::effort::high );
+					auto planned = request_and_fold( model::effort::high, model_tier::plan );
 
 					if ( !planned ) {
 						finish_run( loop_state::failed, planned.error( ).msg );
@@ -325,7 +259,7 @@ namespace mcode {
 						break;
 					}
 
-					auto acted = request_and_fold( model::effort::medium );
+					auto acted = request_and_fold( model::effort::medium, model_tier::act );
 
 					if ( !acted ) {
 						finish_run( loop_state::handoff, acted.error( ).msg );
@@ -498,7 +432,7 @@ namespace mcode {
 					++count;
 					++total_reflections_;
 
-					auto reflected = request_and_fold( model::effort::high );
+					auto reflected = request_and_fold( model::effort::high, model_tier::plan );
 
 					if ( !reflected ) {
 						finish_run( loop_state::handoff, reflected.error( ).msg );
@@ -534,7 +468,7 @@ namespace mcode {
 
 					++replan_count_;
 
-					auto replanned = request_and_fold( model::effort::high );
+					auto replanned = request_and_fold( model::effort::high, model_tier::plan );
 
 					if ( !replanned ) {
 						finish_run( loop_state::handoff, replanned.error( ).msg );

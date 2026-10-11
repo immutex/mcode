@@ -79,7 +79,11 @@ src/mcp/
 - Crash detection: EOF on stdout or process handle signaled → mark failed, reject all pending calls with a transport error, schedule restart with backoff (1s/2s/4s/8s/16s, cap, give up after N → surface to user). On restart: re-`initialize`, re-`tools/list`, re-subscribe resources. Do NOT copy Claude Code's stdio-excluded-from-reconnect behavior (#43177).
 - Graceful shutdown: close stdin, wait ≤5s, terminate, wait ≤2s, kill. On Windows use Job Objects (kill-on-close) so orphaned children die with mcode.
 - Timeouts: per-request default 30s for tools/list-type calls, 120s for tools/call (configurable); reset-on-progress-notification allowed but absolute max always enforced (spec-endorsed pattern). Timeout → send `notifications/cancelled`, stop waiting, ignore late response.
-- `tools/list` pagination: follow `nextCursor` until absent.
+- `tools/list` pagination: follow `nextCursor` until absent. `resources/list` and `prompts/list` use the same loop, the same page cap and the same non-advancing-cursor refusal: a server that loops must not block startup once per method.
+
+**Resources and prompts (as of 0.1.0).** The client speaks all four methods. A resource is not a tool — the server names it and the client reads it by URI — so the model needs a way to see the list. One synthetic `<server>__resources` tool is registered **only when the server declares the capability**, taking an optional `uri`: absent, it lists; present, it reads. That keeps the always-loaded schema flat however many resources a server has, and it means a server with no resources gets no entry that could only fail. Registration happens in the supervisor's ready callback, so a restart re-registers it rather than losing it.
+
+`prompts/*` is served at the client level and is not yet surfaced as slash commands; that is the remaining half of the feature.
 - stderr: capture to a ring buffer per server; surface in a `/mcp`-style status view; never treat stderr as error (2025-11-25 clarified it's general logging).
 - Elicitation handler: modal prompt rendering the flat schema; decline/cancel must be one keypress. Sampling handler: route through mcode's own model layer with user-visible approval; treat `modelPreferences.hints` as advisory substrings.
 

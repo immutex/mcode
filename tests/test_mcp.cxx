@@ -179,6 +179,63 @@ TEST_CASE( "the handshake completes and lists two tools", "[mcp]" ) {
 	CHECK_FALSE( ( *tools )[ 0 ].schema_json.empty( ) );
 }
 
+TEST_CASE( "a server that declares resources reports the capability", "[mcp]" ) {
+	auto [ wire, session_client ] = handshaked_client( "resources" );
+
+	// The flag is what gates the tool registration, so a false here means a server's
+	// resources are unreachable even though it serves them.
+	CHECK( session_client->capabilities( ).resources );
+	CHECK( session_client->capabilities( ).prompts );
+}
+
+TEST_CASE( "resources list and read round-trip", "[mcp]" ) {
+	auto [ wire, session_client ] = handshaked_client( "resources" );
+
+	auto listed = session_client->list_resources( );
+	REQUIRE( listed );
+	REQUIRE( listed->size( ) == 1 );
+	CHECK( ( *listed )[ 0 ].uri == "echo://notes" );
+	CHECK( ( *listed )[ 0 ].name == "notes" );
+	CHECK( ( *listed )[ 0 ].mime_type == "text/plain" );
+
+	auto body = session_client->read_resource( "echo://notes" );
+	REQUIRE( body );
+	CHECK( body->text == "the note body" );
+	CHECK( body->mime_type == "text/plain" );
+}
+
+TEST_CASE( "prompts list and get round-trip", "[mcp]" ) {
+	auto [ wire, session_client ] = handshaked_client( "resources" );
+
+	auto listed = session_client->list_prompts( );
+	REQUIRE( listed );
+	REQUIRE( listed->size( ) == 1 );
+	CHECK( ( *listed )[ 0 ].name == "greet" );
+	REQUIRE( ( *listed )[ 0 ].arguments.size( ) == 1 );
+	CHECK( ( *listed )[ 0 ].arguments[ 0 ].name == "who" );
+	CHECK( ( *listed )[ 0 ].arguments[ 0 ].required );
+
+	auto filled = session_client->get_prompt( "greet", R"({"who":"world"})" );
+	REQUIRE( filled );
+	CHECK( filled->text == "hello" );
+}
+
+TEST_CASE( "a server with no resources capability registers no resource tool", "[mcp]" ) {
+	auto registry = tool_registry{ };
+	auto mcp_source = source{ registry };
+
+	auto [ wire, session_client ] = handshaked_client( "normal" );
+
+	// The same listing the production path performs, with the capability the server
+	// actually declared: a server without resources gets no entry that could fail.
+	REQUIRE( mcp_source.register_server( "echo", std::vector< server_tool >{ },
+		session_client->capabilities( ).resources ) );
+	CHECK( registry.find( "mcp__echo__resources" ) == nullptr );
+
+	REQUIRE( mcp_source.register_server( "echo", std::vector< server_tool >{ }, true ) );
+	CHECK( registry.find( "mcp__echo__resources" ) != nullptr );
+}
+
 TEST_CASE( "a banner on stdout does not corrupt the stream", "[mcp]" ) {
 	auto [ wire, session_client ] = handshaked_client( "banner" );
 
@@ -243,8 +300,10 @@ TEST_CASE( "a crashed server is restarted and its tools come back", "[mcp][super
 	auto saw_ready = std::vector< std::string >{ };
 
 	auto board = supervisor( config, supervisor::handlers{
-		[ & ]( const std::vector< server_tool >& tools ) {
-			REQUIRE( mcp_source.register_server( config.name, tools ) );
+		[ & ]( const std::vector< server_tool >& tools,
+			const server_capabilities& capabilities ) {
+			REQUIRE( mcp_source.register_server( config.name, tools,
+				capabilities.resources ) );
 			saw_ready.push_back( "ready" );
 		},
 		[ & ]( const std::string& reason ) {

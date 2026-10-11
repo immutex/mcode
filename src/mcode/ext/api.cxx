@@ -1,4 +1,5 @@
 #include "mcode/ext/api.hxx"
+#include "mcode/ext/api_entries.hxx"
 #include "mcode/ext/api_cfg.hxx"
 #include "mcode/ext/api_cmd.hxx"
 #include "mcode/ext/api_context.hxx"
@@ -319,122 +320,6 @@ namespace mcode::ext {
 		return 1;
 	}
 
-	namespace {
-
-		auto lua_register_tool( lua_State* state ) -> int {
-			return surface_from( state )->handle_register( state );
-		}
-
-		auto lua_unregister_tool( lua_State* state ) -> int {
-			return surface_from( state )->handle_unregister( state );
-		}
-
-		auto lua_log_debug( lua_State* state ) -> int {
-			return surface_from( state )->handle_log( state, "debug" );
-		}
-
-		auto lua_log_info( lua_State* state ) -> int {
-			return surface_from( state )->handle_log( state, "info" );
-		}
-
-		auto lua_log_warn( lua_State* state ) -> int {
-			return surface_from( state )->handle_log( state, "warn" );
-		}
-
-		auto lua_log_error( lua_State* state ) -> int {
-			return surface_from( state )->handle_log( state, "error" );
-		}
-
-		auto lua_register_provider( lua_State* state ) -> int {
-			return surface_from( state )->handle_register_provider( state );
-		}
-
-		auto lua_on( lua_State* state ) -> int {
-			return surface_from( state )->handle_on( state );
-		}
-
-		auto lua_off( lua_State* state ) -> int {
-			return surface_from( state )->handle_off( state );
-		}
-
-		auto lua_emit( lua_State* state ) -> int {
-			return surface_from( state )->handle_emit( state );
-		}
-
-		auto lua_skill_read( lua_State* state ) -> int {
-			return surface_from( state )->handle_skill_read( state );
-		}
-
-		auto lua_memory_search( lua_State* state ) -> int {
-			return handle_memory_search( state );
-		}
-
-		auto lua_skill_list( lua_State* state ) -> int {
-			return surface_from( state )->handle_skill_list( state );
-		}
-
-		auto lua_skill_register( lua_State* state ) -> int {
-			return surface_from( state )->handle_skill_register( state );
-		}
-
-		auto lua_mcp_register( lua_State* state ) -> int {
-			return surface_from( state )->handle_mcp_register( state );
-		}
-
-		auto lua_fs_read( lua_State* state ) -> int {
-			return handle_fs_read( state );
-		}
-
-		auto lua_fs_write( lua_State* state ) -> int {
-			return handle_fs_write( state );
-		}
-
-		auto lua_cfg_get( lua_State* state ) -> int {
-			return handle_cfg_get( state );
-		}
-
-		auto lua_session_snapshot( lua_State* state ) -> int {
-			return handle_session_snapshot( state );
-		}
-
-		auto lua_session_fork( lua_State* state ) -> int {
-			return handle_session_fork( state );
-		}
-
-		auto lua_defer( lua_State* state ) -> int {
-			return handle_defer( state );
-		}
-
-		auto lua_notify( lua_State* state ) -> int {
-			return handle_notify( state );
-		}
-
-		auto lua_net_get( lua_State* state ) -> int {
-			return handle_net_get( state );
-		}
-
-		auto lua_net_search( lua_State* state ) -> int {
-			return handle_net_search( state );
-		}
-
-		auto lua_context_add_instructions( lua_State* state ) -> int {
-			return handle_context_add_instructions( state );
-		}
-
-		auto lua_cmd_register( lua_State* state ) -> int {
-			return handle_cmd_register( state );
-		}
-
-		auto lua_timer_at( lua_State* state ) -> int {
-			return handle_timer_at( state );
-		}
-
-		auto lua_timer_every( lua_State* state ) -> int {
-			return handle_timer_every( state );
-		}
-
-	}
-
 	auto api_surface::install( const install_request& request ) -> status {
 		auto& host = request.host;
 
@@ -474,10 +359,6 @@ namespace mcode::ext {
 					const std::string& ) > >( *request.notifier );
 		}
 
-		if ( request.deferred ) {
-			deferred_ = std::make_unique< std::vector< int > >( *request.deferred );
-		}
-
 		if ( request.instruction_sink ) {
 			instruction_sink_ = std::make_unique<
 				std::function< void( const std::string&, const std::string& ) > >(
@@ -488,6 +369,28 @@ namespace mcode::ext {
 			skill_sink_ = std::make_unique<
 				std::function< result< std::uint64_t >( const mcode::skills::skill_entry&,
 					std::string_view ) > >( *request.skill_sink );
+		}
+
+		if ( request.subagent_runner ) {
+			subagent_runner_ = std::make_unique<
+				std::function< result< subagent_report >( const mcode::subagent_spec& ) > >(
+				*request.subagent_runner );
+		}
+
+		if ( request.bash_runner ) {
+			bash_runner_ = std::make_unique<
+				std::function< result< std::string >( const std::string&, std::int64_t ) > >(
+				*request.bash_runner );
+		}
+
+		if ( request.plan_sink ) {
+			plan_sink_ = std::make_unique<
+				std::function< void( std::string_view ) > >( *request.plan_sink );
+		}
+
+		if ( request.fetch_runner ) {
+			fetch_runner_ = std::make_unique< std::function< result< fetch_result >(
+				const std::string&, std::int64_t ) > >( *request.fetch_runner );
 		}
 
 		timers_ = std::make_unique< timer_registry >( timer_registry::actions{
@@ -515,41 +418,7 @@ namespace mcode::ext {
 			return api_version;
 		}
 
-		const struct {
-			const char* path;
-			lua_CFunction function;
-		} ENTRIES[] = {
-			{ "tool.register", lua_register_tool },
-			{ "tool.unregister", lua_unregister_tool },
-			{ "model.register", lua_register_provider },
-			{ "on", lua_on },
-			{ "off", lua_off },
-			{ "emit", lua_emit },
-			{ "log.debug", lua_log_debug },
-			{ "log.info", lua_log_info },
-			{ "log.warn", lua_log_warn },
-			{ "log.error", lua_log_error },
-			{ "skill.read", lua_skill_read },
-			{ "memory.search", lua_memory_search },
-			{ "skill.list", lua_skill_list },
-			{ "skill.register", lua_skill_register },
-			{ "mcp.register", lua_mcp_register },
-			{ "fs.read", lua_fs_read },
-			{ "fs.write", lua_fs_write },
-			{ "cfg.get", lua_cfg_get },
-			{ "cmd.register", lua_cmd_register },
-			{ "timer.at", lua_timer_at },
-			{ "timer.every", lua_timer_every },
-			{ "session.snapshot", lua_session_snapshot },
-			{ "session.fork", lua_session_fork },
-			{ "defer", lua_defer },
-			{ "notify", lua_notify },
-			{ "net.get", lua_net_get },
-			{ "net.search", lua_net_search },
-			{ "context.add_instructions", lua_context_add_instructions },
-		};
-
-		for ( const auto& entry : ENTRIES ) {
+		for ( const auto& entry : mcode::ext::api_entries( ) ) {
 			if ( auto registered = host.register_raw_function( entry.path, entry.function, this );
 				!registered ) {
 				return registered;

@@ -10,14 +10,6 @@ namespace mcode::mcp {
 
 	namespace {
 
-		auto json_escape( const std::string_view text ) -> std::string {
-			auto out = std::string{ "\"" };
-			json::append_escaped( out, text );
-			out.push_back( '"' );
-
-			return out;
-		}
-
 		auto initialize_params_json( ) -> std::string {
 			auto caps = json::node::make_object( );
 			caps.members[ "tools" ] = json::node::make_object( );
@@ -132,6 +124,18 @@ namespace mcode::mcp {
 			return page;
 		}
 
+	}
+
+	namespace detail {
+
+		auto json_escape( const std::string_view text ) -> std::string {
+			auto out = std::string{ "\"" };
+			json::append_escaped( out, text );
+			out.push_back( '"' );
+
+			return out;
+		}
+
 		auto flatten_content( const std::string_view result_json ) -> result< std::string > {
 			auto parsed = json::document::parse( result_json );
 
@@ -147,21 +151,78 @@ namespace mcode::mcp {
 
 			auto out = std::string{ };
 
-			if ( const auto* content = root->member( "content" ); content != nullptr &&
+			auto append_text = [ &out ]( const json::node& block ) {
+				if ( const auto* text = block.member( "text" ); text != nullptr &&
+					text->type == json::node::kind::string ) {
+					if ( !out.empty( ) ) {
+						out.push_back( '\n' );
+					}
+
+					out.append( text->text );
+				}
+			};
+
+			// Three shapes, one flattening: `tools/call` answers with `content`,
+			// `resources/read` with `contents`, and `prompts/get` with `messages`,
+			// where each message carries its own `content` object.
+			if ( const auto* messages = root->member( "messages" ); messages != nullptr &&
+				messages->type == json::node::kind::array ) {
+				for ( const auto& message : messages->items ) {
+					if ( const auto* block = message.member( "content" );
+						block != nullptr ) {
+						append_text( *block );
+					}
+				}
+
+				return out;
+			}
+
+			const auto* content = root->member( "content" );
+
+			if ( content == nullptr ) {
+				content = root->member( "contents" );
+			}
+
+			if ( content != nullptr &&
 				content->type == json::node::kind::array ) {
 				for ( const auto& block : content->items ) {
-					if ( const auto* text = block.member( "text" ); text != nullptr &&
-						text->type == json::node::kind::string ) {
-						if ( !out.empty( ) ) {
-							out.push_back( '\n' );
-						}
-
-						out.append( text->text );
-					}
+					append_text( block );
 				}
 			}
 
 			return out;
+		}
+
+		auto content_mime_type( const std::string_view result_json ) -> std::string {
+			auto parsed = json::document::parse( result_json );
+
+			if ( !parsed ) {
+				return { };
+			}
+
+			auto root = parsed->root_node( );
+
+			if ( !root ) {
+				return { };
+			}
+
+			const auto* content = root->member( "content" );
+
+			if ( content == nullptr ) {
+				content = root->member( "contents" );
+			}
+
+			if ( content != nullptr &&
+				content->type == json::node::kind::array ) {
+				for ( const auto& block : content->items ) {
+					if ( const auto* mime = block.member( "mimeType" ); mime != nullptr &&
+						mime->type == json::node::kind::string ) {
+						return mime->text;
+					}
+				}
+			}
+
+			return { };
 		}
 
 	}
@@ -417,8 +478,18 @@ namespace mcode::mcp {
 			caps.instructions = *instructions;
 		}
 
+		// A declared capability is what gates the extra tool, so a server that omits
+		// the member contributes nothing rather than an entry that could only fail.
 		if ( parsed->has_pointer( "/capabilities/tools" ) ) {
 			caps.tools = true;
+		}
+
+		if ( parsed->has_pointer( "/capabilities/resources" ) ) {
+			caps.resources = true;
+		}
+
+		if ( parsed->has_pointer( "/capabilities/prompts" ) ) {
+			caps.prompts = true;
 		}
 
 		auto notified = send_notification( jsonrpc::INITIALIZED_NOTIFICATION, "" );
@@ -461,7 +532,7 @@ namespace mcode::mcp {
 				}
 
 				previous = *cursor;
-				params = R"({"cursor":)" + json_escape( *cursor ) + "}";
+				params = R"({"cursor":)" + detail::json_escape( *cursor ) + "}";
 			}
 
 			auto body = call( jsonrpc::TOOLS_LIST, params, DEFAULT_LIST_TIMEOUT );
@@ -494,7 +565,7 @@ namespace mcode::mcp {
 		const std::string_view arguments_json,
 		const std::chrono::milliseconds timeout ) -> result< call_outcome > {
 		auto params = std::string{ R"({"name":)" };
-		params += json_escape( tool_name );
+		params += detail::json_escape( tool_name );
 		params += R"(,"arguments":)";
 		params += arguments_json.empty( ) ? std::string{ "{}" } : std::string{ arguments_json };
 		params += "}";
@@ -518,7 +589,7 @@ namespace mcode::mcp {
 			outcome.is_error = *flagged;
 		}
 
-		if ( const auto text = flatten_content( outcome.result_json ) ) {
+		if ( const auto text = detail::flatten_content( outcome.result_json ) ) {
 			outcome.content = std::move( *text );
 		}
 

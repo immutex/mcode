@@ -2,6 +2,7 @@
 
 #include "mcode/agent/context_controller.hxx"
 #include "mcode/agent/loop_internal.hxx"
+#include "mcode/agent/message_json.hxx"
 
 #include <algorithm>
 #include <map>
@@ -74,6 +75,19 @@ namespace mcode {
 
 		out.request.messages.push_back( std::move( system ) );
 
+		// Ahead of the history, so a compaction that drops turns cannot drop the goal.
+		if ( !options.pinned_state.empty( ) ) {
+			auto pinned = model::message{ };
+			pinned.speaker = model::role::system;
+
+			auto pinned_block = model::block{ };
+			pinned_block.kind = model::block_kind::text;
+			pinned_block.text = std::string{ options.pinned_state };
+			pinned.blocks.push_back( std::move( pinned_block ) );
+
+			out.request.messages.push_back( std::move( pinned ) );
+		}
+
 		for ( const auto& value : options.history ) {
 			out.request.messages.push_back( value );
 		}
@@ -96,6 +110,113 @@ namespace mcode {
 		}
 
 		return out;
+	}
+
+	auto agent_loop::tier_for( const model_tier tier ) const -> const tier_model& {
+		switch ( tier ) {
+			case model_tier::plan:
+				return plan_tier_.configured ? plan_tier_ : default_tier_;
+
+			case model_tier::side:
+				return side_tier_.configured ? side_tier_ : default_tier_;
+
+			case model_tier::act:
+				break;
+		}
+
+		return act_tier_.configured ? act_tier_ : default_tier_;
+	}
+
+	auto agent_loop::working_model( ) const noexcept -> const model::capabilities& {
+		return tier_for( model_tier::act ).caps;
+	}
+
+	// The side tier exists for exactly this: a mechanical call whose output feeds the
+	// next turn, where a workhorse model is wasted and a failure costs nothing.
+	auto agent_loop::summarize_dropped( const std::vector< model::message >& dropped )
+		-> std::string {
+		if ( dropped.empty( ) ) {
+			return { };
+		}
+
+		const auto& routed = tier_for( model_tier::side );
+
+		auto transcript = std::string{ };
+
+		for ( const auto& value : dropped ) {
+			transcript += agent::message_to_json( value );
+			transcript += '\n';
+		}
+
+		auto request = model::chat_request{ };
+		request.model = routed.name;
+
+		auto system = model::message{ };
+		system.speaker = model::role::system;
+
+		auto system_block = model::block{ };
+		system_block.kind = model::block_kind::text;
+		system_block.text = std::string{ loop_internal::COMPACTION_SUMMARY_PROMPT };
+		system.blocks.push_back( std::move( system_block ) );
+
+		request.messages.push_back( std::move( system ) );
+
+		auto user = model::message{ };
+		user.speaker = model::role::user;
+
+		auto user_block = model::block{ };
+		user_block.kind = model::block_kind::text;
+		user_block.text = std::move( transcript );
+		user.blocks.push_back( std::move( user_block ) );
+
+		request.messages.push_back( std::move( user ) );
+
+		// No tools: this call summarizes, and a tool call here would have nowhere to
+		// be dispatched.
+		request.reasoning_effort = model::effort::low;
+
+		auto stream_request = model::stream_request{ };
+		stream_request.request = std::move( request );
+		stream_request.provider = provider_;
+		stream_request.api_key = api_key_;
+		stream_request.caps = routed.caps;
+
+		auto summary = std::string{ };
+		auto folded = model::usage{ };
+
+		const auto streamed = client_->stream( stream_request,
+			[ & ]( const model::chat_event& event ) {
+				if ( event.type == model::chat_event::kind::text_delta ) {
+					summary += event.text;
+				} else if ( event.type == model::chat_event::kind::usage ) {
+					folded.add( event );
+				}
+			} );
+
+		if ( !streamed ) {
+			return { };
+		}
+
+		// The summary is a real spend: the run pays for it like any other call.
+		run_usage_ += folded;
+		budget_.charge( static_cast< std::uint64_t >( total_tokens( routed.caps, folded ) ),
+			compute_cost( routed.caps, folded ) );
+
+		return summary;
+	}
+
+	auto agent_loop::refresh_pinned_state( ) -> void {
+		pinned_.task = task_;
+		pinned_.plan = plan_;
+		pinned_.modified_files = modified_files_;
+
+		pinned_.open_errors.clear( );
+
+		if ( !last_failure_.empty( ) ) {
+			pinned_.open_errors.push_back( last_failure_ );
+		}
+
+		last_recitation_step_ = budget_.steps_used.load( );
 	}
 
 	// Rung 1 runs first: clearing costs no model call and carries most of the saving.
@@ -131,7 +252,7 @@ namespace mcode {
 			return status{ };
 		}
 
-		const auto window_tokens = caps_.effective_context_window( );
+		const auto window_tokens = working_model( ).effective_context_window( );
 		const auto reserved = static_cast< double >( RESERVED_OUTPUT_TOKENS );
 
 		// Clamped: a declared window at or below the output reserve would never trigger.
@@ -196,22 +317,46 @@ namespace mcode {
 			--pinned;
 		}
 
+		// Prefix and tail can meet, which would report a drop that did not occur.
+		// Decided before the summary call, so a no-op compaction costs no model call.
+		if ( tail_start <= pinned ) {
+			return status{ };
+		}
+
+		auto dropped_messages = std::vector< model::message >{ };
+
+		for ( auto index = pinned; index < tail_start; ++index ) {
+			dropped_messages.push_back( history_[ index ] );
+		}
+
+		// The middle is compressed rather than silently dropped: what is lost is the
+		// narration, not the paths and the errors. A failed call falls back to the
+		// drop, which is lossy but never loses the goal — that lives in pinned state.
+		auto summary = summarize_dropped( dropped_messages );
+
 		auto kept = std::vector< model::message >{ };
 
 		for ( auto index = std::size_t{ 0 }; index < pinned; ++index ) {
 			kept.push_back( history_[ index ] );
 		}
 
+		if ( !summary.empty( ) ) {
+			auto note = model::message{ };
+			note.speaker = model::role::system;
+
+			auto note_block = model::block{ };
+			note_block.kind = model::block_kind::text;
+			note_block.text = "Earlier in this session, compressed:\n" + summary;
+			note.blocks.push_back( std::move( note_block ) );
+
+			kept.push_back( std::move( note ) );
+		}
+
 		for ( auto index = tail_start; index < history_.size( ); ++index ) {
 			kept.push_back( history_[ index ] );
 		}
 
-		// Prefix and tail can meet, which would report a drop that did not occur.
-		if ( kept.size( ) >= history_.size( ) ) {
-			return status{ };
-		}
-
-		const auto dropped = history_.size( ) - kept.size( );
+		const auto dropped = dropped_messages.size( );
 
 		history_ = std::move( kept );
 
@@ -219,6 +364,8 @@ namespace mcode {
 		payload += std::to_string( kept_tokens );
 		payload += ",\"dropped_messages\":";
 		payload += std::to_string( dropped );
+		payload += ",\"summarized\":";
+		payload += summary.empty( ) ? "false" : "true";
 		payload += "}";
 
 		log_->append( "context.compaction", payload );

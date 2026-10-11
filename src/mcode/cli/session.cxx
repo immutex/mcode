@@ -1,15 +1,24 @@
+#include "exec_internal.hxx"
 #include "mcode/agent/loop.hxx"
+#include "mcode/agent/subagent.hxx"
+#include "mcode/cli/active_loop.hxx"
+#include "mcode/cli/egress_setup.hxx"
 #include "mcode/cli/exec.hxx"
 #include "mcode/cli/repl.hxx"
+#include "mcode/cli/session.hxx"
+#include "mcode/cli/session_state.hxx"
+#include "mcode/cli/slash.hxx"
+#include "mcode/cli/tier_config.hxx"
+#include "mcode/cli/extension_wiring.hxx"
 #include "mcode/core/registry.hxx"
 #include "mcode/events/bus.hxx"
+#include "mcode/ext/api_cmd.hxx"
 #include "mcode/ext/hooks.hxx"
 #include "mcode/ext/loader.hxx"
 #include "mcode/fs/snapshot.hxx"
-#include "mcode/cli/egress_setup.hxx"
 #include "mcode/fs/workspace.hxx"
-#include "mcode/memory/ledger.hxx"
 #include "mcode/mcp/connect.hxx"
+#include "mcode/memory/ledger.hxx"
 #include "mcode/model/capabilities.hxx"
 #include "mcode/model/http_client.hxx"
 #include "mcode/model/provider.hxx"
@@ -20,18 +29,19 @@
 #include "mcode/perm/store.hxx"
 #include "mcode/platform/seams.hxx"
 #include "mcode/skills/session_context.hxx"
-#include "exec_internal.hxx"
-
 #include "mcode/support/config.hxx"
 #include "mcode/support/json.hxx"
 #include "mcode/support/time.hxx"
 #include "mcode/tools/context.hxx"
+#include "mcode/tools/exec_tools.hxx"
 #include "mcode/tools/register.hxx"
+#include "mcode/tools/tool_args.hxx"
 #include "mcode/tui/approval_tui.hxx"
 #include "mcode/tui/editor.hxx"
 #include "mcode/tui/frame.hxx"
 #include "mcode/tui/render.hxx"
 #include "mcode/tui/tty.hxx"
+
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -42,8 +52,6 @@
 #include <string>
 #include <thread>
 #include <vector>
-
-#include "mcode/cli/session.hxx"
 
 namespace {
 
@@ -64,12 +72,27 @@ namespace {
 		mcode::ext::mcp_server_store extension_servers;
 		mcode::mcp::server_set mcp_servers;
 
+		// Held here, not passed as a temporary: the surface copies the function but the
+		// pointer into it must outlive the load.
+		mcode::ext::command_registry commands;
+		std::function< void( const std::string&, const std::string& ) > instruction_sink_fn;
+
+		// One struct, so a capability added here reaches both paths.
+		mcode::cli::extension_collaborators collaborators;
+
+		// Builtins plus the registered extension commands, rebuilt after the load.
+		std::vector< mcode::tui::slash_command > command_rows;
+
 		// Must outlive the returned loop: the extension surface borrows it.
 		mcode::skills::session_context skills_context;
 
 		mcode::net::http_client transport;
 		mcode::model::http_model_client client;
 		mcode::event_log log;
+
+		// Filled after the permission rules load, but the struct itself is stable, so
+		// the extension surface can hold its address from load time.
+		mcode::tools::tool_context tools_context;
 
 		// Always built, so /undo has something to restore.
 		std::optional< mcode::snapshot_store > snapshots;
@@ -196,11 +219,41 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 	g_parts->engine = mcode::perm::permission_engine{ *g_parts->space, &*g_parts->user_store };
 
 	if ( !parsed.no_extensions ) {
+
+		// Appends to the chain the loop is built from, so a contribution made at load
+		// time is in the prompt. The loop copies the text after the extensions load.
+		g_parts->instruction_sink_fn = [ ]( const std::string&,
+			const std::string& text ) {
+			if ( text.empty( ) ) {
+				return;
+			}
+
+			auto& chain = g_parts->skills_context.chain.text;
+
+			if ( !chain.empty( ) ) {
+				chain += "\n\n";
+			}
+
+			chain += text;
+		};
+
+		g_parts->collaborators = mcode::cli::build_collaborators(
+			{ .tools = &g_parts->tools_context, .transport = &g_parts->transport,
+				.permissions = &*g_parts->engine, .config = &*config,
+				.log = &g_parts->log, .budget = &g_parts->budget } );
+
 		auto options = mcode::ext::loader_options{ };
+		auto context = mcode::ext::register_context{ .skills = &skills_context.skills,
+			.servers = &g_parts->extension_servers, .config = &*config,
+			.space = &*g_parts->space, .reads = &g_parts->reads,
+			.permissions = &*g_parts->engine, .commands = &g_parts->commands,
+			.http_client = &g_parts->transport,
+			.instruction_sink = &g_parts->instruction_sink_fn };
+
+		g_parts->collaborators.apply( context );
+
 		options.register_api = mcode::ext::default_register_api( g_parts->tools,
-			{ .skills = &skills_context.skills, .servers = &g_parts->extension_servers,
-				.config = &*config, .space = &*g_parts->space, .reads = &g_parts->reads,
-				.permissions = &*g_parts->engine } );
+			context );
 
 		auto roots = mcode::ext::default_roots( workspace_path );
 
@@ -211,6 +264,10 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 		g_parts->extensions = mcode::ext::load_workspace_extensions( workspace_path, roots,
 			g_parts->providers, g_parts->hooks, options );
 	}
+
+	// Rebuilt either way: with --no-extensions this is the builtin table, so the
+	// palette has one source rather than two.
+	g_parts->command_rows = mcode::cli::all_commands( g_parts->commands );
 
 	// Published even with --no-extensions: an empty report is the true answer, not a null.
 	g_session_extensions = &g_parts->extensions.report;
@@ -289,20 +346,19 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 	const auto run_id = std::to_string(
 		static_cast< long long >( mcode::support::epoch_milliseconds( ) ) );
 
-	auto tools_context = mcode::tools::tool_context{ };
-	tools_context.space = &*g_parts->space;
-	tools_context.reads = &g_parts->reads;
-	tools_context.permissions = &*g_parts->engine;
-	tools_context.run_id = run_id;
-	tools_context.headless = parsed.json;
+	g_parts->tools_context.space = &*g_parts->space;
+	g_parts->tools_context.reads = &g_parts->reads;
+	g_parts->tools_context.permissions = &*g_parts->engine;
+	g_parts->tools_context.run_id = run_id;
+	g_parts->tools_context.headless = parsed.json;
 
 	g_parts->egress = mcode::cli::start_egress_if_configured( *config );
-	tools_context.egress = g_parts->egress.get( );
+	g_parts->tools_context.egress = g_parts->egress.get( );
 
 	auto sink = mcode::tools::vector_sink{ };
 
 	const auto registered = mcode::tools::register_core_tools( g_parts->tools, sink,
-		tools_context );
+		g_parts->tools_context );
 
 	if ( !registered ) {
 		return std::unexpected( registered.error( ) );
@@ -329,7 +385,16 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 	g_parts->loop_deps.budget = g_parts->budget;
 	g_parts->loop_deps.model_name = model_name;
 	g_parts->loop_deps.caps = *caps;
-	g_parts->loop_deps.provider_name = provider_name;
+
+	// Unset tiers are the common case: routing falls back to `model.model` per call.
+	if ( const auto tiers = mcode::cli::resolve_tiers( model_name, *config ); !tiers ) {
+		return std::unexpected( tiers.error( ) );
+	} else {
+		g_parts->loop_deps.plan_tier = tiers->plan;
+		g_parts->loop_deps.act_tier = tiers->act;
+		g_parts->loop_deps.side_tier = tiers->side;
+	}
+
 	g_parts->loop_deps.provider = provider;
 	g_parts->loop_deps.api_key = *api_key;
 	g_parts->loop_deps.workspace_root = g_parts->space->root( ).string( );
@@ -346,6 +411,7 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 
 	// One pump per step, on the thread the VM belongs to.
 	g_parts->loop_deps.pump_timers = [ ]( ) { g_parts->extensions.pump_timers( ); };
+	g_parts->loop_deps.pump_deferred = [ ]( ) { g_parts->extensions.pump_deferred( ); };
 
 	auto loop = mcode::agent_loop{ g_parts->loop_deps };
 
@@ -418,6 +484,32 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 
 auto session_extensions( ) -> const mcode::ext::load_report* {
 	return g_session_extensions;
+}
+
+auto session_mcp_servers( ) -> const mcode::mcp::server_set* {
+	if ( !g_parts.has_value( ) ) {
+		return nullptr;
+	}
+
+	return &g_parts->mcp_servers;
+}
+
+auto session_commands( ) -> const std::vector< mcode::tui::slash_command >* {
+	if ( !g_parts.has_value( ) ) {
+		return nullptr;
+	}
+
+	return &g_parts->command_rows;
+}
+
+auto session_invoke_command( const std::string_view name, const std::string_view arguments )
+	-> mcode::result< std::string > {
+	if ( !g_parts.has_value( ) ) {
+		return std::unexpected( mcode::fail( mcode::errc::config,
+			"no session is built, so no extension command can run" ) );
+	}
+
+	return g_parts->extensions.invoke_command( g_parts->commands, name, arguments );
 }
 
 auto adopt_session( mcode::agent_loop& loop, const std::string_view id )

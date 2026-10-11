@@ -297,6 +297,77 @@ namespace {
 		return 0;
 	}
 
+	// Declares resources and prompts, and answers all four methods, so the client's
+	// pagination, flattening and capability detection are exercised against a real
+	// peer rather than a stub.
+	auto run_resources( ) -> int {
+		auto line = std::string{ };
+
+		while ( read_line( line ) ) {
+			const auto method = extract_method( line );
+
+			if ( method.empty( ) ) {
+				continue;
+			}
+
+			if ( method == "initialize" ) {
+				respond( extract_id( line ),
+					R"({"protocolVersion":"2025-06-18",)"
+					R"("capabilities":{"tools":{},"resources":{"subscribe":false},)"
+					R"("prompts":{}},)"
+					R"("serverInfo":{"name":"mcp-echo","version":"1.0.0"}})" );
+
+				continue;
+			}
+
+			if ( method == "notifications/initialized" ) {
+				continue;
+			}
+
+			if ( method == "tools/list" ) {
+				respond( extract_id( line ), tools_list_body( false ) );
+
+				continue;
+			}
+
+			if ( method == "resources/list" ) {
+				respond( extract_id( line ),
+					R"({"resources":[{"uri":"echo://notes","name":"notes",)"
+					R"("description":"a note","mimeType":"text/plain"}]})" );
+
+				continue;
+			}
+
+			if ( method == "resources/read" ) {
+				respond( extract_id( line ),
+					R"({"contents":[{"uri":"echo://notes","mimeType":"text/plain",)"
+					R"("text":"the note body"}]})" );
+
+				continue;
+			}
+
+			if ( method == "prompts/list" ) {
+				respond( extract_id( line ),
+					R"({"prompts":[{"name":"greet","description":"greets",)"
+					R"("arguments":[{"name":"who","description":"whom","required":true}]}]})" );
+
+				continue;
+			}
+
+			if ( method == "prompts/get" ) {
+				respond( extract_id( line ),
+					R"({"description":"greets","messages":[{"role":"user",)"
+					R"("content":{"type":"text","text":"hello"}}]})" );
+
+				continue;
+			}
+
+			continue;
+		}
+
+		return 0;
+	}
+
 	auto run_stderr_exit( ) -> int {
 		auto line = std::string{ };
 
@@ -565,6 +636,10 @@ auto main( const int argc, const char** argv ) -> int {
 
 	if ( mode == "hang" ) {
 		return run_hang( );
+	}
+
+	if ( mode == "resources" ) {
+		return run_resources( );
 	}
 
 	if ( mode == "stderr-exit" ) {

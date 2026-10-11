@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <memory>
 
+#include "mcode/ext/api_cmd.hxx"
 #include "mcode/ext/integrity.hxx"
 #include "mcode/fs/workspace.hxx"
 #include "mcode/support/toml.hxx"
@@ -73,6 +74,39 @@ namespace mcode::ext {
 				extension.surface->pump_timers( );
 			}
 		}
+	}
+
+	// separate from the timers so a deferred callback queued by a timer handler runs
+	// on the next step rather than inside this one.
+	auto load_result::pump_deferred( ) -> void {
+		for ( auto& extension : extensions ) {
+			if ( extension.surface != nullptr ) {
+				extension.surface->pump_deferred( );
+			}
+		}
+	}
+
+	auto load_result::invoke_command( const command_registry& commands,
+		const std::string_view name, const std::string_view arguments )
+		-> result< std::string > {
+		const auto* command = commands.find( name );
+
+		if ( command == nullptr ) {
+			return std::unexpected( fail( errc::config,
+				"no loaded extension provides a command named '" + std::string{ name } + "'" ) );
+		}
+
+		for ( auto& extension : extensions ) {
+			if ( extension.surface == nullptr || extension.details.name != command->owner ) {
+				continue;
+			}
+
+			return mcode::ext::invoke_command( *extension.surface, *command, arguments );
+		}
+
+		return std::unexpected( fail( errc::config,
+			"the extension that registered '" + std::string{ name }
+				+ "' is no longer loaded" ) );
 	}
 
 	namespace {
@@ -363,7 +397,15 @@ namespace mcode::ext {
 				.registry = registry, .providers = given.providers, .hooks = given.hooks,
 				.details = given.details, .skills = context.skills, .servers = context.servers,
 				.config = context.config, .files = context.space, .file_reads = context.reads,
-				.file_permissions = context.permissions } );
+				.file_permissions = context.permissions, .commands = context.commands,
+				.session_state = context.session_state, .http_client = context.http_client,
+				.web_searcher = context.web_searcher, .notifier = context.notifier,
+				.instruction_sink = context.instruction_sink,
+				.skill_sink = context.skill_sink,
+				.subagent_runner = context.subagent_runner,
+				.bash_runner = context.bash_runner,
+				.plan_sink = context.plan_sink,
+				.fetch_runner = context.fetch_runner } );
 		};
 	}
 

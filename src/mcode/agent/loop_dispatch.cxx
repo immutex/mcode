@@ -57,17 +57,21 @@ namespace mcode {
 		log_->append( "tool.result", std::move( payload ) );
 	}
 
-	auto agent_loop::request_and_fold( const model::effort effort ) -> result< bool > {
+	auto agent_loop::request_and_fold( const model::effort effort, const model_tier tier )
+		-> result< bool > {
+		const auto& routed = tier_for( tier );
 		const auto near_budget = budget_.nearly_exhausted( );
 		const auto assembled = assemble_request( *registry_,
 			{ .system_prompt = build_system_prompt( *registry_, instruction_chain_,
 				  skill_index_, notes_pointer_ ),
 				.history = history_,
-				.model_name = model_name_,
-				.mode = caps_.caching,
+				.model_name = routed.name,
+				.mode = routed.caps.caching,
 				.near_budget = near_budget,
+				.pinned_state = render_pinned_state( pinned_ ),
 				.fields = provider_.request,
-				.strict_tools = caps_.supports_strict_schema && provider_.features.strict_tools,
+				.strict_tools =
+					routed.caps.supports_strict_schema && provider_.features.strict_tools,
 				.response_format_with_tools =
 					provider_.features.response_format_with_tools } );
 
@@ -87,7 +91,7 @@ namespace mcode {
 		stream_request.request.reasoning_effort = effort;
 		stream_request.provider = provider_;
 		stream_request.api_key = api_key_;
-		stream_request.caps = caps_;
+		stream_request.caps = routed.caps;
 
 		auto events = std::vector< model::chat_event >{ };
 		auto text = std::string{ };
@@ -138,12 +142,13 @@ namespace mcode {
 		occupancy_.cache_write = folded.cache_write;
 		occupancy_.usable_window = static_cast< std::int64_t >(
 			std::max< std::int64_t >(
-				caps_.effective_context_window( ) - RESERVED_OUTPUT_TOKENS,
+				routed.caps.effective_context_window( ) - RESERVED_OUTPUT_TOKENS,
 				static_cast< std::int64_t >( static_cast< double >(
-					caps_.effective_context_window( ) ) * MIN_USABLE_WINDOW_FRACTION ) ) );
+					routed.caps.effective_context_window( ) ) * MIN_USABLE_WINDOW_FRACTION ) ) );
 
-		cost = compute_cost( caps_, folded );
-		budget_.charge( static_cast< std::uint64_t >( total_tokens( caps_, folded ) ), cost );
+		cost = compute_cost( routed.caps, folded );
+		budget_.charge( static_cast< std::uint64_t >( total_tokens( routed.caps, folded ) ),
+			cost );
 
 		// Per request: an aggregate cannot show a cache that only starts hitting later.
 		if ( log_ != nullptr ) {

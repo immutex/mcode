@@ -298,6 +298,44 @@ declare mcode: {
 		-- silently dropped.
 		add_instructions: (text: string, opts: { priority: number? }?) -> (boolean?, string?),
 	},
+
+	task: (
+		objective: string,
+		opts: { context: string?, max_steps: number? }?
+	) -> ({ summary: string, steps: number, truncated: boolean }?, string?),
+
+	-- Runs a command through the core `bash` tool: the same sandbox, the same
+	-- permission gate, the same output cap. Requires the `spawn` permission. The
+	-- result is that tool's own shape, decoded. `ok` means the command ran;
+	-- `succeeded` is the outcome, which is what a caller almost always wants.
+	bash: (command: string, opts: { timeout_ms: number? }?) -> ({
+		ok: boolean,
+		succeeded: boolean,
+		exit_code: number,
+		stdout: string,
+		stderr: string,
+		timed_out: boolean,
+		output_truncated: boolean,
+		hint: string?,
+	}?, string?),
+
+	-- Records the plan for this task in session state. Recitation reads it from
+	-- there on its own interval, so the plan outlives the extension that set it.
+	-- Returns `nil, err` when no sink was installed.
+	plan: {
+		set: (plan: string) -> (boolean?, string?),
+	},
+
+	-- Fetches a URL the MODEL chose. Unlike `net.get`, the host is not known in
+	-- advance, so what bounds it is the permission engine's per-domain decision and
+	-- the harness's private-address filter -- both in C++, neither reachable from
+	-- here. Requires the `net` permission. `nil, err` when fetch is disabled.
+	fetch: (url: string, opts: { timeout_ms: number? }?) -> ({
+		status: number,
+		content_type: string,
+		body: string,
+		truncated: boolean,
+	}?, string?),
 }
 
 -- Injected by the host, not a member of `mcode`. Resolves a module against this

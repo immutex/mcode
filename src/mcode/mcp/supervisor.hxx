@@ -35,7 +35,11 @@ namespace mcode::mcp {
 	public:
 		// on_ready after every successful (re)connect; on_gone when the restart budget is spent
 		struct handlers {
-			std::function< void( const std::vector< server_tool >& ) > on_ready;
+			// Fires on the first connect and on every restart, so registration lives here.
+			// The capabilities ride along because a server that declares resources needs
+			// an extra entry that is not in `tools/list`.
+			std::function< void( const std::vector< server_tool >&,
+				const server_capabilities& ) > on_ready;
 			std::function< void( const std::string& reason ) > on_gone;
 		};
 

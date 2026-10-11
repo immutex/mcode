@@ -22,10 +22,43 @@ namespace mcode::mcp {
 
 	struct server_capabilities {
 		bool tools = false;
+
+		// A server that declares neither still initializes; it just contributes nothing.
+		bool resources = false;
+		bool prompts = false;
+
 		std::string server_name;
 		std::string server_version;
 		std::string negotiated_version;
 		std::string instructions;
+	};
+
+	// One entry from `resources/list`. `uri` is the handle `resources/read` takes.
+	struct server_resource {
+		std::string uri;
+		std::string name;
+		std::string description;
+		std::string mime_type;
+	};
+
+	// One entry from `prompts/list`. Arguments are named and may be required.
+	struct prompt_argument {
+		std::string name;
+		std::string description;
+		bool required = false;
+	};
+
+	struct server_prompt {
+		std::string name;
+		std::string description;
+		std::vector< prompt_argument > arguments;
+	};
+
+	// The text of a resource or a filled prompt, already flattened from the
+	// protocol's content-part array.
+	struct fetched_text {
+		std::string text;
+		std::string mime_type;
 	};
 
 	struct call_outcome {
@@ -68,6 +101,17 @@ namespace mcode::mcp {
 
 		// follows nextCursor to completion; names are the server's own, unprefixed
 		[[nodiscard]] auto list_tools( ) -> result< std::vector< server_tool > >;
+
+		// Each is bounded by MAX_TOOL_PAGES and refuses a non-advancing cursor, for the
+		// same reason `list_tools` is: a hostile or broken server must not block startup.
+		[[nodiscard]] auto list_resources( ) -> result< std::vector< server_resource > >;
+		[[nodiscard]] auto list_prompts( ) -> result< std::vector< server_prompt > >;
+
+		// `arguments_json` is the prompt's argument object, or `{}` for none.
+		[[nodiscard]] auto read_resource( std::string_view uri )
+			-> result< fetched_text >;
+		[[nodiscard]] auto get_prompt( std::string_view name,
+			std::string_view arguments_json ) -> result< fetched_text >;
 
 		// a timeout sends notifications/cancelled, and a late response is ignored
 		auto call_tool( std::string_view tool_name, std::string_view arguments_json,

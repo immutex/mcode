@@ -1,5 +1,7 @@
 #include "mcode/platform/sandbox_windows.hxx"
 
+#include "mcode/platform/sandbox_windows_internal.hxx"
+
 #include <atomic>
 #include <map>
 #include <string>
@@ -22,46 +24,6 @@ namespace mcode::platform {
 		// low IL with no-write-up, and Medium IL restoring the default on deny subtrees.
 		inline constexpr wchar_t LOW_IL_SDDL[] = L"S:(ML;;NW;;;LW)";
 		inline constexpr wchar_t MEDIUM_IL_SDDL[] = L"S:(ML;;NW;;;ME)";
-
-		enum class sandbox_pipe_direction { child_reads, child_writes };
-
-		[[nodiscard]] auto last_error_message( const DWORD error ) -> std::string {
-			auto* buffer = LPWSTR{ nullptr };
-
-			const auto length = ::FormatMessageW( FORMAT_MESSAGE_ALLOCATE_BUFFER |
-				FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-				nullptr, error, 0,
-				reinterpret_cast< LPWSTR >( &buffer ), 0, nullptr );
-
-			if ( length == 0 || buffer == nullptr ) {
-				return "windows error " + std::to_string( error );
-			}
-
-			const auto text = std::wstring{ buffer, length };
-			::LocalFree( buffer );
-
-			auto utf8 = std::string{ };
-			const auto bytes = ::WideCharToMultiByte( CP_UTF8, 0, text.c_str( ),
-				static_cast< int >( text.size( ) ), nullptr, 0, nullptr, nullptr );
-
-			if ( bytes > 0 ) {
-				utf8.resize( static_cast< std::size_t >( bytes ) );
-				::WideCharToMultiByte( CP_UTF8, 0, text.c_str( ),
-					static_cast< int >( text.size( ) ), utf8.data( ), bytes, nullptr, nullptr );
-			}
-
-			while ( !utf8.empty( ) && ( utf8.back( ) == '\r' || utf8.back( ) == '\n' ) ) {
-				utf8.pop_back( );
-			}
-
-			return utf8;
-		}
-
-		[[nodiscard]] auto fail_win( const std::string& what, const DWORD error )
-			-> mcode::error {
-			return mcode::fail( mcode::errc::io,
-				what + " failed: " + last_error_message( error ) );
-		}
 
 		// CRT rule: space or tab delimits, and backslashes before a quote double.
 		[[nodiscard]] auto quote_command_line_argument( const std::wstring& value )
@@ -124,7 +86,7 @@ namespace mcode::platform {
 
 		if ( !::OpenProcessToken( ::GetCurrentProcess( ), TOKEN_DUPLICATE | TOKEN_QUERY,
 			reinterpret_cast< HANDLE* >( &process_token ) ) ) {
-			return std::unexpected( fail_win( "OpenProcessToken", ::GetLastError( ) ) );
+			return std::unexpected( mcode::platform::detail::fail_win( "OpenProcessToken", ::GetLastError( ) ) );
 		}
 
 		auto primary = unique_handle_windows{ nullptr };
@@ -132,7 +94,7 @@ namespace mcode::platform {
 		if ( !::DuplicateTokenEx( process_token.get( ), MAXIMUM_ALLOWED, nullptr,
 			SecurityImpersonation, TokenPrimary,
 			reinterpret_cast< HANDLE* >( &primary ) ) ) {
-			return std::unexpected( fail_win( "DuplicateTokenEx", ::GetLastError( ) ) );
+			return std::unexpected( mcode::platform::detail::fail_win( "DuplicateTokenEx", ::GetLastError( ) ) );
 		}
 
 		// SE_PRIVILEGE_REMOVED deletes rather than disables.
@@ -144,7 +106,7 @@ namespace mcode::platform {
 
 		if ( !::GetTokenInformation( primary.get( ), TokenPrivileges, priv_buffer.data( ),
 			returned, &returned ) ) {
-			return std::unexpected( fail_win( "GetTokenInformation(TokenPrivileges)",
+			return std::unexpected( mcode::platform::detail::fail_win( "GetTokenInformation(TokenPrivileges)",
 				::GetLastError( ) ) );
 		}
 
@@ -154,7 +116,7 @@ namespace mcode::platform {
 
 		if ( !::AdjustTokenPrivileges( primary.get( ), FALSE, privileges, returned,
 			nullptr, nullptr ) ) {
-			return std::unexpected( fail_win( "AdjustTokenPrivileges", ::GetLastError( ) ) );
+			return std::unexpected( mcode::platform::detail::fail_win( "AdjustTokenPrivileges", ::GetLastError( ) ) );
 		}
 
 		SID_IDENTIFIER_AUTHORITY mandatory_authority = { { 0, 0, 0, 0, 0, 16 } };
@@ -163,7 +125,7 @@ namespace mcode::platform {
 		auto* low_sid = reinterpret_cast< SID* >( sid_buffer.data( ) );
 
 		if ( !::InitializeSid( low_sid, &mandatory_authority, 1 ) ) {
-			return std::unexpected( fail_win( "InitializeSid", ::GetLastError( ) ) );
+			return std::unexpected( mcode::platform::detail::fail_win( "InitializeSid", ::GetLastError( ) ) );
 		}
 
 		*::GetSidSubAuthority( low_sid, 0 ) = SECURITY_MANDATORY_LOW_RID;
@@ -174,7 +136,7 @@ namespace mcode::platform {
 
 		if ( !::SetTokenInformation( primary.get( ), TokenIntegrityLevel, &label,
 			sizeof( label ) + ::GetLengthSid( low_sid ) ) ) {
-			return std::unexpected( fail_win( "SetTokenInformation(TokenIntegrityLevel)",
+			return std::unexpected( mcode::platform::detail::fail_win( "SetTokenInformation(TokenIntegrityLevel)",
 				::GetLastError( ) ) );
 		}
 
@@ -190,7 +152,7 @@ namespace mcode::platform {
 		auto job = unique_handle_windows{ ::CreateJobObjectW( nullptr, nullptr ) };
 
 		if ( job == nullptr ) {
-			return std::unexpected( fail_win( "CreateJobObjectW", ::GetLastError( ) ) );
+			return std::unexpected( mcode::platform::detail::fail_win( "CreateJobObjectW", ::GetLastError( ) ) );
 		}
 
 		auto limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION{ };
@@ -204,7 +166,7 @@ namespace mcode::platform {
 
 		if ( ::SetInformationJobObject( job.get( ), JobObjectExtendedLimitInformation,
 			&limits, sizeof( limits ) ) == 0 ) {
-			return std::unexpected( fail_win( "SetInformationJobObject", ::GetLastError( ) ) );
+			return std::unexpected( mcode::platform::detail::fail_win( "SetInformationJobObject", ::GetLastError( ) ) );
 		}
 
 		auto ui = JOBOBJECT_BASIC_UI_RESTRICTIONS{ };
@@ -216,7 +178,7 @@ namespace mcode::platform {
 
 		if ( ::SetInformationJobObject( job.get( ), JobObjectBasicUIRestrictions,
 			&ui, sizeof( ui ) ) == 0 ) {
-			return std::unexpected( fail_win( "SetInformationJobObject(UI)", ::GetLastError( ) ) );
+			return std::unexpected( mcode::platform::detail::fail_win( "SetInformationJobObject(UI)", ::GetLastError( ) ) );
 		}
 
 		return job;
@@ -237,7 +199,7 @@ namespace mcode::platform {
 			if ( !::ConvertStringSecurityDescriptorToSecurityDescriptorW( sddl,
 				SDDL_REVISION_1, &descriptor, nullptr ) ) {
 				return std::unexpected(
-					fail_win( "ConvertStringSecurityDescriptorToSecurityDescriptor",
+					mcode::platform::detail::fail_win( "ConvertStringSecurityDescriptorToSecurityDescriptor",
 						::GetLastError( ) ) );
 			}
 
@@ -259,7 +221,7 @@ namespace mcode::platform {
 				nullptr, nullptr, nullptr, sacl );
 
 			if ( set != ERROR_SUCCESS ) {
-				return std::unexpected( fail_win( "SetNamedSecurityInfoW", set ) );
+				return std::unexpected( mcode::platform::detail::fail_win( "SetNamedSecurityInfoW", set ) );
 			}
 
 			return { };
@@ -306,126 +268,6 @@ namespace mcode::platform {
 #endif
 	}
 
-#if defined( _WIN32 )
-
-	auto sandbox_windows_close_pipes( sandbox_raw_pipes& pipes ) -> void {
-		for ( auto* handle : { &pipes.child_stdin, &pipes.child_stdout, &pipes.child_stderr,
-				 &pipes.parent_stdin, &pipes.parent_stdout, &pipes.parent_stderr } ) {
-			if ( *handle != nullptr ) {
-				::CloseHandle( static_cast< HANDLE >( *handle ) );
-				*handle = nullptr;
-			}
-		}
-	}
-
-#endif
-
-	auto sandbox_windows_make_pipes( ) -> result< sandbox_raw_pipes > {
-#if defined( _WIN32 )
-		auto security = SECURITY_ATTRIBUTES{ };
-		security.nLength = sizeof( security );
-		security.bInheritHandle = TRUE;
-		security.lpSecurityDescriptor = nullptr;
-
-		// anonymous pipes cannot carry FILE_FLAG_OVERLAPPED; the IOCP service needs it.
-		constexpr DWORD PIPE_BUFFER_BYTES = 0;
-
-		// A fixed name collides with the previous spawn's still-open handles.
-		static std::atomic< std::uint64_t > pipe_sequence{ 0 };
-		const auto sequence = pipe_sequence.fetch_add( 1 );
-
-		auto pipe_name = [ & ]( const wchar_t* suffix ) -> std::wstring {
-			return std::wstring{ L"\\\\.\\pipe\\mcode-sandbox-" }
-				+ std::to_wstring( ::GetCurrentProcessId( ) ) + L"-"
-				+ std::to_wstring( sequence ) + suffix;
-		};
-
-		auto make_pair = [ & ]( const sandbox_pipe_direction direction,
-			const std::wstring& name ) -> result< std::pair< HANDLE, HANDLE > > {
-			const auto child_reads = ( direction == sandbox_pipe_direction::child_reads );
-
-			// INBOUND grants the server GENERIC_READ, OUTBOUND grants it GENERIC_WRITE.
-			const auto server_access = static_cast< DWORD >( child_reads
-				? PIPE_ACCESS_INBOUND
-				: PIPE_ACCESS_OUTBOUND );
-
-			auto server = ::CreateNamedPipeW( name.c_str( ),
-				server_access | FILE_FLAG_OVERLAPPED,
-				PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-				DWORD{ 1 }, PIPE_BUFFER_BYTES, PIPE_BUFFER_BYTES, DWORD{ 0 },
-				&security );
-
-			if ( server == INVALID_HANDLE_VALUE ) {
-				return std::unexpected( fail_win( "CreateNamedPipeW",
-					::GetLastError( ) ) );
-			}
-
-			// the client takes the opposite access, so it must be the parent's end.
-			const auto client_access = child_reads ? GENERIC_WRITE : GENERIC_READ;
-
-			auto client = ::CreateFileW( name.c_str( ), client_access, 0, &security,
-				OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr );
-
-			if ( client == INVALID_HANDLE_VALUE ) {
-				const auto error = ::GetLastError( );
-				::CloseHandle( server );
-				return std::unexpected( fail_win( "CreateFileW(pipe)", error ) );
-			}
-
-			// only the child's end is inheritable; an inherited parent end would outlive its close.
-			if ( !::SetHandleInformation( server, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT ) ||
-				!::SetHandleInformation( client, HANDLE_FLAG_INHERIT, 0 ) ) {
-				const auto error = ::GetLastError( );
-				::CloseHandle( server );
-				::CloseHandle( client );
-				return std::unexpected( fail_win( "SetHandleInformation", error ) );
-			}
-
-			return std::pair< HANDLE, HANDLE >{ server, client };
-		};
-
-		auto pipes = sandbox_raw_pipes{ };
-
-		auto stdin_pair = make_pair( sandbox_pipe_direction::child_reads, pipe_name( L"-stdin" ) );
-
-		if ( !stdin_pair ) {
-			return std::unexpected( stdin_pair.error( ) );
-		}
-
-		pipes.child_stdin = stdin_pair->first;
-		pipes.parent_stdin = stdin_pair->second;
-
-		auto stdout_pair = make_pair( sandbox_pipe_direction::child_writes,
-			pipe_name( L"-stdout" ) );
-
-		if ( !stdout_pair ) {
-			sandbox_windows_close_pipes( pipes );
-
-			return std::unexpected( stdout_pair.error( ) );
-		}
-
-		pipes.child_stdout = stdout_pair->first;
-		pipes.parent_stdout = stdout_pair->second;
-
-		auto stderr_pair = make_pair( sandbox_pipe_direction::child_writes,
-			pipe_name( L"-stderr" ) );
-
-		if ( !stderr_pair ) {
-			sandbox_windows_close_pipes( pipes );
-
-			return std::unexpected( stderr_pair.error( ) );
-		}
-
-		pipes.child_stderr = stderr_pair->first;
-		pipes.parent_stderr = stderr_pair->second;
-
-		return pipes;
-#else
-		return std::unexpected( mcode::fail( mcode::errc::unsupported,
-			"the raw pipes exist only on Windows" ) );
-#endif
-	}
-
 	auto sandbox_windows_spawn( const std::filesystem::path& executable,
 		const std::vector< std::string >& arguments,
 		const std::filesystem::path& working_directory,
@@ -461,7 +303,7 @@ namespace mcode::platform {
 				static_cast< HANDLE >( const_cast< void* >( source ) ),
 				::GetCurrentProcess( ), &duplicate, 0, TRUE,
 				DUPLICATE_SAME_ACCESS ) ) {
-				return std::unexpected( fail_win( "DuplicateHandle", ::GetLastError( ) ) );
+				return std::unexpected( mcode::platform::detail::fail_win( "DuplicateHandle", ::GetLastError( ) ) );
 			}
 
 			return duplicate;
@@ -553,7 +395,7 @@ namespace mcode::platform {
 			const auto error = ::GetLastError( );
 			close_children( );
 
-			return std::unexpected( fail_win( "InitializeProcThreadAttributeList", error ) );
+			return std::unexpected( mcode::platform::detail::fail_win( "InitializeProcThreadAttributeList", error ) );
 		}
 
 		if ( !::UpdateProcThreadAttribute( startup_info.lpAttributeList, 0,
@@ -564,7 +406,7 @@ namespace mcode::platform {
 			::DeleteProcThreadAttributeList( startup_info.lpAttributeList );
 			close_children( );
 
-			return std::unexpected( fail_win( "UpdateProcThreadAttribute", error ) );
+			return std::unexpected( mcode::platform::detail::fail_win( "UpdateProcThreadAttribute", error ) );
 		}
 
 		auto process_information = PROCESS_INFORMATION{ };
@@ -586,7 +428,7 @@ namespace mcode::platform {
 		close_children( );
 
 		if ( created == 0 ) {
-			return std::unexpected( fail_win( "CreateProcessAsUserW", ::GetLastError( ) ) );
+			return std::unexpected( mcode::platform::detail::fail_win( "CreateProcessAsUserW", ::GetLastError( ) ) );
 		}
 
 		::CloseHandle( process_information.hThread );

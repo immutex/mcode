@@ -1,0 +1,5 @@
+name = "task"
+version = "0.1.0"
+api_version = 1
+description = "Delegates a read-only research task to a subagent and returns its report"
+permissions = []

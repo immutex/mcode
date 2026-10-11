@@ -14,7 +14,7 @@ from conan.tools.cmake import CMakeDeps, CMakeToolchain, cmake_layout
 
 class McodeConan(ConanFile):
     name = "mcode"
-    version = "0.0.4"
+    version = "0.1.0"
     description = "Extensible C++23 coding-agent harness with a Luau extension layer"
     license = "Apache-2.0"
     package_type = "application"

@@ -1120,5 +1120,31 @@ Read the number you were sent to, not the whole file. Each entry states the cons
     instead of exercising the code that produces it proves only that the two
     agree on the test's own assumption. Running `mcode ext deny` and reading the
     file found it in one command.
+136. **Registering a tool is not the same as being able to call it.** A bundled
+    extension registers its tools whenever its `init.luau` runs, and `init.luau`
+    runs whenever the *table entry* exists — `mcode.plan.set` is a function
+    whether or not a plan sink was installed behind it, so `if mcode.plan.set ==
+    nil then` is never true and the extension proceeds. A surface that had lost
+    four collaborator copies still passed every registration check in the smoke
+    suite and the whole test suite, and the defect only appeared in a live turn:
+    the model called `todo` and got "the plan could not be recorded". The check
+    that matters invokes the entry point and inspects the answer, or asserts the
+    accessor is non-null.
+137. **`install_request` and `register_context` are two lists that must agree.**
+    A collaborator added to `register_context` and threaded through
+    `default_register_api` is still invisible unless `api_surface::install`
+    copies it out of the request into its own member. Nothing links the two, so
+    the omission compiles, loads, and fails only at the call site.
+138. **Restoring a function body from git silently reverts every later edit to
+    it.** Cutting a block out of a 400-line `install()` and restoring the rest
+    from `git show HEAD:file` also restored the version from before four
+    collaborator copies were added. The edit that was meant to be surgical was
+    the largest change in the file, and the build stayed green.
+139. **A child loop inherits the parent's registry, not the parent's handlers.**
+    `run_subagent` filters a handler list the caller supplies; a spawn that
+    passes an empty one gives the child a read-only registry with nothing behind
+    any entry, so `read` is listed and every call fails at dispatch. The
+    capability boundary held — which is what made it look correct — while the
+    capability itself was gone.
 
 

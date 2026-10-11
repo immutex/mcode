@@ -298,8 +298,21 @@ docs win. Start at the index.
 | **Verification** | `--verify <command>` arms a gate the harness runs itself; the run reports `verified`, `failed` or `no-tests`, and `mcode eval` prints `false_success_rate` |
 | **Observability** | Typed event log, `exec --json` for editors and CI, eval suite |
 
-**Not built yet:** OSC 52 clipboard, and the `/skill`, `/mcp`, `/session`,
-`/reload` commands.
+**Not built yet:** OSC 52 clipboard, image input, background jobs, LSP, ACP, and
+the `/skill`, `/mcp`, `/session`, `/reload` commands.
+
+**Shipped in 0.1.0:** the batch that connects what 0.0.x built. Eleven interfaces
+existed with a producer or a caller missing, each with a passing test — the defect
+was unconnected code, not absent code. They are wired, and the seven first-party
+extensions `docs/23` mandates all ship: `task`, `fs-extra` (`todo`), `skills`,
+`memory`, `web` (`web_search`, `fetch`), `git`, `github`. Two new core API entries
+carry them: `mcode.bash`, which routes to the same core `bash` handler so the
+sandbox and the permission gate cannot be bypassed from Lua, and `mcode.fetch`
+for a URL the model chose, gated per domain and refusing private addresses. The
+loop now recites the goal and the plan every ten steps and after each compaction,
+routes by model tier (`model.tier.plan|act|side`), and delegates to a read-only
+subagent whose budget is carved from the parent's. MCP gains `resources/*` and
+`prompts/*`.
 
 **Shipped in 0.0.3:** the repo-local extension trust gate, `mcode ext install`,
 the verification gate and its `false_success_rate`, the context controller,

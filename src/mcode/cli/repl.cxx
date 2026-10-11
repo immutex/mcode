@@ -5,6 +5,7 @@
 #include <string>
 #include <utility>
 
+#include "mcode/cli/active_loop.hxx"
 #include "mcode/support/json.hxx"
 
 namespace mcode::cli {
@@ -47,6 +48,8 @@ namespace mcode::cli {
 
 			return to_int( cli::exit_code_for( built.error( ).code ) );
 		}
+
+		mcode::cli::set_active_loop( &*built );
 
 		auto turn = session{ *built };
 

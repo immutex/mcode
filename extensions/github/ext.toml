@@ -1,0 +1,5 @@
+name = "github"
+version = "0.1.0"
+api_version = 1
+description = "GitHub workflow tools over the gh CLI: gh_pr, gh_issue, gh_review"
+permissions = ["spawn"]

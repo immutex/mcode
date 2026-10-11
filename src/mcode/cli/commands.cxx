@@ -16,12 +16,18 @@
 #include "mcode/tui/render.hxx"
 #include "mcode/tui/tty.hxx"
 #include "mcode/agent/loop.hxx"
-#include "mcode/cli/session.hxx"
+#include "mcode/agent/subagent.hxx"
 #include "mcode/cli/egress_setup.hxx"
+#include "mcode/cli/active_loop.hxx"
+#include "mcode/cli/tier_config.hxx"
+#include "mcode/cli/extension_wiring.hxx"
 #include "mcode/cli/exec.hxx"
+#include "mcode/cli/session.hxx"
+#include "mcode/cli/session_state.hxx"
 #include "mcode/cli/repl.hxx"
 #include "mcode/core/registry.hxx"
 #include "mcode/events/bus.hxx"
+#include "mcode/ext/api_cmd.hxx"
 #include "mcode/ext/hooks.hxx"
 #include "mcode/ext/loader.hxx"
 #include "mcode/fs/snapshot.hxx"
@@ -46,77 +52,48 @@
 
 namespace {
 
-	// In JSON mode the bus subscription emits the deltas, so they are not mirrored here.
-	class streaming_client final : public mcode::model::model_client {
-	public:
-		streaming_client( mcode::model::model_client& inner, std::FILE* out, const bool json )
-			: inner_( inner ), out_( out ), json_( json ) { }
-
-		auto stream( const mcode::model::stream_request& request,
-			const mcode::model::event_sink& sink ) -> mcode::status override {
-			return inner_.stream( request,
-				[ this, &sink ]( const mcode::model::chat_event& event ) {
-					if ( !json_ && event.type == mcode::model::chat_event::kind::text_delta ) {
-						std::fwrite( event.text.data( ), 1, event.text.size( ), out_ );
-						std::fflush( out_ );
-					}
-
-					sink( event );
-				} );
-		}
-
-	private:
-		mcode::model::model_client& inner_;
-		std::FILE* out_;
-		bool json_;
-	};
-
-	// The same failure reaches the human on stderr and a `--json` consumer on the
-	// stream, and both get the exit code the error maps to.
-	auto report_failure( mcode::cli::json_stream& stream, const mcode::error& failure ) -> int {
-		const auto code = mcode::cli::exit_code_for( failure.code );
-
-		std::fprintf( stderr, "mcode: %s\n", failure.msg.c_str( ) );
-		stream.emit_run_end( code, failure.msg );
-
-		return mcode::cli::to_int( code );
+	// The workspace root the invocation names, or the current directory.
+	[[nodiscard]] auto invocation_root( const mcode::cli::exec_options& parsed )
+		-> std::filesystem::path {
+		return parsed.working_directory.empty( )
+			? std::filesystem::current_path( )
+			: std::filesystem::path{ parsed.working_directory };
 	}
 
 }
 
-auto run_exec( const std::vector< std::string >& arguments ) -> int {
-	auto parsed = mcode::cli::parse_exec_options( arguments );
-
-	if ( !parsed ) {
-		std::fprintf( stderr, "mcode: %s\n\n", parsed.error( ).msg.c_str( ) );
+// Everything that must be settled before a single byte of provider work: a bad
+// invocation, a listing, or a resume that names no session. Returns the exit code
+// when the run should stop there, and nothing when it should proceed.
+[[nodiscard]] auto refuse_bad_invocation( const std::vector< std::string >& arguments,
+	mcode::cli::exec_options& parsed ) -> std::optional< int > {
+	if ( const auto candidate = mcode::cli::parse_exec_options( arguments ); !candidate ) {
+		std::fprintf( stderr, "mcode: %s\n\n", candidate.error( ).msg.c_str( ) );
 		std::fputs( mcode::cli::usage_text( "mcode" ).c_str( ), stderr );
 
 		return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
+	} else {
+		parsed = *candidate;
 	}
 
-	if ( !parsed->unknown_arguments.empty( ) ) {
+	if ( !parsed.unknown_arguments.empty( ) ) {
 		std::fprintf( stderr, "mcode: unknown argument '%s'\n\n",
-			parsed->unknown_arguments.front( ).c_str( ) );
+			parsed.unknown_arguments.front( ).c_str( ) );
 		std::fputs( mcode::cli::usage_text( "mcode" ).c_str( ), stderr );
 
 		return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
 	}
 
-	// Answered before any config or provider work: a listing must succeed unconfigured.
-	if ( parsed->list_sessions ) {
-		return mcode::cli::to_int( mcode::cli::print_sessions(
-			parsed->working_directory.empty( )
-				? std::filesystem::current_path( )
-				: std::filesystem::path{ parsed->working_directory } ) );
+	// A listing must succeed unconfigured, so it is answered before any config load.
+	if ( parsed.list_sessions ) {
+		return mcode::cli::to_int( mcode::cli::print_sessions( invocation_root( parsed ) ) );
 	}
 
-	// Resolved before any provider work, so a mistyped id is reported as the argument error it is.
-	if ( !parsed->resume_session.empty( ) || parsed->continue_session ) {
-		const auto root = parsed->working_directory.empty( )
-			? std::filesystem::current_path( )
-			: std::filesystem::path{ parsed->working_directory };
-
-		const auto existing = mcode::cli::resolve_session( root, parsed->resume_session );
+	// A mistyped id is an argument error, so it is reported as one rather than as a
+	// failure to reach the provider.
+	if ( !parsed.resume_session.empty( ) || parsed.continue_session ) {
+		const auto existing = mcode::cli::resolve_session( invocation_root( parsed ),
+			parsed.resume_session );
 
 		if ( !existing ) {
 			std::fprintf( stderr, "mcode: %s\n", existing.error( ).msg.c_str( ) );
@@ -126,12 +103,22 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		}
 	}
 
-	auto stream = mcode::cli::json_stream{ parsed->json };
-	stream.emit_run_start( parsed->prompt );
+	return std::nullopt;
+}
 
-	const auto config = mcode::config::load( parsed->working_directory.empty( )
+auto run_exec( const std::vector< std::string >& arguments ) -> int {
+	auto parsed = mcode::cli::exec_options{ };
+
+	if ( const auto refused = refuse_bad_invocation( arguments, parsed ); refused ) {
+		return *refused;
+	}
+
+	auto stream = mcode::cli::json_stream{ parsed.json };
+	stream.emit_run_start( parsed.prompt );
+
+	const auto config = mcode::config::load( parsed.working_directory.empty( )
 		? std::filesystem::current_path( )
-		: std::filesystem::path{ parsed->working_directory } );
+		: std::filesystem::path{ parsed.working_directory } );
 
 	if ( !config ) {
 		std::fprintf( stderr, "mcode: %s\n", config.error( ).msg.c_str( ) );
@@ -140,9 +127,9 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
 	}
 
-	const auto provider_name = parsed->model.empty( )
+	const auto provider_name = parsed.model.empty( )
 		? config->get_string( "model.provider" ).value_or( std::string{ } )
-		: parsed->model;
+		: parsed.model;
 	const auto model_name = config->get_string( "model.model" ).value_or( std::string{ } );
 	const auto api_key_env = config->get_string( "model.api_key_env" );
 	const auto base_url = config->get_string( "model.base_url" );
@@ -170,18 +157,18 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	auto hooks = mcode::ext::hook_registry{ bus };
 	auto tool_registry = mcode::tool_registry{ };
 
-	const auto workspace_path = parsed->working_directory.empty( )
+	const auto workspace_path = parsed.working_directory.empty( )
 		? std::filesystem::current_path( )
-		: std::filesystem::path{ parsed->working_directory };
+		: std::filesystem::path{ parsed.working_directory };
 
 	// Created before anything resolves the root, so every path the run touches points into it.
 	auto effective_workspace = workspace_path;
 
-	if ( parsed->worktree ) {
-		auto created = mcode::cli::create_worktree( workspace_path, parsed->worktree_name );
+	if ( parsed.worktree ) {
+		auto created = mcode::cli::create_worktree( workspace_path, parsed.worktree_name );
 
 		if ( !created ) {
-			return report_failure( stream, created.error( ) );
+			return mcode::cli::detail::report_failure( stream, created.error( ) );
 		}
 
 		effective_workspace = *created;
@@ -208,7 +195,7 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 
 	auto skills_context = mcode::skills::assemble_session_context( skills_options );
 
-	if ( parsed->verbose ) {
+	if ( parsed.verbose ) {
 		for ( const auto& warning : skills_context.warnings ) {
 			std::fprintf( stderr, "mcode: %s\n", warning.c_str( ) );
 		}
@@ -240,13 +227,49 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 
 	auto engine = mcode::perm::permission_engine{ *space, &user_store };
 
-	if ( !parsed->no_extensions ) {
+	// Declared here so the extension surface's session callbacks can read it; it is
+	// opened after the extensions load.
+	auto log = mcode::event_log{ };
+
+	auto commands = mcode::ext::command_registry{ };
+
+	auto budget = mcode::session_budget{ };
+
+	if ( parsed.max_steps > 0 ) {
+		budget.max_steps = parsed.max_steps;
+	}
+
+	if ( parsed.max_budget_usd > 0.0 ) {
+		budget.max_usd = parsed.max_budget_usd;
+	}
+
+	// The surface holds this address from load time, so the struct is filled before
+	// the load even though some of the values it needs are read later.
+	auto tools_context = mcode::tools::tool_context{ };
+
+	// The HTTP client the model and every network collaborator share. Declared here,
+	// ahead of the extension load, because the collaborators capture it by reference.
+	auto transport = mcode::net::http_client{ };
+
+	// One struct shared with the interactive path, so a capability added there
+	// reaches here too rather than only one of the two. Built before the load, since
+	// the surface holds these addresses from load time.
+	auto collaborators = mcode::cli::build_collaborators(
+		{ .tools = &tools_context, .transport = &transport, .permissions = &engine,
+			.config = &*config, .log = &log, .budget = &budget });
+
+	if ( !parsed.no_extensions ) {
 		auto options = mcode::ext::loader_options{ };
+
+		auto context = mcode::ext::register_context{ .skills = &skills_context.skills,
+			.servers = &extension_servers, .config = &*config, .space = &*space,
+			.reads = &reads, .permissions = &engine, .commands = &commands };
+
+		collaborators.apply( context );
+
 		// The skills outlive the extensions, which resolve `skill_read` against them.
 		options.register_api = mcode::ext::default_register_api( tool_registry,
-			{ .skills = &skills_context.skills, .servers = &extension_servers,
-				.config = &*config, .space = &*space, .reads = &reads,
-				.permissions = &engine } );
+			context );
 
 		auto roots = mcode::ext::default_roots( effective_workspace );
 
@@ -257,7 +280,7 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		extensions = mcode::ext::load_workspace_extensions( effective_workspace, roots,
 			registry, hooks, options );
 
-		if ( parsed->verbose ) {
+		if ( parsed.verbose ) {
 			for ( const auto& failure : extensions.report.failed ) {
 				std::fprintf( stderr, "mcode: extension '%s' failed to load: %s\n",
 					failure.name.c_str( ), failure.reason.c_str( ) );
@@ -312,9 +335,8 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
 	}
 
-	auto transport = mcode::net::http_client{ };
 	auto client = mcode::model::http_model_client{ transport };
-	auto loop_client = streaming_client{ client, stdout, parsed->json };
+	auto loop_client = mcode::cli::detail::streaming_client{ client, stdout, parsed.json };
 
 	bus.subscribe( mcode::events::kind::assistant_delta, [&]( const mcode::events::event& value ) {
 		stream.emit_event( value );
@@ -352,9 +374,9 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	auto terminal_source = mcode::perm::terminal_approval_source{ };
 
 	// `terminal_size` reports stdout's console, so it succeeds exactly when a human can answer.
-	const auto interactive = !parsed->json && mcode::platform::terminal_size( ).has_value( );
+	const auto interactive = !parsed.json && mcode::platform::terminal_size( ).has_value( );
 
-	if ( parsed->verbose ) {
+	if ( parsed.verbose ) {
 		std::fprintf( stderr, "mcode: sandbox: %s (filesystem %s, network %s)\n",
 			mcode::platform::sandbox_mechanism( ).data( ),
 			mcode::platform::to_string( mcode::platform::sandbox_capability_level( ) ).data( ),
@@ -362,14 +384,14 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	}
 
 	{
-		auto engine_options = mcode::cli::detail::resolve_approval_policy( *parsed, *config, interactive );
+		auto engine_options = mcode::cli::detail::resolve_approval_policy( parsed, *config, interactive );
 
 		engine.set_options( engine_options );
 		engine.set_approval_source( interactive
 			? static_cast< mcode::perm::approval_source* >( &terminal_source )
 			: static_cast< mcode::perm::approval_source* >( &headless_source ) );
 
-		for ( const auto& dir : parsed->add_dirs ) {
+		for ( const auto& dir : parsed.add_dirs ) {
 			engine.add_root( dir );
 		}
 
@@ -404,12 +426,11 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	auto run_id = std::to_string(
 		static_cast< long long >( mcode::support::epoch_milliseconds( ) ) );
 
-	auto tools_context = mcode::tools::tool_context{ };
 	tools_context.space = &*space;
 	tools_context.reads = &reads;
 	tools_context.permissions = &engine;
 	tools_context.run_id = run_id;
-	tools_context.headless = parsed->json;
+	tools_context.headless = parsed.json;
 
 	// Only when `[egress] allow` names a host; absent means the child gets no network at all.
 	auto egress = mcode::cli::start_egress_if_configured( *config );
@@ -417,20 +438,11 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 
 	auto sink = mcode::tools::vector_sink{ };
 
-	const auto registered = mcode::tools::register_core_tools( tool_registry, sink, tools_context );
+	const auto registered = mcode::tools::register_core_tools( tool_registry, sink,
+		tools_context );
 
 	if ( !registered ) {
-		return report_failure( stream, registered.error( ) );
-	}
-
-	auto budget = mcode::session_budget{ };
-
-	if ( parsed->max_steps > 0 ) {
-		budget.max_steps = parsed->max_steps;
-	}
-
-	if ( parsed->max_budget_usd > 0.0 ) {
-		budget.max_usd = parsed->max_budget_usd;
+		return mcode::cli::detail::report_failure( stream, registered.error( ) );
 	}
 
 	auto provider = *descriptor;
@@ -439,19 +451,17 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		provider.endpoint = *base_url;
 	}
 
-	auto log = mcode::event_log{ };
-
 	// Opened first, so every event from the first step lands on disk.
-	const auto session = mcode::cli::open_session_for_run( *parsed, space->root( ) );
+	const auto session = mcode::cli::open_session_for_run( parsed, space->root( ) );
 
 	if ( !session ) {
-		return report_failure( stream, session.error( ) );
+		return mcode::cli::detail::report_failure( stream, session.error( ) );
 	}
 
-	const auto resumed = !parsed->resume_session.empty( ) || parsed->continue_session;
+	const auto resumed = !parsed.resume_session.empty( ) || parsed.continue_session;
 
 	if ( const auto opened = log.open( session->path ); !opened ) {
-		return report_failure( stream, opened.error( ) );
+		return mcode::cli::detail::report_failure( stream, opened.error( ) );
 	}
 
 	std::fputs( mcode::cli::start_session_log( log, *session, resumed ).c_str( ), stderr );
@@ -464,7 +474,21 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	dependencies.budget = budget;
 	dependencies.model_name = model_name;
 	dependencies.caps = *caps;
-	dependencies.provider_name = provider_name;
+
+	// Unset tiers are the common case: routing falls back to `model.model` per call.
+	if ( const auto tiers = mcode::cli::resolve_tiers( model_name, *config ); !tiers ) {
+		const auto message = tiers.error( ).msg;
+
+		std::fprintf( stderr, "mcode: %s\n", message.c_str( ) );
+		stream.emit_run_end( mcode::cli::exit_code::usage_error, message );
+
+		return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
+	} else {
+		dependencies.plan_tier = tiers->plan;
+		dependencies.act_tier = tiers->act;
+		dependencies.side_tier = tiers->side;
+	}
+
 	dependencies.provider = provider;
 	dependencies.api_key = *api_key;
 	dependencies.workspace_root = space->root( ).string( );
@@ -484,15 +508,18 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 
 	// The loop drives the timers: one pump per step, on the thread the VM belongs to.
 	dependencies.pump_timers = [ &extensions ]( ) { extensions.pump_timers( ); };
+	dependencies.pump_deferred = [ &extensions ]( ) { extensions.pump_deferred( ); };
 
 	// Must outlive the loop: the supervisors own the child processes the loop dispatches into.
 	auto mcp_servers = mcode::mcp::server_set{ };
 
 	auto loop = mcode::agent_loop{ dependencies };
 
+	mcode::cli::set_active_loop( &loop );
+
 	// Armed from configuration, never from the model's own output.
 	{
-		auto command = parsed->verify_command;
+		auto command = parsed.verify_command;
 
 		if ( command.empty( ) ) {
 			command = config->get_string( "verify.command" ).value_or( std::string{ } );
@@ -534,22 +561,22 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 			.loop = &loop, .owned = &mcp_servers } );
 
 	if ( !connected ) {
-		return report_failure( stream, connected.error( ) );
+		return mcode::cli::detail::report_failure( stream, connected.error( ) );
 	}
 
-	const auto outcome = loop.run( parsed->prompt );
+	const auto outcome = loop.run( parsed.prompt );
 
 	if ( !outcome ) {
 		// Separated from the streamed answer above it, which a failure may have cut mid-line.
 		std::fputc( '\n', stderr );
 
-		return report_failure( stream, outcome.error( ) );
+		return mcode::cli::detail::report_failure( stream, outcome.error( ) );
 	}
 
 	const auto code = mcode::cli::exit_code_for_run( *outcome, loop.budget( ).exhausted( ),
 		loop.permission_denied( ) );
 
-	if ( parsed->verbose ) {
+	if ( parsed.verbose ) {
 		const auto usage = client.accumulated_usage( );
 		const auto cost = mcode::model::compute_cost( *caps, usage );
 
@@ -559,41 +586,6 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 			cost );
 	}
 
-	// A `--json` consumer reads one object per line, so no separating blank line is written.
-	if ( !parsed->json ) {
-		std::fputc( '\n', stdout );
-	}
-
-	auto summary = std::string{ "run ended in state " };
-
-	if ( outcome->final_state == mcode::loop_state::done ) {
-		summary = "completed";
-	} else {
-		summary += to_string( outcome->final_state );
-
-		if ( !outcome->summary_json.empty( ) ) {
-			summary += ": ";
-			summary += outcome->summary_json;
-		}
-	}
-
-	// Printed in every run: showing `no-tests` only on failure reads as verification.
-	if ( parsed->verbose || outcome->verdict != mcode::verification_verdict::no_tests ) {
-		std::fprintf( stderr, "mcode: verification: %s",
-			std::string{ to_string( outcome->verdict ) }.c_str( ) );
-
-		if ( const auto detail = loop.verification_detail( ); !detail.empty( ) ) {
-			std::fprintf( stderr, " (%s)", std::string{ detail }.c_str( ) );
-		}
-
-		std::fprintf( stderr, "\n" );
-	}
-
-	if ( code != mcode::cli::exit_code::success ) {
-		std::fprintf( stderr, "mcode: %s\n", summary.c_str( ) );
-	}
-
-	stream.emit_run_end( code, summary, outcome->verdict, loop.verification_detail( ) );
-
-	return mcode::cli::to_int( code );
+	return mcode::cli::detail::report_run_outcome( stream, loop, *outcome, code,
+		parsed.json, parsed.verbose );
 }

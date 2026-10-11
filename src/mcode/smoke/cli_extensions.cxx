@@ -1,6 +1,9 @@
 #include <cstdio>
+#include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "mcode/agent/subagent.hxx"
@@ -8,6 +11,7 @@
 #include "mcode/core/registry.hxx"
 #include "mcode/core/version.hxx"
 #include "mcode/events/bus.hxx"
+#include "mcode/ext/api_cmd.hxx"
 #include "mcode/ext/hooks.hxx"
 #include "mcode/ext/loader.hxx"
 #include "mcode/ext/lua_host.hxx"
@@ -299,6 +303,113 @@ auto smoke_cli_and_extensions( ) -> void {
 	for ( const auto name : mcode::subagent_tool_names( ) ) {
 		check( name != "bash" && name != "edit" && name != "write",
 			"no mutating tool reaches a read-only subagent" );
+	}
+
+	section( "extension loader (shipped extensions, collaborators installed)" );
+
+	// The load above installed no collaborators, so a bundled extension whose tool
+	// needs one is present and inert. This is the other half: with a surface wired
+	// the way the session wires it, every bundled tool must actually register.
+	// A load that succeeds without registering is the defect this exists to catch.
+	auto wired_registry = mcode::tool_registry{ };
+	auto wired_providers = mcode::model::provider_registry{ };
+	auto wired_bus = mcode::events::bus{ };
+	auto wired_hooks = mcode::ext::hook_registry{ wired_bus };
+
+	auto wired_commands = mcode::ext::command_registry{ };
+	auto wired_session_state = std::function< mcode::ext::session_state( ) >{
+		[ ]( ) { return mcode::ext::session_state{ }; } };
+	auto wired_plan = std::function< void( std::string_view ) >{ []( std::string_view ) { } };
+	auto wired_bash = std::function< mcode::result< std::string >(
+		const std::string&, std::int64_t ) >{
+		[ ]( const std::string&, std::int64_t ) -> mcode::result< std::string > {
+			return std::string{ "{\"ok\":true,\"succeeded\":true,\"exit_code\":0}" };
+		} };
+	auto wired_task = std::function< mcode::result< mcode::subagent_report >(
+		const mcode::subagent_spec& ) >{
+		[ ]( const mcode::subagent_spec& ) -> mcode::result< mcode::subagent_report > {
+			return mcode::subagent_report{ .summary = "a report", .steps = 1 };
+		} };
+	auto wired_search = std::function< mcode::ext::search_result( const std::string& ) >{
+		[ ]( const std::string& ) -> mcode::ext::search_result {
+			return std::vector< mcode::ext::search_hit >{ };
+		} };
+	auto wired_fetch = std::function< mcode::result< mcode::ext::fetch_result >(
+		const std::string&, std::int64_t ) >{
+		[ ]( const std::string&, std::int64_t ) -> mcode::result< mcode::ext::fetch_result > {
+			return mcode::ext::fetch_result{ .status = 200, .content_type = "text/plain",
+				.body = "hello" };
+		} };
+
+	auto wired_options = mcode::ext::loader_options{ };
+	wired_options.register_api = mcode::ext::default_register_api( wired_registry,
+		{ .commands = &wired_commands, .session_state = &wired_session_state,
+			.web_searcher = &wired_search, .subagent_runner = &wired_task,
+			.bash_runner = &wired_bash, .plan_sink = &wired_plan,
+			.fetch_runner = &wired_fetch } );
+
+	auto wired = mcode::ext::load_extensions(
+		{ bundled_extensions_directory( ) }, wired_providers, wired_hooks, wired_options );
+
+	for ( const auto& failure : wired.report.failed ) {
+		std::printf( "  loader: %s failed: %s\n", failure.name.c_str( ),
+			failure.reason.c_str( ) );
+	}
+
+	check( wired.report.failed.empty( ),
+		"every shipped extension loaded with its collaborators installed" );
+
+	// Each of these needs a collaborator, so each is absent from the earlier load.
+	for ( const auto name : { "task", "todo", "web_search", "fetch", "git_status",
+			"git_diff", "git_commit", "gh_pr", "gh_issue", "gh_review" } ) {
+		check( wired_registry.find( name ) != nullptr,
+			std::string{ "the " } + name + " tool registered" );
+	}
+
+	// The git and GitHub extensions are gated on `spawn`, not `read`: a tool that
+	// can run a command must not auto-approve inside the workspace.
+	for ( const auto name : { "git_commit", "gh_pr" } ) {
+		const auto* definition = wired_registry.find( name );
+
+		check( definition != nullptr && definition->klass == mcode::tool_class::exec,
+			std::string{ name } + " is an exec-class tool" );
+	}
+
+	// Registration is not capability. An extension registers its tools whenever its
+	// `init.luau` runs, and the `mcode.X` table entry exists whether or not a
+	// collaborator is behind it, so a surface that lost one passes every check above
+	// and fails only at the call site. These assert the accessors directly.
+	{
+		auto host = mcode::lua_host::create( );
+
+		if ( !host ) {
+			check( false, "a host can be created for the capability probe" );
+
+			return;
+		}
+
+		auto surface = mcode::ext::api_surface{ };
+		const auto details = mcode::ext::manifest{ };
+
+		if ( const auto installed = surface.install( mcode::ext::api_surface::install_request{
+				.host = *host, .registry = wired_registry, .providers = wired_providers,
+				.hooks = wired_hooks, .details = details, .commands = &wired_commands,
+				.session_state = &wired_session_state, .web_searcher = &wired_search,
+				.subagent_runner = &wired_task, .bash_runner = &wired_bash,
+				.plan_sink = &wired_plan, .fetch_runner = &wired_fetch } ); !installed ) {
+			check( false, "the probe surface installed" );
+
+			return;
+		}
+
+		check( surface.subagent_runner( ) != nullptr,
+			"install copied the subagent runner out of the request" );
+		check( surface.bash_runner( ) != nullptr,
+			"install copied the command runner out of the request" );
+		check( surface.plan_sink( ) != nullptr,
+			"install copied the plan sink out of the request" );
+		check( surface.fetch_runner( ) != nullptr,
+			"install copied the fetch runner out of the request" );
 	}
 
 	if ( const auto* descriptor = shipped_providers.find( "anthropic-messages" );

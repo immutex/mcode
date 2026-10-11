@@ -16,6 +16,7 @@
 #include "mcode/agent/repetition_guard.hxx"
 #include "mcode/agent/context_controller.hxx"
 #include "mcode/core/error.hxx"
+#include "mcode/agent/event_log.hxx"
 #include "mcode/core/registry.hxx"
 #include "mcode/events/bus.hxx"
 #include "mcode/model/client.hxx"
@@ -30,13 +31,34 @@ namespace mcode {
 
 	class snapshot_store;
 
+	// Declared, not included: `subagent.hxx` includes this header, so the spawn is
+	// defined alongside the subagent it builds.
+	struct subagent_spec;
+	struct subagent_report;
+
+	// Which call this is, not how big it is: routing is by task class.
+	enum class model_tier {
+		plan,
+		act,
+		side,
+	};
+
+	// A tier's model and its prices. Unconfigured means "use the loop's own model",
+	// which is the fallback `model.model` names.
+	struct tier_model {
+		std::string name;
+		model::capabilities caps = { };
+		bool configured = false;
+	};
+
 	inline constexpr std::uint32_t DEFAULT_MAX_STEPS = 100;
 	inline constexpr std::uint64_t DEFAULT_MAX_TOKENS = 2'000'000;
 	inline constexpr double DEFAULT_MAX_USD = 5.0;
 	inline constexpr double NEARLY_EXHAUSTED_FRACTION = 0.20;
 
-	// The file is the record; this only bounds what the in-memory copy holds.
-	inline constexpr std::uint64_t MAX_RETAINED_LOG_BYTES = 16u * 1024u * 1024u;
+	// The goal is rewritten into the prompt this often, and after every compaction:
+	// multi-step plans drift by roughly 70% fill, and recitation is the cheap fix.
+	inline constexpr std::uint32_t RECITATION_INTERVAL_STEPS = 10;
 
 	inline constexpr std::size_t THRASH_WINDOW = 12;
 	inline constexpr std::size_t THRASH_REPEAT_LIMIT = 3;
@@ -144,100 +166,19 @@ namespace mcode {
 			while ( !usd_used.compare_exchange_weak( current, current + usd ) ) {
 			}
 		}
-	};
 
-	struct event {
-		std::uint32_t version = 1;
-		std::uint64_t sequence = 0;
-		std::int64_t timestamp_ms = 0;
-		std::string kind;
-		std::string run;
-		std::uint32_t turn = 0;
-		std::uint32_t step = 0;
-		std::string payload_json;
+		// Folds a subagent's spend into this budget. A child on its own budget would be
+		// free to the run, so the parent carries what the child cost. The child's step
+		// count is its own; only its tokens and cost are the run's.
+		auto absorb_child_spend( const std::uint64_t tokens, const double usd ) noexcept -> void {
+			tokens_used.fetch_add( tokens );
 
-		[[nodiscard]] auto to_json( ) const -> std::string;
-	};
+			auto current = usd_used.load( );
 
-	// Flushed per event so a crash keeps every complete line; replay tolerates a torn tail.
-	class event_log {
-	public:
-		event_log( ) = default;
-		~event_log( );
-
-		event_log( event_log&& other ) noexcept;
-		auto operator=( event_log&& other ) noexcept -> event_log&;
-
-		event_log( const event_log& ) = delete;
-		auto operator=( const event_log& ) -> event_log& = delete;
-
-		auto open( const std::filesystem::path& path ) -> status;
-		auto close( ) -> void;
-
-		[[nodiscard]] auto is_open( ) const noexcept -> bool { return sink_ != nullptr; }
-		[[nodiscard]] auto path( ) const noexcept -> const std::filesystem::path& { return path_; }
-
-		// Counts flush failures, malformed payloads and a torn tail; never thrown,
-		// since losing the log must not end the session.
-		[[nodiscard]] auto write_failures( ) const noexcept -> std::uint64_t {
-			return write_failures_;
+			while ( !usd_used.compare_exchange_weak( current, current + usd ) ) {
+			}
 		}
-
-		[[nodiscard]] auto evicted( ) const noexcept -> std::uint64_t { return evicted_; }
-
-		auto set_position( std::string_view run, std::uint32_t turn, std::uint32_t step ) -> void {
-			run_ = std::string{ run };
-			turn_ = turn;
-			step_ = step;
-		}
-
-		auto append( const std::string kind, std::string payload_json = "{}" ) -> event;
-
-		// Not append(): this preserves the recorded sequence and must not renumber.
-		auto restore( event recorded ) -> void;
-
-		[[nodiscard]] auto events( ) const noexcept -> const std::vector< event >& {
-			return events_;
-		}
-		[[nodiscard]] auto size( ) const noexcept -> std::size_t { return events_.size( ); }
-		[[nodiscard]] auto empty( ) const noexcept -> bool { return events_.empty( ); }
-
-
-		[[nodiscard]] auto next_sequence( ) const noexcept -> std::uint64_t {
-			return next_sequence_;
-		}
-
-
-		[[nodiscard]] auto to_jsonl( ) const -> std::string;
-
-	private:
-		std::vector< event > events_;
-		std::uint64_t next_sequence_ = 0;
-
-		std::unique_ptr< std::FILE, void ( * )( std::FILE* ) > sink_{ nullptr, nullptr };
-		std::filesystem::path path_;
-		std::uint64_t write_failures_ = 0;
-
-		std::uint64_t retained_bytes_ = 0;
-		std::uint64_t evicted_ = 0;
-
-		std::string run_;
-		std::uint32_t turn_ = 0;
-		std::uint32_t step_ = 0;
 	};
-
-	struct replay_result {
-		event_log log;
-
-		std::size_t events_read = 0;
-
-		bool truncated_tail = false;
-
-		std::size_t malformed_lines = 0;
-	};
-
-	[[nodiscard]] auto replay_event_log( const std::filesystem::path& path )
-		-> result< replay_result >;
 
 	struct tool_call {
 		std::string id;
@@ -311,6 +252,11 @@ namespace mcode {
 		model::cache_mode mode = model::cache_mode::none;
 		bool near_budget = false;
 
+		// Regenerated from session state, not summarized: it sits ahead of the history
+		// so compaction cannot drop the goal, and it is byte-identical between
+		// rewrites so the prefix stays cached.
+		std::string_view pinned_state;
+
 		// The provider's field names, so a breakpoint anchor matches the rendered body.
 		model::request_spec fields = { };
 
@@ -356,7 +302,13 @@ namespace mcode {
 			session_budget budget = { };
 			std::string model_name;
 			model::capabilities caps = { };
-			std::string provider_name;
+
+			// Routing is by call site, and an unset tier falls back to `model_name`.
+			// Resolved by the caller, which is the only place that has the config.
+			tier_model plan_tier;
+			tier_model act_tier;
+			tier_model side_tier;
+
 			model::provider_descriptor provider;
 			std::string api_key;
 			std::string workspace_root;
@@ -373,6 +325,10 @@ namespace mcode {
 
 			// Runs on the loop's thread once per step, which is when extension timers fire.
 			std::function< void( ) > pump_timers;
+
+			// Same step, after the timers: a timer handler that defers must not run its
+			// callback inside the timer that queued it.
+			std::function< void( ) > pump_deferred;
 		};
 
 		agent_loop( tool_registry& registry, event_log& log, session_budget budget = { } )
@@ -391,6 +347,18 @@ namespace mcode {
 
 			return found != handlers_.end( ) ? &found->second : nullptr;
 		}
+
+		// The child borrows this loop's collaborators, its remaining budget and its
+		// workspace; it does not borrow the conversation. Defined in `subagent.cxx`.
+		[[nodiscard]] auto spawn_subagent( const subagent_spec& spec )
+			-> result< subagent_report >;
+
+		// The model a tier resolves to, falling back to this loop's own model.
+		[[nodiscard]] auto tier_for( model_tier tier ) const -> const tier_model&;
+
+		// The model the loop does its main work on: what the window and the context
+		// meter are measured against.
+		[[nodiscard]] auto working_model( ) const noexcept -> const model::capabilities&;
 
 		// a plan response with no tool call is the turn's answer, so Act never re-requests it.
 		[[nodiscard]] auto run( const std::string_view user_task ) -> result< turn_outcome >;
@@ -418,6 +386,17 @@ namespace mcode {
 			notes_pointer_ = std::move( pointer );
 		}
 
+		// The plan lives in session state, so recitation reads it whatever wrote it —
+		// the `todo` extension when loaded, and nothing at all when it is disabled.
+		// Refreshed here rather than waiting for the interval: a plan set mid-run is
+		// wanted on the very next request, which is the turn that acts on it.
+		auto set_plan( std::string plan ) -> void {
+			plan_ = std::move( plan );
+			refresh_pinned_state( );
+		}
+
+		[[nodiscard]] auto plan( ) const noexcept -> std::string_view { return plan_; }
+
 		[[nodiscard]] auto state( ) const noexcept -> loop_state { return state_; }
 
 		[[nodiscard]] auto model_name( ) const noexcept -> std::string_view {
@@ -444,8 +423,10 @@ namespace mcode {
 		}
 
 		[[nodiscard]] auto context_capacity( ) const noexcept -> std::uint64_t {
-			return caps_.context_window > 0
-				? static_cast< std::uint64_t >( caps_.context_window )
+			const auto& working = working_model( );
+
+			return working.context_window > 0
+				? static_cast< std::uint64_t >( working.context_window )
 				: 0;
 		}
 
@@ -490,7 +471,13 @@ namespace mcode {
 	private:
 		auto run_state_machine( ) -> turn_outcome;
 
-		auto request_and_fold( model::effort effort ) -> result< bool >;
+		auto request_and_fold( model::effort effort, model_tier tier ) -> result< bool >;
+
+		// One side-tier call that compresses the messages about to be dropped, so the
+		// history keeps a record of them. Empty on failure: the caller then drops them
+		// without a summary, which is the documented fallback, never a lost goal.
+		[[nodiscard]] auto summarize_dropped( const std::vector< model::message >& dropped )
+			-> std::string;
 
 		auto dispatch_pending( ) -> void;
 
@@ -527,6 +514,12 @@ namespace mcode {
 		std::string user_task_;
 		std::string model_name_;
 		model::capabilities caps_;
+
+		// The fallback `tier_for` returns: this loop's own model and prices.
+		tier_model default_tier_;
+		tier_model plan_tier_;
+		tier_model act_tier_;
+		tier_model side_tier_;
 		model::provider_descriptor provider_;
 		std::string api_key_;
 		std::string workspace_root_;
@@ -549,6 +542,10 @@ namespace mcode {
 		// Returns false when the steer budget is spent, so the caller falls through.
 		[[nodiscard]] auto steer_repetition( const agent::repetition_verdict& verdict ) -> bool;
 
+		// Rebuilds the block from session state. Cheap, so it runs on the recitation
+		// interval and after a compaction rather than every request.
+		auto refresh_pinned_state( ) -> void;
+
 		std::string stop_reason_;
 		bool turn_truncated_ = false;
 
@@ -564,10 +561,19 @@ namespace mcode {
 		bool harness_call_ = false;
 		std::string notes_pointer_;
 		context_occupancy occupancy_;
+
+		// Recitation: the goal, the plan and the files this run changed, rebuilt from
+		// session state so a compaction cannot lose them.
+		pinned_state pinned_;
+		std::string task_;
+		std::string plan_;
+		std::vector< std::string > modified_files_;
+		std::uint32_t last_recitation_step_ = 0;
 		perm::permission_engine* permissions_ = nullptr;
 		std::string instruction_chain_;
 		std::string skill_index_;
 		std::function< void( ) > pump_timers_;
+		std::function< void( ) > pump_deferred_;
 		const std::atomic< bool >* cancel_ = nullptr;
 		std::vector< tool_call > pending_calls_;
 

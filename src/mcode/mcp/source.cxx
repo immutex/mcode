@@ -10,6 +10,7 @@ namespace mcode::mcp {
 
 		inline constexpr std::string_view NAME_SEPARATOR = "__";
 		inline constexpr std::string_view OWNER_PREFIX = "mcp:";
+		inline constexpr std::string_view RESOURCE_TOOL_NAME = "resources";
 
 		auto owner_of( const std::string& server_name ) -> std::string {
 			return std::string{ OWNER_PREFIX } + server_name;
@@ -43,7 +44,8 @@ namespace mcode::mcp {
 	}
 
 	auto source::register_server( const std::string& server_name,
-		const std::vector< server_tool >& tools ) -> result< void > {
+		const std::vector< server_tool >& tools, const bool with_resources )
+		-> result< void > {
 		// the registry rejects duplicate names, so a restart removes the prior entries first
 		registry_->remove_owner( owner_of( server_name ) );
 
@@ -51,6 +53,19 @@ namespace mcode::mcp {
 			auto registered = register_tool( server_name, tool );
 
 			if ( !registered ) {
+				return std::unexpected( registered.error( ) );
+			}
+		}
+
+		if ( with_resources ) {
+			auto resource = server_tool{ };
+			resource.name = RESOURCE_TOOL_NAME;
+			resource.description = "List this server's resources, or read one by URI. "
+				"Call it with no arguments to list them, or with a uri to read it.";
+			resource.schema_json = R"({"type":"object","properties":{"uri":{"type":"string",)"
+				R"("description":"The resource to read; omit to list them"}}})";
+
+			if ( auto registered = register_tool( server_name, resource ); !registered ) {
 				return std::unexpected( registered.error( ) );
 			}
 		}

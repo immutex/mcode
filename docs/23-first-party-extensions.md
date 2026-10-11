@@ -48,6 +48,18 @@ Core membership is decided by three tests (`06` §Core tool set): **guaranteed**
 
 `web` and `git` are the two that must be excellent: they are what a new extension author reads first.
 
+**All seven ship as of 0.1.0.** The one core API they required that did not exist is
+`mcode.bash( command, opts )`, and it is deliberately not a second exec path: it routes
+to the same core `bash` handler, so the sandbox profile, the permission gate and the
+output cap are shared, and it is gated on the `spawn` manifest permission. `git` and
+`github` are the two extensions that use it.
+
+`mcode.fetch` is the counterpart for a URL the **model** chose, which is a different
+problem from `mcode.net.get`: an extension's own call is bounded by its static
+`net:<host>` declarations, and a host the model invents is not in any of them. What
+bounds it instead is the permission engine's per-domain decision plus the harness's
+refusal of private and link-local addresses. `web` uses it for `fetch`.
+
 ## The network split (the security-relevant case)
 
 `web_search` and `fetch` are extensions, but **the extension is policy-free**. Everything security-relevant stays in C++:
@@ -129,13 +141,15 @@ The last one is the important test: it is the mechanical check that the core/ext
 - **Time-dependent tool descriptions.** Computing `os.date()` into a tool description at load makes descriptions non-deterministic — it breaks test reproducibility *and* invalidates the prompt cache every session. Inject the current date through the context block instead; descriptions stay static.
 - **Crossing the Lua↔C boundary in hot loops.** Walkers and parsers (glob, grep, ripgrep-class) stay in C++; Lua orchestrates. A first-party extension that reimplements a file walk in Lua is a bug, not a demonstration.
 - **Losing attribution.** When a bundled extension misbehaves, the user must be able to tell it was the extension and not the core. Stamp the source on every registry entry and prefix every log line and notification with the extension name (`18`).
+- **`mcode.bash` becoming a bypass.** It is the only way an extension runs a process, and it must stay a call into the core handler rather than a second implementation of it. A Lua socket, a raw `posix_spawn`, or a `mcode.bash` that skipped the gate would each move the security boundary into extension code, where `12` says it cannot live.
+- **`mcode.fetch` being gated like `net.get`.** The `net:<host>` declaration is static and the model's URL is not, so reusing that check would either refuse every real fetch or accept every host. The permission engine's per-domain decision is the gate that survives contact with a URL nobody knew in advance.
 
 ## Open questions
 
 - How many first-party extensions ship in v1 before the concept is proven? **Seven** is the current set (shipping table above); the risk is that shipping too many hides API gaps behind familiar code.
 - Should first-party extensions be updatable independently of the harness, or pinned to it? Independent updates are the ecosystem model but complicate the `api_version` guarantee.
-- Does the `web` extension ship a default search provider, or require configuration? Shipping one implies an opinion and a dependency; requiring config is worse first-run UX.
-- Should the `github` extension use the `gh` CLI or call the API directly? The CLI is simpler and inherits auth; the API is more capable and has no external dependency.
+- ~~Does the `web` extension ship a default search provider, or require configuration?~~ **Answered in 0.1.0: require configuration.** Shipping one means picking a vendor, a key and an endpoint shape we cannot supply, and a tool that exists only to fail is worse than one that is not there. `[web] search_url` plus `search_body` and four `*_path` keys describe any JSON provider; the harness supplies the request, the caps and the host gate.
+- ~~Should the `github` extension use the `gh` CLI or call the API directly?~~ **Answered in 0.1.0: the CLI.** It inherits the user's auth and their repository context; an API client needs its own token, pagination and rate-limit handling and would still have to guess which repository is meant.
 
 ## Sources
 

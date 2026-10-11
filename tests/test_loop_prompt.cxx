@@ -290,3 +290,110 @@ TEST_CASE( "a compaction that drops nothing is not reported as one", "[loop]" ) 
 		CHECK( event.kind != "context.compaction" );
 	}
 }
+
+TEST_CASE( "the pinned state sits after the system prompt and before the history", "[loop][recitation]" ) {
+	auto fx = fixture{ };
+	fx.connect( );
+
+	fx.loop->set_plan( "1. read the parser\n2. fix the offset bug" );
+	fx.client.queue( text_response( "done" ) );
+
+	std::ignore = fx.loop->run( "fix the parser offset" );
+
+	REQUIRE( fx.client.call_count( ) >= 1 );
+
+	const auto& request = fx.client.request( 0 );
+	REQUIRE( request.messages.size( ) >= 3 );
+
+	CHECK( request.messages[ 0 ].speaker == model::role::system );
+
+	// The goal and the plan, in one block ahead of every turn the model produced.
+	const auto& pinned = request.messages[ 1 ];
+
+	REQUIRE( pinned.speaker == model::role::system );
+	REQUIRE( !pinned.blocks.empty( ) );
+	CHECK( pinned.blocks[ 0 ].text.find( "fix the parser offset" ) != std::string::npos );
+	CHECK( pinned.blocks[ 0 ].text.find( "read the parser" ) != std::string::npos );
+}
+
+TEST_CASE( "a plan set mid-run reaches the very next request", "[loop][recitation]" ) {
+	auto fx = fixture{ };
+	fx.connect( );
+
+	// The plan is recorded by a tool during dispatch and the turn that acts on it is
+	// the next one, so waiting for the recitation interval would be ten steps late.
+	// `echo` is already in the registry, so re-registering it keeps the definition
+	// the loop dispatches against while changing what the call does.
+	fx.loop->register_handler( "echo", [ &fx ]( std::string_view ) -> result< std::string > {
+		fx.loop->set_plan( "the plan recorded mid-run" );
+
+		return std::string{ "{\"ok\":true}" };
+	} );
+
+	fx.client.queue( call_response( "echo", R"({})" ) );
+	fx.client.queue( call_response( "echo", R"({})" ) );
+	fx.client.queue( text_response( "acted on the plan" ) );
+
+	std::ignore = fx.loop->run( "do the thing" );
+
+	REQUIRE( fx.client.call_count( ) >= 3 );
+
+	// The request after the plan was recorded must carry it.
+	const auto& after = fx.client.request( 2 );
+
+	auto found = false;
+
+	for ( const auto& message : after.messages ) {
+		for ( const auto& block : message.blocks ) {
+			if ( block.text.find( "the plan recorded mid-run" ) != std::string::npos ) {
+				found = true;
+			}
+		}
+	}
+
+	CHECK( found );
+}
+
+TEST_CASE( "a run with no plan still recites the task", "[loop][recitation]" ) {
+	auto fx = fixture{ };
+	fx.connect( );
+
+	fx.client.queue( text_response( "done" ) );
+
+	std::ignore = fx.loop->run( "a task with no plan" );
+
+	REQUIRE( fx.client.call_count( ) >= 1 );
+
+	const auto& request = fx.client.request( 0 );
+	REQUIRE( request.messages.size( ) >= 3 );
+
+	CHECK( request.messages[ 1 ].speaker == model::role::system );
+	CHECK( request.messages[ 1 ].blocks[ 0 ].text.find( "a task with no plan" ) != std::string::npos );
+}
+
+TEST_CASE( "the recitation survives a compaction", "[loop][recitation]" ) {
+	auto fx = fixture{ };
+	fx.connect( );
+	fx.loop->budget( ).max_usd = 1.0;
+
+	fx.loop->set_plan( "keep the goal" );
+
+	// Enough input to trip the compaction trigger on the second request.
+	auto expensive = call_response( "echo", R"({})" );
+	expensive.input_tokens = 900'000;
+	fx.client.queue( expensive );
+	fx.client.queue( call_response( "echo", R"({})" ) );
+	fx.client.queue( text_response( "wrapped up" ) );
+
+	std::ignore = fx.loop->run( "the original goal" );
+
+	REQUIRE( fx.client.call_count( ) >= 2 );
+
+	const auto& after = fx.client.request( fx.client.call_count( ) - 1 );
+	REQUIRE( after.messages.size( ) >= 3 );
+	REQUIRE( after.messages[ 1 ].speaker == model::role::system );
+
+	const auto& block = after.messages[ 1 ].blocks[ 0 ].text;
+	CHECK( block.find( "the original goal" ) != std::string::npos );
+	CHECK( block.find( "keep the goal" ) != std::string::npos );
+}

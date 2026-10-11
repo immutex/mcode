@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.29)
 
 if(NOT DEFINED MCODE_VERSION)
-    set(MCODE_VERSION 0.0.4)
+    set(MCODE_VERSION 0.1.0)
 endif()
 
 project(mcode

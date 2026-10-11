@@ -114,7 +114,8 @@ namespace mcode::mcp {
 		state_ = server_state::ready;
 
 		if ( handlers_.on_ready ) {
-			handlers_.on_ready( tools_ );
+			handlers_.on_ready( tools_, client_ != nullptr ? client_->capabilities( )
+				: server_capabilities{ } );
 		}
 
 		return tools_;
@@ -143,7 +144,8 @@ namespace mcode::mcp {
 			state_ = server_state::ready;
 
 			if ( handlers_.on_ready ) {
-				handlers_.on_ready( tools_ );
+				handlers_.on_ready( tools_, client_ != nullptr ? client_->capabilities( )
+					: server_capabilities{ } );
 			}
 
 			return;

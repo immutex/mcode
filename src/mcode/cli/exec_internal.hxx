@@ -8,6 +8,8 @@
 
 #include "mcode/cli/exec.hxx"
 #include "mcode/core/error.hxx"
+#include "mcode/agent/loop.hxx"
+#include "mcode/model/client.hxx"
 #include "mcode/perm/permission.hxx"
 #include "mcode/support/config.hxx"
 
@@ -66,5 +68,30 @@ namespace mcode::cli::detail {
 	[[nodiscard]] auto resolve_approval_policy( const exec_options& options,
 		const mcode::config::merged_config& config, bool interactive )
 		-> mcode::perm::permission_engine::options;
+
+	// Mirrors text deltas to the stream when the run is not in `--json` mode, where the
+	// bus subscription already emits them.
+	class streaming_client final : public mcode::model::model_client {
+	public:
+		streaming_client( mcode::model::model_client& inner, std::FILE* out, bool json )
+			: inner_( inner ), out_( out ), json_( json ) { }
+
+		auto stream( const mcode::model::stream_request& request,
+			const mcode::model::event_sink& sink ) -> mcode::status override;
+
+	private:
+		mcode::model::model_client& inner_;
+		std::FILE* out_;
+		bool json_;
+	};
+
+	// The same failure reaches the human on stderr and a `--json` consumer on the
+	// stream, and both get the exit code the error maps to.
+	[[nodiscard]] auto report_failure( json_stream& stream, const mcode::error& failure ) -> int;
+
+	// The run's closing report: the one-line summary, the verification verdict, and
+	// the exit code, on both channels. Returns that code for the caller to pass on.
+	[[nodiscard]] auto report_run_outcome( json_stream& stream, const agent_loop& loop,
+		const turn_outcome& outcome, exit_code code, bool json, bool verbose ) -> int;
 
 }

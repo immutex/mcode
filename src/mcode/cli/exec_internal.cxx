@@ -202,4 +202,69 @@ namespace mcode::cli::detail {
 
 		return resolved;
 	}
+
+	auto streaming_client::stream( const mcode::model::stream_request& request,
+		const mcode::model::event_sink& sink ) -> mcode::status {
+		return inner_.stream( request,
+			[ this, &sink ]( const mcode::model::chat_event& event ) {
+				if ( !json_ && event.type == mcode::model::chat_event::kind::text_delta ) {
+					std::fwrite( event.text.data( ), 1, event.text.size( ), out_ );
+					std::fflush( out_ );
+				}
+
+				sink( event );
+			} );
+	}
+
+	auto report_run_outcome( json_stream& stream, const agent_loop& loop,
+		const turn_outcome& outcome, const exit_code code, const bool json,
+		const bool verbose ) -> int {
+		// A `--json` consumer reads one object per line, so no blank line separates them.
+		if ( !json ) {
+			std::fputc( '\n', stdout );
+		}
+
+		auto summary = std::string{ "run ended in state " };
+
+		if ( outcome.final_state == loop_state::done ) {
+			summary = "completed";
+		} else {
+			summary += to_string( outcome.final_state );
+
+			if ( !outcome.summary_json.empty( ) ) {
+				summary += ": ";
+				summary += outcome.summary_json;
+			}
+		}
+
+		// Printed in every run: showing `no-tests` only on failure reads as verification.
+		if ( verbose || outcome.verdict != verification_verdict::no_tests ) {
+			std::fprintf( stderr, "mcode: verification: %s",
+				std::string{ to_string( outcome.verdict ) }.c_str( ) );
+
+			if ( const auto detail = loop.verification_detail( ); !detail.empty( ) ) {
+				std::fprintf( stderr, " (%s)", std::string{ detail }.c_str( ) );
+			}
+
+			std::fprintf( stderr, "\n" );
+		}
+
+		if ( code != exit_code::success ) {
+			std::fprintf( stderr, "mcode: %s\n", summary.c_str( ) );
+		}
+
+		stream.emit_run_end( code, summary, outcome.verdict, loop.verification_detail( ) );
+
+		return mcode::cli::to_int( code );
+	}
+
+	auto report_failure( json_stream& stream, const mcode::error& failure ) -> int {
+		const auto code = mcode::cli::exit_code_for( failure.code );
+
+		std::fprintf( stderr, "mcode: %s\n", failure.msg.c_str( ) );
+		stream.emit_run_end( code, failure.msg );
+
+		return mcode::cli::to_int( code );
+	}
+
 }

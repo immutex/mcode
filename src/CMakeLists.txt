@@ -35,6 +35,7 @@ add_library(mcode_core STATIC
     mcode/platform/seams.cxx
     mcode/platform/file_watcher.cxx
     mcode/platform/sandbox_windows.cxx
+    mcode/platform/sandbox_windows_pipes.cxx
     mcode/platform/sandbox_linux.cxx
     mcode/platform/sandbox_macos.cxx
 
@@ -73,6 +74,11 @@ add_library(mcode_core STATIC
     mcode/ext/api_session.cxx
     mcode/ext/api_net.cxx
     mcode/ext/api_context.cxx
+    mcode/ext/api_task.cxx
+    mcode/ext/api_bash.cxx
+    mcode/ext/api_entries.cxx
+    mcode/ext/api_plan.cxx
+    mcode/ext/api_fetch.cxx
     mcode/ext/api_memory.cxx
     mcode/ext/defer.cxx
     mcode/ext/notify.cxx
@@ -125,6 +131,7 @@ add_library(mcode_core STATIC
     mcode/mcp/transport_stdio.cxx
     mcode/mcp/transport_http.cxx
     mcode/mcp/client.cxx
+    mcode/mcp/resources.cxx
     mcode/mcp/supervisor.cxx
     mcode/mcp/source.cxx
     mcode/mcp/connect.cxx
@@ -132,6 +139,7 @@ add_library(mcode_core STATIC
     mcode/support/mcp_config.cxx
 
     mcode/agent/event_log.cxx
+    mcode/agent/loop_session.cxx
     mcode/agent/loop.cxx
     mcode/agent/loop_dispatch.cxx
     mcode/agent/loop_tools.cxx
@@ -158,9 +166,15 @@ add_library(mcode_core STATIC
     mcode/tui/transcript.cxx
 
     mcode/cli/repl.cxx
+    mcode/cli/active_loop.cxx
+    mcode/cli/tier_config.cxx
+    mcode/cli/web_search.cxx
+    mcode/cli/fetch_runner.cxx
+    mcode/cli/extension_wiring.cxx
     mcode/cli/setup.cxx
     mcode/cli/setup_detail.cxx
     mcode/cli/slash.cxx
+    mcode/cli/slash_prompt.cxx
     mcode/cli/slash_palette.cxx
 )
 
@@ -234,6 +248,7 @@ add_executable(mcode main.cxx
     mcode/cli/repl_turn.cxx
     mcode/cli/repl_view.cxx
     mcode/cli/session.cxx
+    mcode/cli/session_state.cxx
     mcode/smoke/cli_extensions.cxx
     mcode/smoke/luau.cxx)
 target_link_libraries(mcode PRIVATE mcode_core)

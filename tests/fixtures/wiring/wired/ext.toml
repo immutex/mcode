@@ -1,0 +1,5 @@
+name = "wired"
+version = "0.1.0"
+api_version = 1
+description = "Exercises every API entry that has a collaborator, so an unwired one fails a test"
+permissions = ["context"]

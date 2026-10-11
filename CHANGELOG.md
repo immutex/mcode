@@ -8,6 +8,43 @@ Entries are one line per change, under the type of change: **Added**, **Changed*
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-11
+
+The batch that wires what 0.0.x built. Eleven interfaces existed with either no
+producer or no caller, each with a passing test; the dominant defect was not
+missing code but unconnected code. This release connects them, ships the seven
+first-party extensions `23` mandates, and adds MCP resources and prompts.
+
+### Added
+
+- **The `task` tool**, a bundled extension over the core spawn primitives. The child's registry is filtered to the read class by the core, so no argument can widen its capability, and its budget is carved from the parent's remainder and folded back on completion — a fan-out cannot outspend the run.
+- **`mcode.bash( command, opts )`**, the one way an extension runs a process. It routes to the same core `bash` handler, so the sandbox profile, the permission gate and the output cap are shared rather than reimplemented, and it is gated on the `spawn` manifest permission. `git` and `github` use it.
+- **`mcode.fetch( url, opts )`** for a URL the *model* chose. An extension's own `net.get` is bounded by its static `net:<host>` declarations, which cannot cover a host the model invents; this is bounded by the permission engine's per-domain decision plus the harness's refusal of private and link-local addresses.
+- **`mcode.plan.set( text )`**, and the recitation that reads it: the goal, the plan, the modified files and the last failure are rebuilt from session state every ten steps and after a compaction, and injected as a system message ahead of the history so a compaction cannot drop the goal.
+- **Model tiering.** `model.tier.plan|act|side` route by call site, each falling back to `model.model`. The `side` tier owns compaction: the dropped middle is summarized rather than silently discarded, and a failed summary call falls back to the drop.
+- **MCP resources and prompts.** `resources/list`, `resources/read`, `prompts/list` and `prompts/get` on the existing client, all bounded by the same page cap and non-advancing-cursor refusal as `tools/list`. A server that declares resources gets one synthetic `<server>__resources` tool; `/prompt` lists and fills a server's prompts.
+- **Four first-party extensions**: `fs-extra` (`todo`), `web` (`web_search`, `fetch`), `git` (`git_status`, `git_diff`, `git_commit`) and `github` (`gh_pr`, `gh_issue`, `gh_review`). With `task`, `skills` and `memory`, the seven-extension shipping set is complete.
+- `ext/api_entries.cxx` — the whole Lua surface in one table, so a name an extension can call and a name the type stub declares are checked against each other.
+
+### Changed
+
+- `register_context` carries every collaborator a surface needs. Before this, `default_register_api` built an `install_request` with nine omitted, so `mcode.cmd.register` and `mcode.defer` **raised** in a real session while `net.get`, `session.snapshot`, `context.add_instructions` and `skill.register` returned `nil`.
+- Extension commands reach the palette: `invoke_command` has a caller, so a command a loaded extension registered is reachable and `/help` names it.
+- One `extension_collaborators` struct is installed on both the interactive and the headless path. The two used to build their own sets and drift.
+- `pinned_state` is regenerated from session state rather than summarized, so it is byte-stable between rewrites and does not invalidate the prompt cache.
+- `event_log`, `session_budget`'s lifecycle, the Windows pipe plumbing and the Lua entry table each move to their own translation unit; every file is again under the 600-line cap.
+
+### Fixed
+
+- **A stub that satisfies a test is not a wired interface.** The test helper installed a partial surface and passed against it, which is precisely how the wiring defects shipped. It now routes through `default_register_api` with the collaborators production wires, and the regression test fails against the old wiring — verified by reverting.
+- `run_subagent` read the child's spend from a local budget copy the loop never charged, so a subagent was free to the run.
+- `mcode.fetch` and `resources/read` return `contents`, `tools/call` returns `content`, and `prompts/get` returns `messages[].content`. One flattening handles all three; before it, only the first was read.
+
+### Security
+
+- `mcode.bash` is not a second exec path. It calls the core handler, so the sandbox and the gate cannot be bypassed from Lua, and an extension that does not declare `spawn` cannot run a command at all.
+- `mcode.fetch` fails closed with no permission engine, refuses a private or link-local literal address before the decision, and caps the body that enters the context separately from the body that was downloaded.
+
 ## [0.0.4] - 2026-10-11
 
 A quality pass over the whole tree, not a feature batch. The comment rule was
@@ -250,7 +287,8 @@ commands, or a 20-second spawn.
 - `README.md` corrected: 43 docs, not 41, and the licence badge points at `LICENSE` rather than an in-page anchor.
 - `CONTRIBUTING.md` records the two things CI catches that no local build will: the POSIX branches a Windows workstation never compiles, and the warnings-as-errors set.
 
-[Unreleased]: https://github.com/immutex/mcode/compare/v0.0.4...HEAD
+[Unreleased]: https://github.com/immutex/mcode/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/immutex/mcode/compare/v0.0.4...v0.1.0
 [0.0.4]: https://github.com/immutex/mcode/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/immutex/mcode/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/immutex/mcode/compare/v0.0.1...v0.0.2
