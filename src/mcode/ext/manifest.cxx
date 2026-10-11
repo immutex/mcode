@@ -78,11 +78,11 @@ namespace mcode::ext {
 			return std::nullopt;
 		}
 
-		auto read_text( const std::filesystem::path& path ) -> result< std::string > {
-			auto stream = std::ifstream{ path, std::ios::binary };
+		auto read_text( const std::filesystem::path& file ) -> result< std::string > {
+			auto stream = std::ifstream{ file, std::ios::binary };
 
 			if ( !stream ) {
-				return std::unexpected( fail( errc::io, "cannot open " + path.string( ) ) );
+				return std::unexpected( fail( errc::io, "cannot open " + file.string( ) ) );
 			}
 
 			auto buffer = std::ostringstream{ };
@@ -247,25 +247,18 @@ namespace mcode::ext {
 		return names;
 	}
 
-	auto load_manifest( const std::filesystem::path& directory ) -> result< manifest > {
-		const auto path = directory / "ext.toml";
-
-		auto text = read_text( path );
-
-		if ( !text ) {
-			return std::unexpected( fail( errc::io, "no manifest at " + path.string( ) ) );
-		}
-
-		auto parsed = toml::parse( *text );
+	auto parse_manifest( const std::string_view text, const std::string_view origin,
+		const std::string_view directory_name ) -> result< manifest > {
+		auto parsed = toml::parse( text );
 
 		if ( !parsed ) {
 			return std::unexpected( fail( errc::config,
-				path.string( ) + ": " + parsed.error( ).msg ) );
+				std::string{ origin } + ": " + parsed.error( ).msg ) );
 		}
 
 		if ( auto known = parsed->reject_unknown( ALLOWED_KEYS ); !known ) {
 			return std::unexpected( fail( errc::config,
-				path.string( ) + ": " + known.error( ).msg ) );
+				std::string{ origin } + ": " + known.error( ).msg ) );
 		}
 
 		auto manifest_value = manifest{ };
@@ -273,35 +266,35 @@ namespace mcode::ext {
 		auto name = parsed->get_string( "name" );
 
 		if ( !name ) {
-			return std::unexpected( fail( errc::config, path.string( ) + ": 'name' is required" ) );
+			return std::unexpected( fail( errc::config, std::string{ origin } + ": 'name' is required" ) );
 		}
 
 		manifest_value.name = *name;
 
 		if ( !is_valid_name( manifest_value.name ) ) {
 			return std::unexpected( fail( errc::config,
-				path.string( ) + ": invalid name '" + manifest_value.name +
+				std::string{ origin } + ": invalid name '" + manifest_value.name +
 				"' (expected lowercase-kebab-case, <=64 chars)" ) );
 		}
 
 		// the name must match the directory, so identity cannot be claimed from two folders.
-		if ( directory.filename( ).string( ) != manifest_value.name ) {
+		if ( directory_name != manifest_value.name ) {
 			return std::unexpected( fail( errc::config,
-				path.string( ) + ": name '" + manifest_value.name +
-				"' does not match the directory '" + directory.filename( ).string( ) + "'" ) );
+				std::string{ origin } + ": name '" + manifest_value.name +
+				"' does not match the directory '" + std::string{ directory_name } + "'" ) );
 		}
 
 		auto version = parsed->get_string( "version" );
 
 		if ( !version ) {
-			return std::unexpected( fail( errc::config, path.string( ) + ": 'version' is required" ) );
+			return std::unexpected( fail( errc::config, std::string{ origin } + ": 'version' is required" ) );
 		}
 
 		manifest_value.version = *version;
 
 		if ( !is_valid_version( manifest_value.version ) ) {
 			return std::unexpected( fail( errc::config,
-				path.string( ) + ": invalid version '" + manifest_value.version +
+				std::string{ origin } + ": invalid version '" + manifest_value.version +
 				"' (expected MAJOR.MINOR.PATCH)" ) );
 		}
 
@@ -309,20 +302,20 @@ namespace mcode::ext {
 
 		if ( !api_version ) {
 			return std::unexpected( fail( errc::config,
-				path.string( ) + ": 'api_version' is required and must be an integer" ) );
+				std::string{ origin } + ": 'api_version' is required and must be an integer" ) );
 		}
 
 		manifest_value.api_version = *api_version;
 
 		if ( manifest_value.api_version < 1 ) {
 			return std::unexpected( fail( errc::config,
-				path.string( ) + ": api_version must be >= 1" ) );
+				std::string{ origin } + ": api_version must be >= 1" ) );
 		}
 
 		// an integer floor, never a range: the loader compares two integers.
 		if ( manifest_value.api_version > API_VERSION ) {
 			return std::unexpected( fail( errc::config,
-				path.string( ) + ": requires api_version " + std::to_string( manifest_value.api_version ) +
+				std::string{ origin } + ": requires api_version " + std::to_string( manifest_value.api_version ) +
 				", this build provides " + std::to_string( API_VERSION ) ) );
 		}
 
@@ -330,13 +323,13 @@ namespace mcode::ext {
 
 		if ( !description ) {
 			return std::unexpected( fail( errc::config,
-				path.string( ) + ": " + description.error( ).msg ) );
+				std::string{ origin } + ": " + description.error( ).msg ) );
 		}
 
 		if ( *description ) {
 			if ( ( *description )->size( ) > MAX_DESCRIPTION_LENGTH ) {
 				return std::unexpected( fail( errc::config,
-					path.string( ) + ": description exceeds " +
+					std::string{ origin } + ": description exceeds " +
 					std::to_string( MAX_DESCRIPTION_LENGTH ) + " characters" ) );
 			}
 
@@ -349,7 +342,7 @@ namespace mcode::ext {
 
 			if ( !permissions ) {
 				return std::unexpected( fail( errc::config,
-					path.string( ) + ": 'permissions' must be an array of strings" ) );
+					std::string{ origin } + ": 'permissions' must be an array of strings" ) );
 			}
 
 			const auto declares_net = std::find( permissions->begin( ), permissions->end( ),
@@ -361,7 +354,7 @@ namespace mcode::ext {
 			for ( const auto& permission : *permissions ) {
 				if ( std::find( seen.begin( ), seen.end( ), permission ) != seen.end( ) ) {
 					return std::unexpected( fail( errc::config,
-						path.string( ) + ": duplicate permission '" + permission + "'" ) );
+						std::string{ origin } + ": duplicate permission '" + permission + "'" ) );
 				}
 
 				seen.push_back( permission );
@@ -378,12 +371,12 @@ namespace mcode::ext {
 				if ( !permission.starts_with( NET_PREFIX ) &&
 					!permission.starts_with( CREDENTIAL_PREFIX ) ) {
 					return std::unexpected( fail( errc::config,
-						path.string( ) + ": unknown permission '" + permission + "'" ) );
+						std::string{ origin } + ": unknown permission '" + permission + "'" ) );
 				}
 
 				if ( auto problem = declaration_problem( permission, declares_net ); problem ) {
 					return std::unexpected( fail( errc::config,
-						path.string( ) + ": " + *problem ) );
+						std::string{ origin } + ": " + *problem ) );
 				}
 
 				manifest_value.permissions.push_back( permission );
@@ -391,6 +384,18 @@ namespace mcode::ext {
 		}
 
 		return manifest_value;
+	}
+
+	auto load_manifest( const std::filesystem::path& directory ) -> result< manifest > {
+		const auto path = directory / "ext.toml";
+
+		auto text = read_text( path );
+
+		if ( !text ) {
+			return std::unexpected( fail( errc::io, "no manifest at " + path.string( ) ) );
+		}
+
+		return parse_manifest( *text, path.string( ), directory.filename( ).string( ) );
 	}
 
 }

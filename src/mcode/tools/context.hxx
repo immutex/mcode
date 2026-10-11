@@ -13,12 +13,23 @@
 #include "mcode/perm/permission.hxx"
 #include "mcode/tools/session_reads.hxx"
 
+namespace mcode::net {
+
+	class egress_proxy;
+
+}
+
 namespace mcode::tools {
 
 	struct tool_context {
 		workspace* space = nullptr;
 		session_reads* reads = nullptr;
 		perm::permission_engine* permissions = nullptr;
+
+		// Borrowed. When set, a spawned child is pointed at the proxy and the OS
+		// rule permits only its port; null means the child is granted no network at
+		// all, which is the default.
+		net::egress_proxy* egress = nullptr;
 
 		// doubles as the artifact directory name under .mcode/artifacts/
 		std::string run_id;

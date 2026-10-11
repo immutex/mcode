@@ -38,9 +38,25 @@ namespace mcode::platform {
 		full,
 	};
 
+	// Where the loopback proxy listens. The OS rule is the boundary; the
+	// `HTTP(S)_PROXY` variables are only how a compliant tool finds it.
+	struct egress_endpoint {
+		std::string host = "127.0.0.1";
+		std::uint16_t http_port = 0;
+		std::uint16_t socks_port = 0;
+
+		[[nodiscard]] auto active( ) const noexcept -> bool {
+			return http_port != 0 || socks_port != 0;
+		}
+	};
+
 	enum class sandbox_network_support {
 		unavailable,
+		// The env var points at a proxy but nothing stops a process that ignores it.
 		best_effort,
+		// Direct egress is blocked by the OS and only the proxy port is reachable.
+		mediated,
+		// As `mediated`, and an unprivileged child cannot bypass it.
 		enforced,
 	};
 
@@ -52,6 +68,10 @@ namespace mcode::platform {
 		std::vector< std::filesystem::path > deny_paths;
 
 		bool allow_network = false;
+
+		// When set and `allow_network` is true, the OS rule permits only this
+		// endpoint instead of the whole network.
+		egress_endpoint egress;
 	};
 
 	[[nodiscard]] auto sandbox_capability_level( ) noexcept -> sandbox_capability;
@@ -75,6 +95,7 @@ namespace mcode::platform {
 		switch ( value ) {
 			case sandbox_network_support::unavailable: return "unavailable";
 			case sandbox_network_support::best_effort: return "best-effort";
+			case sandbox_network_support::mediated: return "mediated";
 			case sandbox_network_support::enforced: return "enforced";
 		}
 

@@ -11,6 +11,7 @@
 #include "mcode/core/error.hxx"
 #include "mcode/mcp/client.hxx"
 #include "mcode/mcp/transport.hxx"
+#include "mcode/mcp/transport_http.hxx"
 #include "mcode/mcp/transport_stdio.hxx"
 #include "mcode/mcp/constants.hxx"
 
@@ -84,7 +85,9 @@ namespace mcode::mcp {
 		server_config config_;
 		handlers handlers_;
 
-		std::unique_ptr< stdio_transport > transport_;
+		// The interface, not the concrete stdio type: the supervisor drives whichever
+		// transport the server config selects, and neither knows about the other.
+		std::unique_ptr< transport > transport_;
 		std::unique_ptr< client > client_;
 
 		server_state state_ = server_state::starting;

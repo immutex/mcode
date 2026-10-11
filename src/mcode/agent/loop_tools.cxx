@@ -266,7 +266,12 @@ namespace mcode {
 		}
 
 		// One check point: built-in, extension and MCP tools all pass through here.
-		if ( permissions_ != nullptr ) {
+		//
+		// Skipped for a harness-owned call. The verification command comes from
+		// configuration, not from the model, so gating it on the agent's approval
+		// policy made every headless run report `failed` -- the gate denied its own
+		// check. The flag is set for exactly one call and cleared immediately.
+		if ( permissions_ != nullptr && !harness_call_ ) {
 			auto request = perm::permission_request{ };
 			request.tool_name = effective_call.name;
 			request.klass = definition->klass;

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <string_view>
 
@@ -33,12 +34,18 @@ namespace mcode::text {
 	// permission floor decides what a command IS -- they have to agree.
 	[[nodiscard]] auto program_basename( std::string_view program ) -> std::string;
 
-	// A byte count as a reader compares it: `12 MB`, not `12288 KB`. The ladder is
-	// the point -- a session log and a per-extension memory budget are read side
-	// by side, and a number that has to be converted before it can be compared is
-	// not doing its job.
-	[[nodiscard]] auto human_bytes( std::uint64_t bytes ) -> std::string;
-
+	// A byte count as a reader compares it: `12 MB`, not `12288 KB`. The ladder is
+
+	// the point -- a session log and a per-extension memory budget are read side
+
+	// by side, and a number that has to be converted before it can be compared is
+
+	// not doing its job.
+
+	[[nodiscard]] auto human_bytes( std::uint64_t bytes ) -> std::string;
+
+
+
 	[[nodiscard]] auto is_valid_utf8( std::string_view input ) noexcept -> bool;
 	[[nodiscard]] auto codepoint_count( std::string_view input ) noexcept -> std::size_t;
 
@@ -49,6 +56,18 @@ namespace mcode::text {
 		std::string_view ellipsis = "..." ) -> std::string;
 
 	[[nodiscard]] auto sanitize_utf8( std::string_view input ) -> std::string;
+
+	// Counts codepoints that render as nothing or as a look-alike: Unicode
+	// categories Cf and Cc (except TAB, LF, CR) and the variation-selector ranges
+	// U+FE00..FE0F and U+E0100..E01EF.
+	//
+	// A payload hidden in these is invisible in every editor, diff view and
+	// syntax highlighter -- the GlassWorm campaign shipped 35,800 downloads that
+	// way -- so a human reviewing an extension is reading something the file does
+	// not actually say. Counting them is the cheapest way to make that visible.
+	[[nodiscard]] auto count_invisible( std::string_view input ) noexcept -> std::size_t;
+
+	[[nodiscard]] auto count_invisible( const std::filesystem::path& directory ) -> std::size_t;
 
 	[[nodiscard]] auto to_utf16( std::string_view input ) -> result< std::u16string >;
 	[[nodiscard]] auto from_utf16( std::u16string_view input ) -> result< std::string >;

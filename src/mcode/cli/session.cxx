@@ -6,7 +6,9 @@
 #include "mcode/ext/hooks.hxx"
 #include "mcode/ext/loader.hxx"
 #include "mcode/fs/snapshot.hxx"
+#include "mcode/cli/egress_setup.hxx"
 #include "mcode/fs/workspace.hxx"
+#include "mcode/memory/ledger.hxx"
 #include "mcode/mcp/connect.hxx"
 #include "mcode/model/capabilities.hxx"
 #include "mcode/model/http_client.hxx"
@@ -86,6 +88,10 @@ namespace {
 		std::optional< mcode::snapshot_store > snapshots;
 		mcode::session_budget budget;
 		mcode::agent_loop::dependencies loop_deps;
+
+		// Held here so it outlives every spawned child; null when no `[egress]`
+		// allowlist was configured, which means no network at all.
+		std::unique_ptr< mcode::net::egress_proxy > egress;
 
 		// Reads `std::cin`, correct in plain mode which never enters raw mode.
 		mcode::perm::terminal_approval_source terminal_source;
@@ -228,8 +234,8 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 			roots.push_back( *bundled_directory / "extensions" );
 		}
 
-		g_parts->extensions = mcode::ext::load_extensions( roots, g_parts->providers,
-			g_parts->hooks, options );
+		g_parts->extensions = mcode::ext::load_workspace_extensions( workspace_path, roots,
+			g_parts->providers, g_parts->hooks, options );
 	}
 
 	// Published whether or not extensions were loaded: with `--no-extensions` the
@@ -318,6 +324,10 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 	tools_context.run_id = run_id;
 	tools_context.headless = parsed.json;
 
+	// Only when `[egress] allow` names a host; absent means no network at all.
+	g_parts->egress = mcode::cli::start_egress_if_configured( *config );
+	tools_context.egress = g_parts->egress.get( );
+
 	auto sink = mcode::tools::vector_sink{ };
 
 	const auto registered = mcode::tools::register_core_tools( g_parts->tools, sink,
@@ -368,6 +378,24 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 	g_parts->loop_deps.pump_timers = [ ]( ) { g_parts->extensions.pump_timers( ); };
 
 	auto loop = mcode::agent_loop{ g_parts->loop_deps };
+
+	// Armed from configuration, never from model output; empty stays `no-tests`.
+	if ( const auto command = config->get_string( "verify.command" ); command && !command->empty( ) ) {
+		loop.set_verification_command( *command );
+	}
+
+	// A pointer, not content, and only when the ledger exists: the prompt must never
+	// reference a file that is not there. The extension that exposes `memory_search`
+	// gates it on the other side, so a disabled extension leaves no dangling mention.
+	if ( const auto ledger = mcode::memory::ledger_path( workspace_path ); ledger ) {
+		if ( const auto existing = mcode::memory::read_ledger( workspace_path );
+			existing && !existing->empty( ) ) {
+			loop.set_notes_pointer( "Dated notes about this project and this user"
+				" (corrections, preferences, things tried and why they failed)."
+				" Search them with memory_search before repeating an approach you are"
+				" unsure about." );
+		}
+	}
 
 	// The session file is opened before the first turn, so an interactive session's
 	// events are on disk the same way an exec run's are. An unknown --resume id is

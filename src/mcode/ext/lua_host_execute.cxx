@@ -36,21 +36,6 @@ namespace mcode {
 		return { };
 	}
 
-	auto lua_host::run_file( const std::filesystem::path& path ) -> status {
-		auto stream = std::ifstream{ path, std::ios::binary };
-
-		if ( !stream ) {
-			return std::unexpected( fail( errc::io, "cannot open " + path.string( ) ) );
-		}
-
-		auto buffer = std::ostringstream{ };
-		buffer << stream.rdbuf( );
-
-		const auto source = buffer.str( );
-
-		return run( source, path.string( ) );
-	}
-
 	auto lua_host::eval_to_string( const std::string_view expression ) -> result< std::string > {
 		if ( auto ready = seal( ); !ready ) {
 			return std::unexpected( ready.error( ) );

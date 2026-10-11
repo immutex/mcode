@@ -13,6 +13,7 @@
 #include "mcode/cli/repl.hxx"
 #include "mcode/cli/setup.hxx"
 #include "mcode/cli/skill_command.hxx"
+#include "mcode/cli/ext_command.hxx"
 #include "mcode/events/bus.hxx"
 #include "mcode/eval/suite.hxx"
 #include "mcode/ext/hooks.hxx"
@@ -79,6 +80,10 @@ auto main( int argument_count, char** arguments ) -> int {
 		return mcode::cli::run_skill( { argv.begin( ) + 1, argv.end( ) } );
 	}
 
+	if ( !argv.empty( ) && argv.front( ) == "ext" ) {
+		return mcode::cli::run_ext( { argv.begin( ) + 1, argv.end( ) } );
+	}
+
 	if ( !argv.empty( ) && argv.front( ) == "setup" ) {
 		return mcode::cli::run_setup( { argv.begin( ) + 1, argv.end( ) } );
 	}
@@ -122,6 +127,27 @@ auto main( int argument_count, char** arguments ) -> int {
 
 			std::printf( "\n  %zu passed, %zu failed, %zu errored (of %zu)\n", result.passed,
 				result.failed, result.errored, result.total( ) );
+		}
+
+		// The trustworthiness number, from real runs rather than the fixture suite:
+		// the suite is deterministic and model-free, so it cannot produce a false
+		// success to count. Reported always, including when there is nothing to
+		// report, because a number that appears only when it is good is not a
+		// measurement.
+		if ( const auto directory = mcode::cli::session_directory( ) ) {
+			if ( const auto audit = mcode::eval::audit_sessions( *directory ) ) {
+				if ( json ) {
+					std::printf( "{\"v\":1,\"kind\":\"audit\",\"data\":%s}\n",
+						mcode::eval::to_json( *audit ).c_str( ) );
+				} else {
+					std::printf(
+						"\n  verification: %zu verified, %zu no-tests, %zu failed "
+						"(of %zu runs)\n",
+						audit->verified, audit->no_tests, audit->failed, audit->runs );
+					std::printf( "  false_success_rate: %.4f\n",
+						audit->false_success_rate( ) );
+				}
+			}
 		}
 
 		return result.all_passed( ) ? mcode::cli::to_int( mcode::cli::exit_code::success )

@@ -8,6 +8,7 @@
 
 #include "mcode/fs/snapshot.hxx"
 #include "mcode/fs/workspace.hxx"
+#include "mcode/memory/ledger.hxx"
 #include "mcode/support/text.hxx"
 #include "mcode/support/time.hxx"
 
@@ -76,22 +77,41 @@ namespace mcode::cli {
 		}
 
 		[[nodiscard]] auto context_text( const std::uint64_t used,
-			const std::uint64_t capacity ) -> std::string {
+			const std::uint64_t capacity, const mcode::context_occupancy& occupancy )
+			-> std::string {
 			if ( capacity == 0 ) {
 				return "context: " + std::to_string( used ) +
-					" tokens used; the model's context window is unknown";
+					" tokens in the last request; the model's context window is unknown";
 			}
 
-			return "context: " + std::to_string( used ) + " / " + std::to_string( capacity ) +
-				" tokens (" + std::to_string( used * PERCENT_SCALE / capacity ) + "%)";
+			auto out = "context: " + std::to_string( used ) + " / " + std::to_string( capacity ) +
+				" tokens (" + std::to_string( used * PERCENT_SCALE / capacity ) + "% full)";
+
+			// A rewrite is a decision with a cost, not a mystery. Showing the epoch
+			// and the cache ratio is what lets a user tell a cheap turn from one that
+			// re-prefilled the whole history.
+			if ( occupancy.epoch > 0 ) {
+				out += "\n  rewrites: " + std::to_string( occupancy.epoch );
+			}
+
+			if ( occupancy.prompt_tokens > 0 ) {
+				const auto percent = static_cast< std::uint64_t >(
+					occupancy.cache_hit_ratio( ) * static_cast< double >( PERCENT_SCALE ) );
+
+				out += "\n  cache hit: " + std::to_string( percent ) + "% of the prompt";
+			}
+
+			return out;
 		}
 
 		[[nodiscard]] auto compact_text( ) -> std::string {
 			const auto trigger = static_cast< std::uint64_t >(
 				mcode::COMPACTION_TRIGGER_FRACTION * static_cast< double >( PERCENT_SCALE ) );
 
-			return "compaction is not implemented as a command; the loop compacts the history "
-				"itself once the context window is " + std::to_string( trigger ) + "% full";
+			return "compaction is not implemented as a command; the loop clears tool results "
+				"at " + std::to_string( static_cast< std::uint64_t >(
+					mcode::TOOL_CLEAR_TRIGGER_FRACTION * static_cast< double >( PERCENT_SCALE ) ) ) +
+				"% and folds the history at " + std::to_string( trigger ) + "% full";
 		}
 
 		// See `init_prompt.hxx`: the prompt is data, and it is long.
@@ -414,7 +434,8 @@ namespace mcode::cli {
 
 auto run_command( const command_match& match, const agent_loop& loop,
 		const std::vector< mcode::tui::slash_command >& commands,
-		const mcode::ext::load_report* extensions ) -> command_result {
+		const mcode::ext::load_report* extensions,
+		const std::filesystem::path* workspace ) -> command_result {
 	auto result = command_result{ };
 
 		if ( match.entry == nullptr ) {
@@ -432,7 +453,8 @@ auto run_command( const command_match& match, const agent_loop& loop,
 			result.output = "tokens: " + std::to_string( budget.tokens_used ) +
 				"   spend: $" + std::to_string( budget.usd_used );
 		} else if ( match.name == "context" ) {
-			result.output = context_text( loop.context_used( ), loop.context_capacity( ) );
+			result.output = context_text( loop.context_used( ), loop.context_capacity( ),
+				loop.occupancy( ) );
 		} else if ( match.name == "model" ) {
 			result.output = std::string{ loop.model_name( ) };
 		} else if ( match.name == "tools" ) {
@@ -442,6 +464,20 @@ auto run_command( const command_match& match, const agent_loop& loop,
 				}
 
 				result.output += tool->name;
+			}
+		} else if ( match.name == "remember" ) {
+			if ( workspace == nullptr ) {
+				result.output = "/remember needs a workspace";
+			} else if ( match.arguments.empty( ) ) {
+				result.output = "usage: /remember <text to record>";
+			} else if ( const auto appended = mcode::memory::append_note( *workspace,
+					match.arguments, "user" ); !appended ) {
+				result.output = appended.error( ).msg;
+			} else {
+				// Echoed so the user sees exactly what was recorded. The text goes
+				// in verbatim: no model is in this path, which is what keeps the
+				// ledger free of the form degradation an extraction pass introduces.
+				result.output = "recorded:\n" + std::string{ match.arguments };
 			}
 		} else if ( match.name == "compact" ) {
 			result.output = compact_text( );

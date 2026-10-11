@@ -68,6 +68,7 @@ namespace mcode::cli {
 			{ "model", "Show the model this session runs" },
 			{ "tools", "List the tools the agent can call" },
 			{ "compact", "Report how the history is compacted (no on-demand compaction)" },
+			{ "remember", "Append a note to this project's ledger, verbatim" },
 			{ "export", "Write the session transcript to a Markdown file, named by an argument "
 				"or generated" },
 			{ "undo", "Restore the files the current run changed and report the count" },

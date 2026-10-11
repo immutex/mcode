@@ -169,6 +169,14 @@ namespace mcode::cli {
 				}
 
 				options.add_dirs.push_back( *value );
+			} else if ( argument == "--verify" ) {
+				auto value = next_value( argument );
+
+				if ( !value ) {
+					return std::unexpected( value.error( ) );
+				}
+
+				options.verify_command = *value;
 			} else if ( argument == "--model" ) {
 				auto value = next_value( argument );
 
@@ -510,7 +518,9 @@ namespace mcode::cli {
 		flush( );
 	}
 
-	auto json_stream::emit_run_end( const exit_code code, const std::string_view summary ) -> void {
+	auto json_stream::emit_run_end( const exit_code code, const std::string_view summary,
+		const verification_verdict verdict, const std::string_view verification_detail )
+		-> void {
 		if ( !enabled_ ) {
 			// Even when JSON is off, record that the run concluded, so the
 			// destructor's truncated-stream warning stays meaningful.
@@ -527,6 +537,16 @@ namespace mcode::cli {
 
 		auto line = std::string{ "{\"v\":1,\"kind\":\"run.end\",\"exit_code\":" };
 		line += std::to_string( to_int( code ) );
+		line += ",\"verification\":\"";
+		line += to_string( verdict );
+		line += "\"";
+
+		if ( !verification_detail.empty( ) ) {
+			line += ",\"verification_detail\":\"";
+			mcode::json::append_escaped( line, verification_detail );
+			line += "\"";
+		}
+
 		line += ",\"summary\":\"";
 		mcode::json::append_escaped( line, summary );
 		line += "\"}";

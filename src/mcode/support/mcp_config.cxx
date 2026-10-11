@@ -16,9 +16,8 @@ namespace mcode::mcp {
 			std::string_view{ "enabled" },
 			std::string_view{ "transport" },
 			std::string_view{ "tools" },
+			std::string_view{ "url" },
 		};
-
-		constexpr auto STDIO_TRANSPORT = std::string_view{ "stdio" };
 
 		// the name lands inside `mcp__<server>__<tool>`.
 		auto is_valid_server_name( const std::string_view name ) -> bool {
@@ -37,15 +36,29 @@ namespace mcode::mcp {
 
 	}
 
+	auto known_transport( const std::string_view name ) noexcept -> bool {
+		return name == STDIO_TRANSPORT || name == HTTP_TRANSPORT;
+	}
+
 	auto validate_server( const server_config& server ) -> status {
 		if ( !is_valid_server_name( server.name ) ) {
 			return std::unexpected( fail( errc::config,
 				"mcp server name must be non-empty and must not contain '__'" ) );
 		}
 
-		if ( server.transport != STDIO_TRANSPORT ) {
+		if ( !known_transport( server.transport ) ) {
 			return std::unexpected( server_error( server.name,
-				"transport must be \"stdio\"; no other transport ships" ) );
+				"transport must be \"" + std::string{ STDIO_TRANSPORT } + "\" or \""
+					+ std::string{ HTTP_TRANSPORT } + "\", got '" + server.transport + "'" ) );
+		}
+
+		if ( server.transport == HTTP_TRANSPORT ) {
+			if ( server.url.empty( ) ) {
+				return std::unexpected( server_error( server.name,
+					"the http transport requires 'url'" ) );
+			}
+
+			return { };
 		}
 
 		if ( server.command.empty( ) ) {
@@ -174,6 +187,16 @@ namespace mcode::mcp {
 					}
 
 					server.transport = std::move( *name );
+				} else if ( field == "url" ) {
+					auto endpoint = full_key.second.as_string( );
+
+					if ( !endpoint ) {
+						return std::unexpected( fail( errc::config,
+							"mcp server '" + std::string{ server_name } +
+							"': 'url' must be a string" ) );
+					}
+
+					server.url = std::move( *endpoint );
 				}
 			}
 

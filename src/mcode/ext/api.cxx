@@ -5,6 +5,7 @@
 #include "mcode/ext/api_fs.hxx"
 #include "mcode/ext/api_gate.hxx"
 #include "mcode/ext/api_internal.hxx"
+#include "mcode/ext/api_memory.hxx"
 #include "mcode/ext/api_net.hxx"
 #include "mcode/ext/api_timer.hxx"
 #include "mcode/ext/defer.hxx"
@@ -368,6 +369,10 @@ namespace mcode::ext {
 			return surface_from( state )->handle_skill_read( state );
 		}
 
+		auto lua_memory_search( lua_State* state ) -> int {
+			return handle_memory_search( state );
+		}
+
 		auto lua_skill_list( lua_State* state ) -> int {
 			return surface_from( state )->handle_skill_list( state );
 		}
@@ -529,6 +534,7 @@ namespace mcode::ext {
 			{ "log.warn", lua_log_warn },
 			{ "log.error", lua_log_error },
 			{ "skill.read", lua_skill_read },
+			{ "memory.search", lua_memory_search },
 			{ "skill.list", lua_skill_list },
 			{ "skill.register", lua_skill_register },
 			{ "mcp.register", lua_mcp_register },

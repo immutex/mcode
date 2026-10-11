@@ -49,6 +49,8 @@ namespace mcode::config {
 		std::string_view{ "permissions" },
 		std::string_view{ "mcp" },
 		std::string_view{ "models" },
+		std::string_view{ "verify" },
+		std::string_view{ "egress" },
 	};
 
 	struct layer {

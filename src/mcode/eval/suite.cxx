@@ -503,4 +503,96 @@ namespace mcode::eval {
 		return out;
 	}
 
+	auto session_audit::false_success_rate( ) const noexcept -> double {
+		const auto successes = verified + no_tests;
+
+		if ( successes == 0 ) {
+			return 0.0;
+		}
+
+		return static_cast< double >( no_tests ) / static_cast< double >( successes );
+	}
+
+	auto audit_sessions( const std::filesystem::path& directory ) -> result< session_audit > {
+		auto audit = session_audit{ };
+		auto error = std::error_code{ };
+
+		if ( !std::filesystem::is_directory( directory, error ) || error ) {
+			return audit;
+		}
+
+		for ( const auto& entry : std::filesystem::directory_iterator{ directory, error } ) {
+			if ( error ) {
+				return std::unexpected( fail( errc::io,
+					"cannot read " + directory.string( ) + ": " + error.message( ) ) );
+			}
+
+			auto entry_error = std::error_code{ };
+
+			if ( !entry.is_regular_file( entry_error ) || entry_error ) {
+				continue;
+			}
+
+			auto stream = std::ifstream{ entry.path( ), std::ios::binary };
+
+			if ( !stream ) {
+				++audit.unreadable;
+
+				continue;
+			}
+
+			auto line = std::string{ };
+
+			while ( std::getline( stream, line ) ) {
+				if ( line.find( "\"run.end\"" ) == std::string::npos ) {
+					continue;
+				}
+
+				auto parsed = json::document::parse( line );
+
+				if ( !parsed ) {
+					++audit.unreadable;
+
+					continue;
+				}
+
+				const auto verdict = parsed->pointer_string( "/payload/verification" );
+
+				++audit.runs;
+
+				if ( !verdict ) {
+					// A run recorded before the verdict existed, or by a build that
+					// did not carry it. Counting it as verified would be a claim the
+					// log does not support.
+					++audit.no_tests;
+
+					continue;
+				}
+
+				if ( *verdict == "verified" ) {
+					++audit.verified;
+				} else if ( *verdict == "failed" ) {
+					++audit.failed;
+				} else {
+					++audit.no_tests;
+				}
+			}
+		}
+
+		return audit;
+	}
+
+	auto to_json( const session_audit& audit ) -> std::string {
+		auto out = std::string{ "{\"runs\":" };
+		out += std::to_string( audit.runs );
+		out += ",\"verified\":" + std::to_string( audit.verified );
+		out += ",\"no_tests\":" + std::to_string( audit.no_tests );
+		out += ",\"failed\":" + std::to_string( audit.failed );
+		out += ",\"unreadable\":" + std::to_string( audit.unreadable );
+		out += ",\"false_success_rate\":" + std::to_string( audit.false_success_rate( ) );
+		out += "}";
+
+		return out;
+	}
+
 }

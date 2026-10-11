@@ -1,13 +1,13 @@
 # Reliability and Evals
 
-> **Status: the verification gate mechanism exists but cannot be armed.**
-> `agent_loop::set_verification_command` (`loop.hxx:448`) has **zero callers**,
-> so every run takes `Verify --no_tests--> Handoff` and no run is ever verified.
-> `eval/suite.hxx` declares `verdict: pass|fail|error` and nothing about
-> ground-truth or hack flags, though this doc specifies both.
-> `docs/43-fourth-batch.md` Decision 4 wires the command from config and CLI,
-> adds the `verified | claimed | failed | no_tests` vocabulary, and publishes
-> **`false_success_rate`** as the trustworthiness number this doc argues for.
+> **Status: the gate ships as of 0.0.3.** `--verify <command>` and
+> `[verify] command` arm `agent_loop::set_verification_command`, which had zero
+> callers before this release, so no run was ever verified. A run now reports
+> `verified`, `failed` or `no-tests`, carried on the run outcome, in the `run.end`
+> log record and in `exec --json`, and `mcode eval` prints **`false_success_rate`**
+> over real session logs. `no_tests` is the honest answer for a run whose success
+> was never checked, and it is never reported as `verified`.
+>
 > The measured context for that number: GPT-5 submits on **100%** of runs and
 > resolves 44% (`arXiv:2603.25764`); false success is **45–48%** of failures in
 > τ²-bench (`arXiv:2606.09863`); and o3 reward-hacks at **30.4%** where the

@@ -63,6 +63,22 @@ namespace mcode::platform {
 
 		if ( !profile.allow_network ) {
 			text += "(deny network*)\n";
+		} else if ( profile.egress.active( ) ) {
+			// Deny first, then punch the proxy ports. `(remote ip "localhost:PORT")`
+			// and never `(local ip ...)`: the latter is evaluated against the source
+			// address, which for an unbound socket is INADDR_ANY at connect() time,
+			// so any value there admits every outbound connection.
+			text += "(deny network*)\n";
+
+			if ( profile.egress.http_port != 0 ) {
+				text += "(allow network-outbound (remote ip \"localhost:"
+					+ std::to_string( profile.egress.http_port ) + "\"))\n";
+			}
+
+			if ( profile.egress.socks_port != 0 ) {
+				text += "(allow network-outbound (remote ip \"localhost:"
+					+ std::to_string( profile.egress.socks_port ) + "\"))\n";
+			}
 		} else {
 			text += "(allow network*)\n";
 		}

@@ -66,6 +66,24 @@ namespace mcode::perm {
 			return true;
 		}
 
+		// The classes the taint gate holds back: anything that changes state outside
+		// the workspace or communicates externally. Reads stay free, because reading
+		// is what the session is for.
+		[[nodiscard]] constexpr auto reaches_outside( const tool_class klass ) noexcept
+			-> bool {
+			switch ( klass ) {
+				case tool_class::read: return false;
+
+				case tool_class::write:
+				case tool_class::exec:
+				case tool_class::net:
+				case tool_class::spawn:
+				case tool_class::mcp: return true;
+			}
+
+			return true;
+		}
+
 	}
 
 	permission_engine::permission_engine( const mcode::workspace& space,
@@ -417,6 +435,25 @@ namespace mcode::perm {
 				{ "floor", request.resource, permission_decision::deny }, *floor };
 
 			return permission_decision::deny;
+		}
+
+		// Plan-then-execute, as one bit. Once untrusted content has entered the
+		// context, an action that reaches outside the workspace or communicates
+		// externally must not be taken on the model's word: the injected instruction
+		// cannot choose the plan, so it cannot trigger the consequence. This is the
+		// class of defence the adaptive-attack literature did not break, and the
+		// reason it was not broken is that control flow is data-independent.
+		//
+		// It sits ahead of yolo for the same reason the floor does: a flag that skips
+		// questions must not skip this one, or the defence is opt-out by accident.
+		if ( untrusted_ingested_ && reaches_outside( request.klass ) ) {
+			const rule_match tainted{ "taint", request.resource, permission_decision::ask };
+
+			last_verdict_ = { permission_decision::ask, tainted,
+				"untrusted content is in this session, so an action that leaves the "
+				"workspace needs confirmation" };
+
+			return resolve_ask( request, tainted );
 		}
 
 		// an unparsable command arrives as an empty resource, which no rule may match.

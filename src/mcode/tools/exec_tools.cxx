@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "mcode/net/egress_proxy.hxx"
 #include "mcode/perm/argv.hxx"
 #include "mcode/platform/seams.hxx"
 #include "mcode/proc/process.hxx"
@@ -239,7 +240,26 @@ namespace mcode::tools {
 			options.environment[ "TEMP" ] = text;
 		}
 
-		profile.allow_network = false;
+		// Network is off unless a proxy was started for this run. When one was, the
+		// OS rule permits only its port and the child is told where it is: the env
+		// var is how a compliant tool finds the proxy, and the rule is what makes it
+		// a boundary rather than a suggestion.
+		if ( context.egress != nullptr ) {
+			profile.allow_network = true;
+			profile.egress.http_port = context.egress->http_port( );
+			profile.egress.socks_port = context.egress->socks_port( );
+
+			const auto http = "http://127.0.0.1:" + std::to_string( profile.egress.http_port );
+
+			options.environment[ "HTTP_PROXY" ] = http;
+			options.environment[ "HTTPS_PROXY" ] = http;
+			options.environment[ "ALL_PROXY" ] = "socks5://127.0.0.1:"
+				+ std::to_string( profile.egress.socks_port );
+			options.environment[ "NO_PROXY" ] = "localhost,127.0.0.1";
+		} else {
+			profile.allow_network = false;
+		}
+
 		options.sandbox = &profile;
 
 		const auto program_path = find_executable( tokens->front( ) );

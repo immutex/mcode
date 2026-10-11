@@ -17,6 +17,7 @@
 #include "mcode/tui/tty.hxx"
 #include "mcode/agent/loop.hxx"
 #include "mcode/cli/session.hxx"
+#include "mcode/cli/egress_setup.hxx"
 #include "mcode/cli/exec.hxx"
 #include "mcode/cli/repl.hxx"
 #include "mcode/core/registry.hxx"
@@ -251,12 +252,18 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 			roots.push_back( *bundled_directory / "extensions" );
 		}
 
-		extensions = mcode::ext::load_extensions( roots, registry, hooks, options );
+		extensions = mcode::ext::load_workspace_extensions( effective_workspace, roots,
+			registry, hooks, options );
 
 		if ( parsed->verbose ) {
 			for ( const auto& failure : extensions.report.failed ) {
 				std::fprintf( stderr, "mcode: extension '%s' failed to load: %s\n",
 					failure.name.c_str( ), failure.reason.c_str( ) );
+			}
+
+			for ( const auto& inert : extensions.report.inert ) {
+				std::fprintf( stderr, "mcode: extension '%s' is inert: %s\n",
+					inert.name.c_str( ), inert.detail.c_str( ) );
 			}
 		}
 	}
@@ -402,6 +409,11 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	tools_context.run_id = run_id;
 	tools_context.headless = parsed->json;
 
+	// Only when `[egress] allow` names a host. Absent means the child gets no
+	// network at all, which is the default and the strongest setting.
+	auto egress = mcode::cli::start_egress_if_configured( *config );
+	tools_context.egress = egress.get( );
+
 	auto sink = mcode::tools::vector_sink{ };
 
 	const auto registered = mcode::tools::register_core_tools( tool_registry, sink, tools_context );
@@ -492,6 +504,21 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 
 	auto loop = mcode::agent_loop{ dependencies };
 
+	// The gate is armed from configuration, never from the model's own output: a
+	// run that can choose its own success criterion has no criterion. An empty
+	// command is a legitimate state, reported as `no-tests` rather than verified.
+	{
+		auto command = parsed->verify_command;
+
+		if ( command.empty( ) ) {
+			command = config->get_string( "verify.command" ).value_or( std::string{ } );
+		}
+
+		if ( !command.empty( ) ) {
+			loop.set_verification_command( command );
+		}
+	}
+
 	// A resumed session continues its conversation. The transcript is rebuilt from
 	// the log and seeded before the turn runs, so the model picks up where it left
 	// off instead of starting from an empty history.
@@ -575,11 +602,25 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		}
 	}
 
+	// Stated in every run, including the ones that succeeded: `no-tests` is the
+	// honest answer for a run whose success was never checked, and printing it only
+	// on failure would make silence read as verification.
+	if ( parsed->verbose || outcome->verdict != mcode::verification_verdict::no_tests ) {
+		std::fprintf( stderr, "mcode: verification: %s",
+			std::string{ to_string( outcome->verdict ) }.c_str( ) );
+
+		if ( const auto detail = loop.verification_detail( ); !detail.empty( ) ) {
+			std::fprintf( stderr, " (%s)", std::string{ detail }.c_str( ) );
+		}
+
+		std::fprintf( stderr, "\n" );
+	}
+
 	if ( code != mcode::cli::exit_code::success ) {
 		std::fprintf( stderr, "mcode: %s\n", summary.c_str( ) );
 	}
 
-	stream.emit_run_end( code, summary );
+	stream.emit_run_end( code, summary, outcome->verdict, loop.verification_detail( ) );
 
 	return mcode::cli::to_int( code );
 }

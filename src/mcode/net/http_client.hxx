@@ -54,6 +54,11 @@ namespace mcode::net {
 		http_client( const http_client& ) = delete;
 		auto operator=( const http_client& ) -> http_client& = delete;
 
+		// Movable so a transport that owns one can be returned by value. The class
+		// holds a byte ceiling and nothing else, so the default is exact.
+		http_client( http_client&& other ) noexcept = default;
+		auto operator=( http_client&& other ) noexcept -> http_client& = default;
+
 		[[nodiscard]] auto send( const http_request& request ) -> result< http_response >;
 
 		// `failure` is filled only for a non-2xx response; other failures leave it untouched.

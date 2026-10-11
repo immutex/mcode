@@ -1,6 +1,6 @@
 # Subagents
 
-> **Status: not built** — `grep -rln subagent src/` returns nothing. This doc was
+> **Status: shipped in 0.0.3** as `agent/subagent.hxx`. This doc was
 > rewritten in the fourth-batch research pass and is now the authority for the
 > design; `docs/43-fourth-batch.md` Decision 8 records the decision and the
 > sequencing (last, because fan-out multiplies an unbounded-execution problem —

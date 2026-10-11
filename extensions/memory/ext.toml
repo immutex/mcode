@@ -1,0 +1,5 @@
+name = "memory"
+version = "0.1.0"
+api_version = 1
+description = "Grep the user-authored notes ledger (docs/09, docs/43 D7)"
+permissions = ["fs_read"]

@@ -1,5 +1,6 @@
 #include "mcode/agent/loop.hxx"
 
+#include "mcode/agent/context_controller.hxx"
 #include "mcode/agent/loop_internal.hxx"
 
 #include <algorithm>
@@ -99,6 +100,37 @@ namespace mcode {
 
 	// compaction keeps the first events and the newest tail, dropping everything between them.
 	auto agent_loop::maybe_compact( ) -> status {
+		// Rung 1 before rung 2: clearing tool results keeps the call records and the
+		// reasoning, drops only the payloads, and costs no model call. Masking
+		// observations matches summarization's solve rate at about half the cost, so
+		// it is the cheaper lever and it runs first.
+		const auto plan = plan_context( history_, occupancy_, COMPACTION_KEEP_LAST_TOKENS );
+
+		if ( plan.action == context_action::clear ) {
+			const auto reclaimed = apply_clear( history_, plan.keep_last_results );
+
+			if ( reclaimed > 0 ) {
+				++occupancy_.epoch;
+
+				auto payload = std::string{ "{\"reason\":\"tool-result-clear\",\"reclaimed_tokens\":" };
+				payload += std::to_string( reclaimed );
+				payload += ",\"kept_results\":";
+				payload += std::to_string( plan.keep_last_results );
+				payload += ",\"epoch\":";
+				payload += std::to_string( occupancy_.epoch );
+				payload += "}";
+
+				log_->append( "context.compaction", payload );
+				publish( events::kind::compaction, std::move( payload ) );
+
+				// The clear may have brought the window back under the fold trigger;
+				// if it has, summarizing now would pay a model call for nothing.
+				if ( occupancy_.fill_fraction( ) < COMPACTION_TRIGGER_FRACTION ) {
+					return status{ };
+				}
+			}
+		}
+
 		// Nothing to drop in a conversation this short, and `newest` below would
 		// underflow on an empty one.
 		if ( history_.size( ) <= COMPACTION_KEEP_FIRST_EVENTS ) {
@@ -211,7 +243,8 @@ namespace mcode {
 
 	auto build_system_prompt( const tool_registry& registry,
 		const std::string_view instruction_chain,
-		const std::string_view skill_index ) -> std::string {
+		const std::string_view skill_index,
+		const std::string_view notes_pointer ) -> std::string {
 		auto has_tool = [&]( const std::string_view name ) {
 			return registry.find( name ) != nullptr;
 		};
@@ -276,6 +309,19 @@ namespace mcode {
 			out += skill_index;
 
 			if ( !skill_index.ends_with( '\n' ) ) {
+				out += '\n';
+			}
+		}
+
+		// A pointer, not content. Injecting the ledger itself would spend session-start
+		// budget the instruction chain needs more, and an always-injected block is the
+		// design that measured worst for poisoning. The line says what is there and
+		// when to look, because a bare path is a reference the model ignores.
+		if ( !notes_pointer.empty( ) && has_tool( "memory_search" ) ) {
+			out += "\n# Notes\n";
+			out += notes_pointer;
+
+			if ( !notes_pointer.ends_with( '\n' ) ) {
 				out += '\n';
 			}
 		}

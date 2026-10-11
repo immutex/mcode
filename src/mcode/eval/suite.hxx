@@ -66,4 +66,28 @@ namespace mcode::eval {
 
 	[[nodiscard]] auto to_jsonl( const suite_result& result ) -> std::string;
 
+	// The trustworthiness number, computed from real runs rather than from the
+	// fixture suite: the suite is deterministic and model-free, so it cannot
+	// produce a false success to count. This reads the session logs instead.
+	struct session_audit {
+		std::size_t runs = 0;
+		std::size_t verified = 0;
+		std::size_t no_tests = 0;
+		std::size_t failed = 0;
+
+		// Lines that did not parse. A run whose record is unreadable is not counted
+		// as verified, and the count is reported so a corrupt log is visible.
+		std::size_t unreadable = 0;
+
+		// Runs that reported success without a verification command behind it,
+		// over every run that reported success. Zero is the target; the point is
+		// that it is measured and published rather than assumed.
+		[[nodiscard]] auto false_success_rate( ) const noexcept -> double;
+	};
+
+	[[nodiscard]] auto audit_sessions( const std::filesystem::path& directory )
+		-> result< session_audit >;
+
+	[[nodiscard]] auto to_json( const session_audit& audit ) -> std::string;
+
 }

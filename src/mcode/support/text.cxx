@@ -3,6 +3,9 @@
 #include <simdutf.h>
 
 #include <array>
+#include <fstream>
+#include <sstream>
+#include <system_error>
 
 namespace mcode::text {
 
@@ -270,6 +273,151 @@ namespace mcode::text {
 		}
 
 		return std::to_string( bytes ) + " B";
+	}
+
+	namespace {
+
+		// UTF-8 decode of one codepoint; returns the length consumed, 0 on error.
+		auto decode_one( const std::string_view input, const std::size_t offset,
+			std::uint32_t& out ) -> std::size_t {
+			const auto first = static_cast< unsigned char >( input[ offset ] );
+
+			if ( first < 0x80u ) {
+				out = first;
+
+				return 1;
+			}
+
+			auto length = std::size_t{ 0 };
+			auto value = std::uint32_t{ 0 };
+
+			if ( ( first & 0xE0u ) == 0xC0u ) {
+				length = 2;
+				value = first & 0x1Fu;
+			} else if ( ( first & 0xF0u ) == 0xE0u ) {
+				length = 3;
+				value = first & 0x0Fu;
+			} else if ( ( first & 0xF8u ) == 0xF0u ) {
+				length = 4;
+				value = first & 0x07u;
+			} else {
+				return 0;
+			}
+
+			if ( offset + length > input.size( ) ) {
+				return 0;
+			}
+
+			for ( auto index = std::size_t{ 1 }; index < length; ++index ) {
+				const auto next = static_cast< unsigned char >( input[ offset + index ] );
+
+				if ( ( next & 0xC0u ) != 0x80u ) {
+					return 0;
+				}
+
+				value = ( value << 6 ) | ( next & 0x3Fu );
+			}
+
+			out = value;
+
+			return length;
+		}
+
+		auto is_invisible( const std::uint32_t codepoint ) -> bool {
+			if ( codepoint == 0x09u || codepoint == 0x0Au || codepoint == 0x0Du ) {
+				return false;
+			}
+
+			// Cc and Cf: control and format characters, neither of which renders.
+			if ( codepoint <= 0x1Fu || ( codepoint >= 0x7Fu && codepoint <= 0x9Fu ) ) {
+				return true;
+			}
+
+			if ( codepoint == 0xADu || codepoint == 0x061Cu || codepoint == 0x180Eu ) {
+				return true;
+			}
+
+			if ( codepoint >= 0x200Bu && codepoint <= 0x200Fu ) {
+				return true;
+			}
+
+			if ( codepoint == 0x2028u || codepoint == 0x2029u || codepoint == 0x202Eu ||
+				codepoint == 0x2060u || codepoint == 0xFEFFu ) {
+				return true;
+			}
+
+			if ( codepoint >= 0x2066u && codepoint <= 0x2069u ) {
+				return true;
+			}
+
+			// Variation selectors: the GlassWorm payload alphabet.
+			if ( codepoint >= 0xFE00u && codepoint <= 0xFE0Fu ) {
+				return true;
+			}
+
+			if ( codepoint >= 0xE0100u && codepoint <= 0xE01EFu ) {
+				return true;
+			}
+
+			return false;
+		}
+
+	}
+
+	auto count_invisible( const std::string_view input ) noexcept -> std::size_t {
+		auto count = std::size_t{ 0 };
+		auto offset = std::size_t{ 0 };
+
+		while ( offset < input.size( ) ) {
+			auto codepoint = std::uint32_t{ 0 };
+			const auto length = decode_one( input, offset, codepoint );
+
+			if ( length == 0 ) {
+				++offset;
+
+				continue;
+			}
+
+			if ( is_invisible( codepoint ) ) {
+				++count;
+			}
+
+			offset += length;
+		}
+
+		return count;
+	}
+
+	auto count_invisible( const std::filesystem::path& directory ) -> std::size_t {
+		auto count = std::size_t{ 0 };
+		auto error = std::error_code{ };
+
+		if ( !std::filesystem::exists( directory, error ) ) {
+			return 0;
+		}
+
+		for ( const auto& entry : std::filesystem::recursive_directory_iterator{ directory, error } ) {
+			if ( error ) {
+				break;
+			}
+
+			if ( !entry.is_regular_file( error ) || error ) {
+				continue;
+			}
+
+			auto stream = std::ifstream{ entry.path( ), std::ios::binary };
+
+			if ( !stream ) {
+				continue;
+			}
+
+			auto buffer = std::ostringstream{ };
+			buffer << stream.rdbuf( );
+
+			count += mcode::text::count_invisible( std::string_view{ buffer.str( ) } );
+		}
+
+		return count;
 	}
 
 }

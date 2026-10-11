@@ -92,7 +92,7 @@ Mechanics:
 | macOS | **Seatbelt**, entered via `sandbox_init_with_parameters()` (in-process, no exec wrapper, no stderr warning) with `(deny default)` + `(import "system.sb")`. `sandbox-exec` is the documented-but-deprecated fallback | `sandbox-exec` is DEPRECATED (2017) and warns on every run; **Apple has published no replacement** for CLI process sandboxing. `(allow default)` profiles are structurally escapable — deny-default is mandatory. Details: `24` |
 | Paranoid | Docker/Podman or microVM with the workspace bind-mounted | Strongest; also the only option where native sandboxing is unavailable. Note Windows Sandbox CLI is *not* programmatic (`wsb exec` has no I/O capture) |
 
-**Network egress is the actual anti-exfiltration control.** A local loopback proxy with a domain allowlist; sandboxed processes get `HTTP(S)_PROXY` and direct egress is blocked at the OS layer. This is the single highest-value component and the one that breaks the lethal trifecta (private data + untrusted content + external communication). **It is not built** — see `docs/43-fourth-batch.md` Decision 3 for the plan, which also states the two things this paragraph currently overstates: the env var is a *hint* and only the OS rule is a boundary (`curl --noproxy '*'` and JVM tools ignore it), and **Windows network enforcement is `best_effort`, not `enforced`**, because WFP requires admin. The proxy raises the cost of exfiltration; it does not stop it through an allowlisted destination, and it does not break the trifecta.
+**Network egress is the actual anti-exfiltration control.** A local loopback proxy with a domain allowlist; sandboxed processes get `HTTP(S)_PROXY` and direct egress is blocked at the OS layer. **It ships as of 0.0.3** (`43` D3), with three limits this paragraph used to overstate. The env var is a *hint*: only the OS rule is a boundary, and `curl --noproxy '*'` and JVM tools walk past it. **Windows network enforcement reports `best-effort`, not `enforced`**, because WFP requires admin. And an allowlist **raises the cost of exfiltration rather than stopping it** — anything on the list can carry data out in a URL, a body or a package name, domain fronting defeats name-based filtering, and DNS resolution is not fenced. What it removes is the agent's ability to *choose* an arbitrary destination. The network is off by default; `[egress] allow` in the config turns it on, and an empty list means no network at all.
 
 **Secrets hygiene:** deny-read list enforced in both the sandbox and the file tools; env scrubbing for spawned processes (pass a known-safe minimal env, never inherit wholesale); redact secret-shaped strings from logs and transcripts.
 
@@ -167,12 +167,22 @@ A cloned repository must never auto-execute code.
 3. Reject bytecode, symlinks, and absolute-path escapes in manifests.
 4. `--no-extensions` exists and is honored for headless/CI runs.
 
+> [!NOTE]
+> **Implemented as of 0.0.3.** `43` Decision 1 landed: a project extension with
+> no grant is read, hashed and reported, and never executed; a changed tree is
+> inert and the grant is not rewritten. The grant unit is the whole extension
+> **tree**, not one file, because a runtime `require` graph needs the set pinned
+> as well as the contents — and pinning the set is a tree digest with extra
+> steps. TOCTOU is closed by serving the entry point and every `require` from the
+> same byte snapshot that was hashed, so there is no second read and therefore no
+> window. The section below is the specification this implements.
+
 > [!WARNING]
-> **Rules 1 and 2 are NOT implemented. The tree contradicts this section.**
-> `default_roots` (`src/mcode/ext/loader.cxx`) pushes
-> `<workspace>/.mcode/extensions` unconditionally, and `load_extensions` runs
-> every candidate's `init.luau`. There is no trust store, no grant, and no hash
-> pinning anywhere in `src/` — `grep -ri trust src/` finds only the unrelated
+> **Before 0.0.3, rules 1 and 2 were not implemented and the tree contradicted
+> this section.** `default_roots` (`src/mcode/ext/loader.cxx`) pushed
+> `<workspace>/.mcode/extensions` unconditionally, and `load_extensions` ran
+> every candidate's `init.luau`. There was no trust store, no grant, and no hash
+> pinning anywhere in `src/` — `grep -ri trust src/` found only the unrelated
 > `wrap_untrusted` MCP taint marker.
 >
 > Measured, not inferred. A repository containing
@@ -182,25 +192,17 @@ A cloned repository must never auto-execute code.
 > grant, no warning on the default path.
 >
 > **Consequence: cloning an untrusted repository and running mcode in it executes
-> that repository's code.** Rule 4 still holds — `--no-extensions` skips the load
-> entirely — and the permission engine still gates what the code can *reach*
+> that repository's code.** Rule 4 still held — `--no-extensions` skips the load
+> entirely — and the permission engine still gated what the code could *reach*
 > (the probe's first attempt, a write under `.mcode/`, was denied by the
-> hard-deny floor). What is unbounded is that arbitrary code runs at all, in the
-> agent process, at the semi-trusted tier.
+> hard-deny floor). What was unbounded is that arbitrary code ran at all, in the
+> agent process, at the semi-trusted tier. **Fixed in 0.0.3: the candidate is now
+> hashed and left inert.**
 >
-> Until a grant exists, the honest position is: `--no-extensions` is the
-> mitigation, and this section is a specification rather than a description.
->
-> **The plan that implements it is `docs/43-fourth-batch.md` Decision 1.** It
-> changes the grant unit from per-file to **per extension tree** — a runtime
-> `require` graph needs the *set* pinned as well as the contents, and pinning the
-> set is a tree digest with extra steps — and closes TOCTOU by serving the entry
-> point and every `require` from the same byte snapshot that was hashed, so there
-> is no second read and therefore no window. That section is the authority for
-> the format and the load-time check.
->
-> Recorded here rather than in a commit message because this doc is what a
-> reader consults before trusting the claim.
+> The implementation is `docs/43-fourth-batch.md` Decision 1, which is the
+> authority for the grant format and the load-time check. Recorded here rather
+> than in a commit message because this doc is what a reader consults before
+> trusting the claim.
 
 Note T2 (prompt-injected agent writes an extension): the agent has disk write access by design, so it can drop a file into the extensions directory. Mitigations are the trust gate above plus keeping the *user* extension directory (`~/.config/mcode/extensions/`) outside the workspace so the permission engine's workspace-write rules do not cover it.
 

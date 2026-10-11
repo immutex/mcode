@@ -48,14 +48,28 @@ namespace mcode::mcp {
 	}
 
 	auto supervisor::connect( ) -> result< std::vector< server_tool > > {
-		auto spawned = stdio_transport::spawn( config_ );
+		// One branch, and everything after it is transport-agnostic: the supervisor,
+		// the client and the JSON-RPC layer never learn which one is in use.
+		if ( config_.transport == HTTP_TRANSPORT ) {
+			auto remote = http_transport::create( config_ );
 
-		if ( !spawned ) {
-			return std::unexpected( std::move( spawned ).error( ) );
+			if ( !remote ) {
+				return std::unexpected( std::move( remote ).error( ) );
+			}
+
+			transport_ = std::unique_ptr< transport >(
+				new http_transport( std::move( *remote ) ) );
+		} else {
+			auto spawned = stdio_transport::spawn( config_ );
+
+			if ( !spawned ) {
+				return std::unexpected( std::move( spawned ).error( ) );
+			}
+
+			transport_ = std::unique_ptr< transport >(
+				new stdio_transport( std::move( *spawned ) ) );
 		}
 
-		transport_ = std::unique_ptr< stdio_transport >(
-			new stdio_transport( std::move( *spawned ) ) );
 		client_ = std::make_unique< client >( *transport_ );
 
 		client_->attach( );

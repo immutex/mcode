@@ -38,6 +38,16 @@ namespace mcode {
 		return "idle";
 	}
 
+	auto to_string( const verification_verdict value ) noexcept -> std::string_view {
+		switch ( value ) {
+			case verification_verdict::no_tests: return "no-tests";
+			case verification_verdict::verified: return "verified";
+			case verification_verdict::failed: return "failed";
+		}
+
+		return "no-tests";
+	}
+
 	agent_loop::agent_loop( dependencies deps )
 		: registry_( deps.registry ), client_( deps.client ),
 		log_( deps.log ), bus_( deps.bus ), budget_( deps.budget ),
@@ -119,6 +129,14 @@ namespace mcode {
 		summary += std::to_string( run_usage_.reasoning );
 		summary += ",\"state\":\"";
 		summary += to_string( state_ );
+		summary += "\",\"verification\":\"";
+		summary += to_string( verdict_ );
+
+		if ( !verification_detail_.empty( ) ) {
+			summary += "\",\"verification_detail\":\"";
+			json::append_escaped( summary, verification_detail_ );
+		}
+
 		summary += "\",\"reason\":\"";
 		json::append_escaped( summary, reason );
 
@@ -253,6 +271,7 @@ namespace mcode {
 				finish_run( loop_state::handoff, "interrupted" );
 				outcome.final_state = loop_state::handoff;
 				outcome.visited = visited_;
+				outcome.verdict = verdict_;
 				outcome.summary_json = "interrupted";
 
 				return outcome;
@@ -288,6 +307,7 @@ namespace mcode {
 						finish_run( loop_state::failed, planned.error( ).msg );
 						outcome.final_state = state_;
 						outcome.visited = visited_;
+						outcome.verdict = verdict_;
 						outcome.summary_json = planned.error( ).msg;
 
 						return outcome;
@@ -429,6 +449,7 @@ namespace mcode {
 
 				case loop_state::verify: {
 					if ( verification_command_.empty( ) ) {
+						verdict_ = verification_verdict::no_tests;
 						state_ = loop_state::handoff;
 
 						break;
@@ -440,7 +461,12 @@ namespace mcode {
 					json::append_escaped( arguments, verification_command_ );
 					arguments += "\"}";
 
+					// Harness-owned: the command comes from configuration, so the
+					// agent's approval policy does not apply to it. Without this the
+					// gate denied its own check in every headless run.
+					harness_call_ = true;
 					auto checked = execute( tool_call{ std::string{ }, "bash", arguments } );
+					harness_call_ = false;
 
 					// A non-zero exit is still a successful tool call; the gate reads the code.
 					auto passed = checked.ok;
@@ -454,17 +480,32 @@ namespace mcode {
 
 							passed = code.has_value( ) && *code == 0 &&
 								( !timed_out.has_value( ) || !*timed_out );
+
+							// A gate that reports only "failed" leaves the reader with
+							// nothing: the exit code is the one fact that separates a
+							// real failure from a broken check.
+							if ( !passed ) {
+								verification_detail_ = code.has_value( )
+									? "the command exited " + std::to_string( *code )
+									: "the command reported no exit code";
+							}
 						} else {
 							passed = false;
+							verification_detail_ = "the command's result did not parse";
 						}
+					} else {
+						verification_detail_ = checked.error_message;
 					}
 
 					if ( passed ) {
+						verdict_ = verification_verdict::verified;
+						verification_detail_.clear( );
 						state_ = loop_state::done;
 
 						break;
 					}
 
+					verdict_ = verification_verdict::failed;
 					last_failure_ = checked.ok ? "verification command failed"
 												: checked.error_message;
 
@@ -563,6 +604,7 @@ namespace mcode {
 
 					outcome.final_state = state_;
 					outcome.visited = visited_;
+					outcome.verdict = verdict_;
 					outcome.summary_json = end_reason_;
 
 					return outcome;
@@ -572,6 +614,7 @@ namespace mcode {
 					finish_run( loop_state::failed, "budget exhausted during plan" );
 					outcome.final_state = state_;
 					outcome.visited = visited_;
+					outcome.verdict = verdict_;
 					outcome.summary_json = "budget exhausted during plan";
 
 					return outcome;

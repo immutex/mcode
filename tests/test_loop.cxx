@@ -165,9 +165,12 @@ TEST_CASE( "the loop reports context usage against the model's window", "[loop]"
 
 	std::ignore = fx.loop->run( "say hi" );
 
-	// the same counter the budget charges, not a second tally
-	CHECK( fx.loop->context_used( ) == fx.loop->budget( ).tokens_used.load( ) );
-	CHECK( fx.loop->context_used( ) == 150 );
+	// Window occupancy is the PROMPT of the last request -- the mock reports 100
+	// input tokens -- not the prompt plus the completion. Counting the completion
+	// would make the meter a running total of everything generated, which is the
+	// same mistake in the other direction.
+	CHECK( fx.loop->context_used( ) == 100 );
+	CHECK( fx.loop->tokens_spent( ) == fx.loop->budget( ).tokens_used.load( ) );
 
 	// an unknown model reads 0, so a renderer omits the percentage
 	auto unknown_deps = agent_loop::dependencies{ };

@@ -111,6 +111,15 @@ namespace mcode::perm {
 
 		[[nodiscard]] auto load_store( ) -> status;
 
+		// Set once untrusted content has entered the context. Never cleared by tool
+		// output: a session that has read a hostile file stays marked, because the
+		// instruction it carried is still in the window.
+		auto mark_untrusted_ingested( ) -> void { untrusted_ingested_ = true; }
+
+		[[nodiscard]] auto untrusted_ingested( ) const noexcept -> bool {
+			return untrusted_ingested_;
+		}
+
 		// the repository's own `.mcode/permissions.json`; a clone's allows are dropped.
 		[[nodiscard]] auto load_project_store( remember_store& store ) -> status;
 
@@ -152,6 +161,8 @@ namespace mcode::perm {
 
 		const mcode::workspace* space_ = nullptr;
 		remember_store* store_ = nullptr;
+
+		bool untrusted_ingested_ = false;
 		approval_source* approval_ = nullptr;
 		options options_;
 

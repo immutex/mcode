@@ -611,7 +611,7 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 
 		if ( match.is_command ) {
 			const auto result = mcode::cli::run_command( match, loop, commands,
-				session_extensions( ) );
+				session_extensions( ), &mention_root );
 
 			if ( result.should_exit ) {
 				exiting = true;

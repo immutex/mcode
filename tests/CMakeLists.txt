@@ -32,8 +32,15 @@ add_executable(mcode_tests
     test_loop_e2e.cxx
     test_events.cxx
     test_eval.cxx
+    test_verification.cxx
+    test_egress.cxx
+    test_egress_proxy.cxx
+    test_context_controller.cxx
+    test_subagent.cxx
+    test_memory.cxx
     test_loader.cxx
     test_loader_failures.cxx
+    test_extension_trust.cxx
     test_lua_host.cxx
     test_manifest.cxx
     test_hooks.cxx
@@ -71,6 +78,9 @@ target_link_libraries(mcode_tests
     PRIVATE
         mcode_core
         Catch2::Catch2WithMain
+        # Headers only, and already a project dependency: the egress proxy is built
+        # on Asio, so the test that drives it needs the same headers.
+        Boost::boost
 )
 
 # The eval tests need the fixture repo's real path: they run from the build tree.

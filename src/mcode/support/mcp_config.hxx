@@ -25,14 +25,23 @@ namespace mcode::mcp {
 	};
 
 	// `command` is the full argv: a code-execution vector, spawned without a shell.
+	// `url` is the endpoint for a remote transport, which spawns nothing.
 	struct server_config {
 		std::string name;
 		std::string transport;
 		std::vector< std::string > command;
+		std::string url;
 		std::vector< std::string > tools;
 		bool enabled = false;
 		server_source source = server_source::config;
 	};
+
+	// The transports this build speaks. `stdio` spawns a child; `http` posts to a
+	// url. Anything else is refused rather than silently treated as one of them.
+	inline constexpr auto STDIO_TRANSPORT = std::string_view{ "stdio" };
+	inline constexpr auto HTTP_TRANSPORT = std::string_view{ "http" };
+
+	[[nodiscard]] auto known_transport( std::string_view name ) noexcept -> bool;
 
 	[[nodiscard]] auto validate_server( const server_config& server ) -> status;
 

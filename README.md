@@ -283,27 +283,30 @@ docs win. Start at the index.
 |---|---|
 | **Agent loop** | plan → act → observe → verify, with reflect, replan and thrash guards; three-axis budget (steps, tokens, USD) |
 | **Core tools** | `read`, `edit`, `write`, `glob`, `grep`, `bash`, `ask_user`, `tool_search` |
-| **Permissions** | Hard-deny floor ahead of every rule and ahead of `--yolo`; project and session rule stores; approval prompt inside the TUI |
-| **Sandboxing** | OS primitives on all three platforms: Linux and macOS sandbox profiles, Windows restricted tokens and job objects |
+| **Permissions** | Hard-deny floor ahead of every rule and ahead of `--yolo`; project and session rule stores; approval prompt inside the TUI; a taint gate that holds back out-of-workspace actions once untrusted content is in the session |
+| **Sandboxing** | OS primitives on all three platforms: Linux and macOS sandbox profiles, Windows restricted tokens and job objects; egress denied by default, with an allowlist proxy for when it is enabled |
+| **Extension trust** | A repository's `.mcode/extensions/` is inert until a grant matches its tree digest; the bytes hashed are the bytes executed, so there is no TOCTOU window |
 | **Luau extensions** | 28-name frozen API surface, hooks with veto, timers, net with a host allowlist, provider descriptors, per-VM memory and time budgets |
-| **MCP** | stdio transport, supervisor with restart and backoff, server tools flattened into the one registry |
+| **MCP** | stdio and Streamable HTTP transports, supervisor with restart and backoff, server tools flattened into the one registry |
 | **Skills** | `AGENTS.md` chain with closest-wins precedence, skill discovery and a budgeted routing index |
+| **Subagents** | Read-only fan-out: the child's registry is built from the read class, so a write call fails schema validation rather than reaching an approval prompt |
+| **Memory** | A user-authored notes ledger, `/remember` to append, `memory_search` to grep it; the ledger lives outside the workspace and no model writes to it |
 | **Model layer** | Streaming SSE, delta assembly, tool-call fragments, retry policy, prompt-cache alignment, provider descriptors as data |
+| **Context** | Tool-result clearing before compaction, a pinned state block at the front of the prompt, and a meter that reads window fill rather than cumulative spend |
 | **TUI** | Inline cell-diff renderer, streaming markdown, palette, mention picker, history search, bracketed paste, in-region scrollback |
 | **Sessions** | Append-only JSONL event log per workspace; `--continue`, `--resume`, `--sessions`, `--worktree` |
+| **Verification** | `--verify <command>` arms a gate the harness runs itself; the run reports `verified`, `failed` or `no-tests`, and `mcode eval` prints `false_success_rate` |
 | **Observability** | Typed event log, `exec --json` for editors and CI, eval suite |
 
-**Not built yet:** memory, subagents, OSC 52 clipboard, and the `/skill`, `/mcp`,
-`/session`, `/reload` commands. The docs describe them; the tree does not ship
-them.
+**Not built yet:** OSC 52 clipboard, and the `/skill`, `/mcp`, `/session`,
+`/reload` commands.
 
-**Three further gaps are security claims the docs make and the tree does not
-keep:** a repo-local extension trust gate, network egress control, and
-`mcode ext install`. `docs/43-fourth-batch.md` is the plan that closes them, plus
-the verification gate (which exists but has no caller), the context controller,
-MCP over HTTP, memory and read-only subagents. Treat `docs/12` §Repo-shipped
-extensions and §Layer 2, and `docs/25` §Install, as design rather than shipped
-behaviour until that batch lands.
+**Shipped in 0.0.3:** the repo-local extension trust gate, `mcode ext install`,
+the verification gate and its `false_success_rate`, the context controller,
+memory, read-only subagents, and MCP over Streamable HTTP. The egress proxy ships
+with its limits stated: it raises the cost of exfiltration and does not stop it
+through an allowlisted destination, and Windows network enforcement reports
+`best-effort` because WFP requires admin.
 
 ## Architecture
 

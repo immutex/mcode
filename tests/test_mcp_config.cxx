@@ -262,10 +262,12 @@ env = "production"
 }
 
 TEST_CASE( "an unknown transport is refused", "[mcp]" ) {
+	// `stdio` and `http` both ship; anything else is refused rather than silently
+	// treated as one of them.
 	auto servers = parse_servers( R"(
 [mcp.servers.filesystem]
 command = ["npx"]
-transport = "http"
+transport = "websocket"
 )" );
 
 	REQUIRE_FALSE( static_cast< bool >( servers ) );
@@ -275,6 +277,39 @@ transport = "http"
 	}
 
 	REQUIRE( servers.error( ).msg.find( "transport must be" ) != std::string::npos );
+}
+
+TEST_CASE( "the http transport needs a url, not a command", "[mcp]" ) {
+	auto servers = parse_servers( R"(
+[mcp.servers.remote]
+transport = "http"
+url = "https://example.com/mcp"
+enabled = true
+)" );
+
+	REQUIRE( servers.has_value( ) );
+	REQUIRE( servers->size( ) == 1 );
+	REQUIRE( servers->front( ).transport == "http" );
+	REQUIRE( servers->front( ).url == "https://example.com/mcp" );
+
+	// A remote server spawns nothing, so an empty command is the correct shape
+	// rather than a validation failure.
+	REQUIRE( servers->front( ).command.empty( ) );
+}
+
+TEST_CASE( "an http server with no url is refused", "[mcp]" ) {
+	auto servers = parse_servers( R"(
+[mcp.servers.remote]
+transport = "http"
+)" );
+
+	REQUIRE_FALSE( static_cast< bool >( servers ) );
+
+	if ( servers ) {
+		return;
+	}
+
+	REQUIRE( servers.error( ).msg.find( "url" ) != std::string::npos );
 }
 
 TEST_CASE( "a server name that would collide with the prefix is refused", "[mcp]" ) {

@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 
+#include "mcode/agent/subagent.hxx"
 #include "mcode/cli/exec.hxx"
 #include "mcode/core/registry.hxx"
 #include "mcode/core/version.hxx"
@@ -309,6 +310,18 @@ auto smoke_cli_and_extensions( ) -> void {
 		"the OpenAI descriptor is registered" );
 	check( shipped_registry.find( "skill_read" ) != nullptr,
 		"the skills extension registered skill_read" );
+	check( shipped_registry.find( "memory_search" ) != nullptr,
+		"the memory extension registered memory_search" );
+
+	// The read-only subagent's tool set, checked against the shipped registry: if
+	// `bash` ever appears here the capability boundary is a prompt again.
+	check( mcode::subagent_tool_names( ).size( ) == 3,
+		"the read-only subagent has exactly three tools" );
+
+	for ( const auto name : mcode::subagent_tool_names( ) ) {
+		check( name != "bash" && name != "edit" && name != "write",
+			"no mutating tool reaches a read-only subagent" );
+	}
 
 	if ( const auto* descriptor = shipped_providers.find( "anthropic-messages" );
 		descriptor != nullptr ) {

@@ -8,11 +8,22 @@
 #include <vector>
 
 #include "mcode/support/json.hxx"
+#include "mcode/perm/permission.hxx"
 #include "mcode/tools/tool_args.hxx"
 
 namespace mcode {
 
 	auto agent_loop::observe_result( const tool_call& call, const tool_outcome& outcome ) -> void {
+		// An MCP tool result is attacker-controlled input: the server is someone
+		// else's process and its output is not the harness's. Marking it here is
+		// what turns the taint gate from a policy into a fact about this session.
+		if ( permissions_ != nullptr ) {
+			if ( const auto* definition = registry_->find( call.name );
+				definition != nullptr && definition->source == tool_source::mcp ) {
+				permissions_->mark_untrusted_ingested( );
+			}
+		}
+
 		auto message = model::message{ };
 		message.speaker = model::role::tool;
 		message.blocks.push_back( loop_internal::result_block( outcome, call.id ) );
@@ -54,7 +65,7 @@ namespace mcode {
 		const auto near_budget = budget_.nearly_exhausted( );
 		const auto assembled = assemble_request( *registry_,
 			{ .system_prompt = build_system_prompt( *registry_, instruction_chain_,
-				  skill_index_ ),
+				  skill_index_, notes_pointer_ ),
 				.history = history_,
 				.model_name = model_name_,
 				.mode = caps_.caching,
@@ -130,6 +141,18 @@ namespace mcode {
 		// Accumulated across the run, not just this request, so the summary can report the
 		// cache hit rate a consumer needs to tell a cheap turn from an expensive one.
 		run_usage_ += folded;
+
+		// Window occupancy is the LAST request's prompt, not the run's spend. Keeping
+		// them apart is what makes the meter a fraction of the window rather than a
+		// number that grows without bound.
+		occupancy_.prompt_tokens = folded.input + folded.cached_read + folded.cache_write;
+		occupancy_.cached_read = folded.cached_read;
+		occupancy_.cache_write = folded.cache_write;
+		occupancy_.usable_window = static_cast< std::int64_t >(
+			std::max< std::int64_t >(
+				caps_.effective_context_window( ) - RESERVED_OUTPUT_TOKENS,
+				static_cast< std::int64_t >( static_cast< double >(
+					caps_.effective_context_window( ) ) * MIN_USABLE_WINDOW_FRACTION ) ) );
 
 		cost = compute_cost( caps_, folded );
 		budget_.charge( static_cast< std::uint64_t >( total_tokens( caps_, folded ) ), cost );

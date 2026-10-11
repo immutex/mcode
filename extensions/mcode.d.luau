@@ -176,6 +176,16 @@ declare mcode: {
 		write: (path: string, data: string, opts: { append: boolean? }?) -> (boolean?, string?),
 	},
 
+	-- The user-authored notes ledger. Read-only: the human writes it, never the
+	-- model, so there is no write entry point here.
+	memory: {
+		-- Searches the ledger for this workspace, case-insensitively. Takes a
+		-- QUERY, never a path: the host resolves it against the one ledger, so
+		-- this cannot be turned into an arbitrary-file read. Returns the matching
+		-- lines, or `nil, err` on environmental failure.
+		search: (query: string) -> (string?, string?),
+	},
+
 	skill: {
 		-- Registers a skill by value. Discovery of SKILL.md on disk is separate.
 		register: (definition: {

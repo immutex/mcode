@@ -1,14 +1,26 @@
 #include "mcode/ext/loader.hxx"
 
 #include <algorithm>
-#include <array>
 #include <cstdlib>
-#include <fstream>
-#include <sstream>
+#include <memory>
 
+#include "mcode/ext/integrity.hxx"
+#include "mcode/fs/workspace.hxx"
 #include "mcode/support/toml.hxx"
 
 namespace mcode::ext {
+
+	auto to_string( const load_trust value ) noexcept -> std::string_view {
+		switch ( value ) {
+			case load_trust::trusted_by_location: return "trusted-by-location";
+			case load_trust::granted: return "granted";
+			case load_trust::ungranted: return "ungranted";
+			case load_trust::denied: return "denied";
+			case load_trust::changed: return "changed";
+		}
+
+		return "ungranted";
+	}
 
 	auto load_report::total_tools( ) const noexcept -> std::size_t {
 		auto count = std::size_t{ 0 };
@@ -162,63 +174,88 @@ namespace mcode::ext {
 				continue;
 			}
 
+			// A candidate under the workspace's own extension root arrived with the
+			// repository, so it runs only against a grant. Everything else was put
+			// there by the user or shipped beside the binary.
+			const auto is_project = !options.project_root.empty( )
+				&& path_is_within( options.project_root, candidate.directory );
+
+			auto trust = load_trust::trusted_by_location;
+
+			if ( is_project ) {
+				const auto decision = options.trust != nullptr
+					? options.trust->decide( trust_scope::project, manifest_value->name,
+						manifest_value->api_version )
+					: trust_decision::ungranted;
+
+				if ( decision == trust_decision::denied ) {
+					outcome.report.inert.push_back( { manifest_value->name, candidate.directory,
+						load_trust::denied, "denied by the trust store" } );
+
+					continue;
+				}
+
+				if ( decision == trust_decision::ungranted ) {
+					outcome.report.inert.push_back( { manifest_value->name, candidate.directory,
+						load_trust::ungranted,
+						"a repository extension runs only against a grant; run 'mcode ext trust "
+							+ manifest_value->name + "'" } );
+
+					continue;
+				}
+
+				trust = load_trust::granted;
+			}
+
+			// Read every file once. The bytes hashed here are the bytes compiled
+			// below, so there is no second read and no window between the two.
+			auto snapshot = snapshot_extension( candidate.directory );
+
+			if ( !snapshot ) {
+				outcome.report.failed.push_back( { candidate.name, candidate.directory,
+					snapshot.error( ).msg } );
+
+				continue;
+			}
+
+			if ( trust == load_trust::granted ) {
+				const auto* record = options.trust->record_for( trust_scope::project,
+					manifest_value->name );
+
+				if ( record == nullptr || record->tree_sha256 != snapshot->tree_sha256 ) {
+					outcome.report.inert.push_back( { manifest_value->name, candidate.directory,
+						load_trust::changed,
+						"the extension changed since it was granted; re-grant with "
+						"'mcode ext trust " + manifest_value->name + "'" } );
+
+					continue;
+				}
+			}
+
+			const auto* entry_source = snapshot->find( "init.luau" );
+
+			if ( entry_source == nullptr ) {
+				outcome.report.failed.push_back( { candidate.name, candidate.directory,
+					"no init.luau" } );
+
+				continue;
+			}
+
 			auto host_options = lua_host_options{ };
 			host_options.extension_name = manifest_value->name;
 			host_options.memory_limit_bytes = options.memory_limit_bytes;
 			host_options.time_limit = options.time_limit;
 
-			// require is confined to the extension root; an escaping path is refused here.
-			const auto extension_root = std::filesystem::weakly_canonical( candidate.directory );
-			host_options.module_loader = [ extension_root ]( const std::string_view module_path )
+			// The snapshot outlives the host: the closure that reads it is stored in
+			// the host, and nothing here touches the filesystem again.
+			const auto loaded_files = std::make_shared< const extension_snapshot >(
+				std::move( *snapshot ) );
+
+			host_options.module_loader = [ loaded_files ]( const std::string_view module_path )
 				-> std::optional< std::string > {
-				auto relative = std::filesystem::path{ std::string{ module_path } };
-
-				if ( relative.is_absolute( ) ) {
-					return std::nullopt;
-				}
-
-				auto stripped = relative.lexically_normal( ).string( );
-
-				while ( stripped.starts_with( "./" ) ) {
-					stripped.erase( 0, 2 );
-				}
-
-				const auto spellings = std::array{
-					std::filesystem::path{ stripped },
-					std::filesystem::path{ stripped + ".luau" },
-					std::filesystem::path{ stripped } / "init.luau",
-				};
-
-				for ( const auto& attempt : spellings ) {
-					auto resolved = std::filesystem::weakly_canonical( extension_root / attempt );
-
-					// component-wise: a prefix test would accept `/ext-other` for root `/ext`.
-					auto root_part = extension_root.begin( );
-					auto resolved_part = resolved.begin( );
-					auto contained = true;
-
-					for ( ; root_part != extension_root.end( ); ++root_part, ++resolved_part ) {
-						if ( resolved_part == resolved.end( ) || *root_part != *resolved_part ) {
-							contained = false;
-
-							break;
-						}
-					}
-
-					if ( !contained ) {
-						continue;
-					}
-
-					auto source = std::ifstream{ resolved, std::ios::binary };
-
-					if ( !source ) {
-						continue;
-					}
-
-					auto buffer = std::ostringstream{ };
-					buffer << source.rdbuf( );
-
-					return buffer.str( );
+				if ( const auto* found = resolve_module( *loaded_files, module_path );
+					found != nullptr ) {
+					return *found;
 				}
 
 				return std::nullopt;
@@ -244,10 +281,10 @@ namespace mcode::ext {
 						registration{ .host = *host, .surface = *surface,
 							.providers = providers, .hooks = hooks,
 							.details = *manifest_value } ); !registered ) {
-					// Discarded like the two sibling failure paths below. Without
-					// this, whatever the registration managed to install before it
-					// failed stayed in the hook and provider registries pointing at
-					// a VM that the `continue` then destroys.
+					// Discarded like the sibling failure paths below. Without this,
+					// whatever the registration managed to install before it failed
+					// stayed in the hook and provider registries pointing at a VM
+					// that the `continue` then destroys.
 					discard( *host, *surface, providers, hooks );
 
 					outcome.report.failed.push_back( { candidate.name, candidate.directory,
@@ -259,16 +296,7 @@ namespace mcode::ext {
 
 			const auto entry_point = candidate.directory / "init.luau";
 
-			if ( !std::filesystem::exists( entry_point ) ) {
-				discard( *host, *surface, providers, hooks );
-
-				outcome.report.failed.push_back( { candidate.name, candidate.directory,
-					"no init.luau" } );
-
-				continue;
-			}
-
-			if ( auto ran = host->run_file( entry_point ); !ran ) {
+			if ( auto ran = host->run( *entry_source, entry_point.string( ) ); !ran ) {
 				discard( *host, *surface, providers, hooks );
 
 				outcome.report.failed.push_back( { candidate.name, candidate.directory,
@@ -287,6 +315,8 @@ namespace mcode::ext {
 			report_entry.directory = candidate.directory;
 			report_entry.version = entry.details.version;
 			report_entry.description = entry.details.description;
+			report_entry.tree_sha256 = loaded_files->tree_sha256;
+			report_entry.trust = trust;
 			report_entry.bytes_used = entry.host->bytes_allocated( );
 			report_entry.tools = entry.tool_names( );
 
@@ -299,6 +329,35 @@ namespace mcode::ext {
 		}
 
 		return outcome;
+	}
+
+	auto load_workspace_extensions( const std::filesystem::path& workspace,
+		const std::vector< std::filesystem::path >& roots, model::provider_registry& providers,
+		hook_registry& hooks, const loader_options& options ) -> load_result {
+		auto effective = options;
+		effective.project_root = project_extension_root( workspace );
+
+		// A missing store is the first-run state and reads as empty, which means
+		// every project extension is inert. That is the correct default.
+		auto store = trust_store{ };
+
+		if ( const auto path = trust_store::default_path( ) ) {
+			auto loaded = trust_store::load( *path );
+
+			if ( !loaded ) {
+				auto outcome = load_result{ };
+				outcome.report.failed.push_back( { "<trust store>", *path,
+					loaded.error( ).msg } );
+
+				return outcome;
+			}
+
+			store = std::move( *loaded );
+		}
+
+		effective.trust = &store;
+
+		return load_extensions( roots, providers, hooks, effective );
 	}
 
 	auto default_register_api( tool_registry& registry,
@@ -318,7 +377,7 @@ namespace mcode::ext {
 		-> std::vector< std::filesystem::path > {
 		auto roots = std::vector< std::filesystem::path >{ };
 
-		roots.push_back( workspace / ".mcode" / "extensions" );
+		roots.push_back( project_extension_root( workspace ) );
 
 		if ( const auto* profile = std::getenv( "USERPROFILE" ); profile != nullptr ) {
 			roots.push_back( std::filesystem::path{ profile } / ".mcode" / "extensions" );
@@ -327,6 +386,11 @@ namespace mcode::ext {
 		}
 
 		return roots;
+	}
+
+	auto project_extension_root( const std::filesystem::path& workspace )
+		-> std::filesystem::path {
+		return workspace / ".mcode" / "extensions";
 	}
 
 	auto unload_extension( tool_registry& registry, const std::string_view owner ) -> std::size_t {

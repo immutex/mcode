@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -181,6 +182,7 @@ namespace mcode::cli {
 	// "nothing loaded" and "nothing to read" are different answers.
 	[[nodiscard]] auto run_command( const command_match& match, const agent_loop& loop,
 		const std::vector< mcode::tui::slash_command >& commands,
-		const mcode::ext::load_report* extensions = nullptr ) -> command_result;
+		const mcode::ext::load_report* extensions = nullptr,
+		const std::filesystem::path* workspace = nullptr ) -> command_result;
 
 }

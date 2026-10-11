@@ -74,6 +74,12 @@ namespace mcode::cli {
 		// Extra workspace roots from --add-dir, canonicalized by the caller.
 		std::vector< std::string > add_dirs;
 
+		// `--verify <command>`: the command the harness runs itself before a run may
+		// report success. Empty falls back to `[verify] command` in config, and an
+		// empty result is a legitimate state reported as `no-tests`, never as
+		// verified.
+		std::string verify_command;
+
 		// Remaining argv after flag extraction. Non-empty means the caller passed
 		// something we did not recognise, which is a usage error -- unknown flags
 		// are never ignored silently (AGENTS.md §Correctness).
@@ -178,7 +184,9 @@ namespace mcode::cli {
 
 		auto emit_run_start( std::string_view prompt ) -> void;
 		auto emit_event( const events::event& value ) -> void;
-		auto emit_run_end( exit_code code, std::string_view summary ) -> void;
+		auto emit_run_end( exit_code code, std::string_view summary,
+			verification_verdict verdict = verification_verdict::no_tests,
+			std::string_view verification_detail = { } ) -> void;
 
 		// Flushes stdout. Called on every emit: a headless consumer reading a pipe
 		// must see each line as it happens, or a long run looks hung.

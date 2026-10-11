@@ -45,6 +45,9 @@ add_library(mcode_core STATIC
     mcode/cli/exec_transcript.cxx
     mcode/cli/exec_worktree.cxx
     mcode/cli/skill_command.cxx
+    mcode/cli/egress_setup.cxx
+    mcode/cli/ext_command.cxx
+    mcode/cli/ext_install.cxx
 
     mcode/skills/frontmatter.cxx
     mcode/skills/discovery.cxx
@@ -70,13 +73,18 @@ add_library(mcode_core STATIC
     mcode/ext/api_session.cxx
     mcode/ext/api_net.cxx
     mcode/ext/api_context.cxx
+    mcode/ext/api_memory.cxx
     mcode/ext/defer.cxx
     mcode/ext/notify.cxx
     mcode/ext/loader.cxx
     mcode/ext/lua_json.cxx
     mcode/ext/manifest.cxx
+    mcode/ext/integrity.cxx
+    mcode/ext/trust_store.cxx
+    mcode/ext/lockfile.cxx
 
     mcode/fs/workspace.cxx
+    mcode/memory/ledger.cxx
     mcode/fs/workspace_write.cxx
     mcode/fs/snapshot.cxx
     mcode/fs/snapshot_restore.cxx
@@ -106,6 +114,8 @@ add_library(mcode_core STATIC
 
     mcode/net/sse.cxx
     mcode/net/http_client.cxx
+    mcode/net/egress_policy.cxx
+    mcode/net/egress_proxy.cxx
 
     mcode/net/http_internal.cxx
     mcode/proc/process.cxx
@@ -113,6 +123,7 @@ add_library(mcode_core STATIC
 
     mcode/mcp/jsonrpc.cxx
     mcode/mcp/transport_stdio.cxx
+    mcode/mcp/transport_http.cxx
     mcode/mcp/client.cxx
     mcode/mcp/supervisor.cxx
     mcode/mcp/source.cxx
@@ -125,6 +136,8 @@ add_library(mcode_core STATIC
     mcode/agent/loop_dispatch.cxx
     mcode/agent/loop_tools.cxx
     mcode/agent/loop_context.cxx
+    mcode/agent/context_controller.cxx
+    mcode/agent/subagent.cxx
     mcode/agent/message_json.cxx
     mcode/agent/repetition_guard.cxx
 

@@ -30,6 +30,11 @@ namespace mcode::ext {
 	// unknown keys are rejected: a typo that disables a capability beats a load error.
 	[[nodiscard]] auto load_manifest( const std::filesystem::path& directory ) -> result< manifest >;
 
+	// The same validation against bytes already in hand, so the load path and the
+	// install path cannot drift. `origin` names the manifest in messages.
+	[[nodiscard]] auto parse_manifest( std::string_view text, std::string_view origin,
+		std::string_view directory_name ) -> result< manifest >;
+
 	[[nodiscard]] auto known_permissions( ) -> const std::vector< std::string_view >&;
 
 }

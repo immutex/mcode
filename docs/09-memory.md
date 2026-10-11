@@ -1,7 +1,7 @@
 # Memory Architecture for mcode
 
-> **Status: the recommended design below is superseded by `docs/43-fourth-batch.md`
-> Decision 7.** Two of its load-bearing choices do not survive the evidence. It
+> **Status: superseded by `docs/43-fourth-batch.md` Decision 7, which shipped in
+> 0.0.3.** Two of its load-bearing choices do not survive the evidence. It
 > ships SQLite FTS5 by default, which contradicts `01` ("Not a vector database.
 > Retrieval is agentic search first; lexical index only if measured necessary"),
 > `03` ("FTS5 if we ever need it"), `14` ("Premature") and this doc's own Traps

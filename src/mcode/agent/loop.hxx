@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "mcode/agent/repetition_guard.hxx"
+#include "mcode/agent/context_controller.hxx"
 #include "mcode/core/error.hxx"
 #include "mcode/core/registry.hxx"
 #include "mcode/events/bus.hxx"
@@ -65,13 +66,8 @@ namespace mcode {
 	// true and the path ran on every step reporting a compaction it did not do.
 	inline constexpr double MIN_USABLE_WINDOW_FRACTION = 0.10;
 
-	inline constexpr double TOOL_CLEAR_TRIGGER_FRACTION = 0.60;
-	inline constexpr double CLEAR_AT_LEAST_FRACTION = 0.20;
 	inline constexpr double SAFETY_MARGIN_FRACTION = 0.05;
 	inline constexpr std::int64_t RESERVED_OUTPUT_TOKENS = 16'000;
-
-	inline constexpr std::size_t MAX_POST_COMPACT_REREADS = 5;
-	inline constexpr std::int64_t POST_COMPACT_REREAD_TOKENS = 5'000;
 
 	inline constexpr std::int64_t SYSTEM_PROMPT_TOKEN_BUDGET = 1'500;
 	inline constexpr std::int64_t TOOLS_TOKEN_BUDGET = 3'500;
@@ -308,8 +304,26 @@ namespace mcode {
 
 	[[nodiscard]] auto to_string( const loop_state value ) noexcept -> std::string_view;
 
+	// Whether a run's completion was actually checked. The distinction that matters
+	// is `no_tests` versus `verified`: a run with no verification command is not
+	// unverified-by-accident, it is a run whose success was never established, and
+	// reporting the two the same way is how a harness comes to claim success it
+	// cannot back.
+	enum class verification_verdict {
+		// No command configured, or the run ended before the gate. Never "verified".
+		no_tests,
+		// The command ran and exited zero.
+		verified,
+		// The command ran and did not exit zero, or the tool call itself failed.
+		failed,
+	};
+
+	[[nodiscard]] auto to_string( verification_verdict value ) noexcept -> std::string_view;
+
 	struct turn_outcome {
 		loop_state final_state = loop_state::idle;
+
+		verification_verdict verdict = verification_verdict::no_tests;
 
 		std::vector< loop_state > visited;
 
@@ -348,7 +362,8 @@ namespace mcode {
 	// Sections 1-8 are cache-stable; the environment block lives in the tail.
 	[[nodiscard]] auto build_system_prompt( const tool_registry& registry,
 		const std::string_view instruction_chain = { },
-		const std::string_view skill_index = { } ) -> std::string;
+		const std::string_view skill_index = { },
+		const std::string_view notes_pointer = { } ) -> std::string;
 
 	class thrash_detector {
 	public:
@@ -448,15 +463,42 @@ namespace mcode {
 			verification_command_ = std::move( command );
 		}
 
+		// The ledger pointer line. Empty when there is no ledger or no tool to read
+		// it, so the prompt never carries a reference to something absent.
+		auto set_notes_pointer( std::string pointer ) -> void {
+			notes_pointer_ = std::move( pointer );
+		}
+
 		[[nodiscard]] auto state( ) const noexcept -> loop_state { return state_; }
 
 		[[nodiscard]] auto model_name( ) const noexcept -> std::string_view {
 			return model_name_;
 		}
 
-		// the same counter the budget charges; the atomic load lets the REPL read it mid-turn.
+		// Window occupancy, not cumulative spend. This returned `budget_.tokens_used`
+		// -- the same counter the budget charges -- and the TUI meter, `/context` and
+		// the status line all compare it against the context window, so a long
+		// session read over 100%. The two numbers answer different questions and only
+		// this one is a fraction of the window.
 		[[nodiscard]] auto context_used( ) const noexcept -> std::uint64_t {
+			const auto prompt = occupancy_.prompt_tokens;
+
+			return prompt > 0 ? static_cast< std::uint64_t >( prompt ) : 0;
+		}
+
+		// Cumulative spend across the run, which is what the budget is charged on.
+		[[nodiscard]] auto tokens_spent( ) const noexcept -> std::uint64_t {
 			return budget_.tokens_used.load( );
+		}
+
+		[[nodiscard]] auto occupancy( ) const noexcept -> const context_occupancy& {
+			return occupancy_;
+		}
+
+		// Why the gate failed, when it did. Empty on every other path, so a reader
+		// never has to distinguish "no detail" from "a detail that is empty".
+		[[nodiscard]] auto verification_detail( ) const noexcept -> std::string_view {
+			return verification_detail_;
 		}
 
 		// The model's context window in tokens; 0 means unknown, so a caller omits the ratio.
@@ -624,6 +666,11 @@ namespace mcode {
 		bool hard_error_ = false;
 		bool permission_denied_ = false;
 		std::string verification_command_;
+		std::string verification_detail_;
+		verification_verdict verdict_ = verification_verdict::no_tests;
+		bool harness_call_ = false;
+		std::string notes_pointer_;
+		context_occupancy occupancy_;
 		perm::permission_engine* permissions_ = nullptr;
 		std::string instruction_chain_;
 		std::string skill_index_;

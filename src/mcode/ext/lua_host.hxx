@@ -87,7 +87,6 @@ namespace mcode {
 			void* upvalue ) -> status;
 
 		auto run( std::string_view chunk, std::string_view chunk_name = "=(extension)" ) -> status;
-		auto run_file( const std::filesystem::path& path ) -> status;
 
 		[[nodiscard]] auto eval_to_string( std::string_view expression ) -> result< std::string >;
 
