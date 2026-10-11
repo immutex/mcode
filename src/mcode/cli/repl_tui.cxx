@@ -426,9 +426,11 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 		auto prompt = *submitted;
 
 		if ( match.is_command ) {
+			// Named apart from `run_repl`'s own `arguments`: GCC's -Wshadow counts a
+			// lambda parameter shadowing an enclosing function's parameter.
 			const auto invoke_extension = mcode::cli::extension_command_invoker{
-				[ ]( const std::string_view name, const std::string_view arguments ) {
-					return session_invoke_command( name, arguments );
+				[ ]( const std::string_view command, const std::string_view command_arguments ) {
+					return session_invoke_command( command, command_arguments );
 				} };
 
 			const auto result = mcode::cli::run_command( match, loop, commands,

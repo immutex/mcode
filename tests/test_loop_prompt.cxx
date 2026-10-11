@@ -23,6 +23,7 @@ TEST_CASE( "explicit-marker providers get a populated cache breakpoint", "[loop]
 			.model_name = "test-model",
 			.mode = model::cache_mode::explicit_markers,
 			.near_budget = false,
+			.pinned_state = { },
 		} );
 
 	REQUIRE( assembled.request.cache.breakpoints.size( ) == 1 );
@@ -61,6 +62,7 @@ TEST_CASE( "explicit-marker providers get a populated cache breakpoint", "[loop]
 			.model_name = "test-model",
 			.mode = model::cache_mode::implicit,
 			.near_budget = false,
+			.pinned_state = { },
 		} );
 
 	CHECK( unmarked.request.cache.breakpoints.empty( ) );
@@ -170,6 +172,7 @@ TEST_CASE( "assembly stays within the session-start budget", "[loop]" ) {
 			.model_name = "test-model",
 			.mode = model::cache_mode::implicit,
 			.near_budget = false,
+			.pinned_state = { },
 		} );
 
 	auto total = std::int64_t{ 0 };

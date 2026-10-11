@@ -1155,5 +1155,12 @@ Read the number you were sent to, not the whole file. Each entry states the cons
     `measured > 1 ? measured - 1 : measured` and a dozen other expressions before
     being dropped. The CI round trip is the honest detector until the gate has a
     parser.
+141. **`_clgate.py` prints its verdict, not just its diagnostics.** The compile
+    output ends with an unconditional `GATE_DONE`, so `python _clgate.py | tail
+    -4; echo $?` reports `tail`'s status and shows a passing-looking tail while
+    the gate failed — which is how a lambda parameter shadowing an enclosing
+    function parameter reached CI. The gate now prints `GATE_PASSED` or
+    `GATE_FAILED` as its last line, and the check itself always worked: clang's
+    `-Wshadow-all` catches the lambda case, and GCC's `-Wshadow` does too.
 
 

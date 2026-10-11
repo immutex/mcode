@@ -93,7 +93,7 @@ three places the plan was wrong.
 
 **Reference.** Read by number, never end to end.
 
-41. `40-non-obvious-constraints.md` — the 140 traps that cost real time to find, numbered and stable. Docs and `AGENTS.md` cite them by number.
+41. `40-non-obvious-constraints.md` — the 141 traps that cost real time to find, numbered and stable. Docs and `AGENTS.md` cite them by number.
 42. `41-session-analysis.md` — two live runs of one long task, dissected. Seven harness defects found by running, the model's measured behaviour, and the cache findings.
 43. `42-agents-md-research.md` — what makes an AGENTS.md good and bad, from 8 primary papers and the vendor guidance. The research `/init` generates from.
 44. `43-fourth-batch.md` — **the batch record, shipped in 0.0.3**: the extension trust gate, network egress, `ext install`, the verification gate and the measurement spine, the context controller, MCP over HTTP, memory, and read-only subagents. Read before starting any of them.
@@ -119,7 +119,7 @@ three places the plan was wrong.
 > rather than by a test: the egress proxy sent a SOCKS5 reply with `ATYP = 0`,
 > `mcode ext deny` wrote a trust record its own parser rejected and so lost every
 > grant beside it, and `last_error_message` plus four limits sat outside an
-> anonymous namespace in `mcode::platform`. The traps it produced are 132–135. The 0.1.0 wiring batch added 136–140: registering a tool is not being able to call it, `install_request` and `register_context` are two lists that must agree, a git-restored function body reverts later edits, a child loop inherits the registry but not the handlers, and GCC rejects a self-named declaration clang accepts.
+> anonymous namespace in `mcode::platform`. The traps it produced are 132–135. The 0.1.0 wiring batch added 136–141: registering a tool is not being able to call it, `install_request` and `register_context` are two lists that must agree, a git-restored function body reverts later edits, a child loop inherits the registry but not the handlers, GCC rejects a self-named declaration clang accepts, and a piped gate's exit status is the pipe's last command.
 >
 > The deviations a reader would otherwise get wrong are in
 > [`docs/40`](40-non-obvious-constraints.md) (items 48–67): workspace writes are

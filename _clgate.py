@@ -422,7 +422,15 @@ def main() -> int:
 
     # The gate fails on any diagnostic, which is the point: the warning set is
     # the one CI treats as errors.
-    return 1 if re.search(r"\b(error|warning):", output) else 0
+    #
+    # The verdict is printed as the last line, because the compile output ends with
+    # an unconditional `GATE_DONE` sentinel: piping this to `tail` and reading `$?`
+    # reports `tail`'s status, so a failing gate looked like a passing one and a
+    # shadowing lambda reached CI.
+    failed = bool(re.search(r"\b(error|warning):", output))
+    print("GATE_FAILED" if failed else "GATE_PASSED")
+
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
