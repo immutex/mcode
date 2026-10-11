@@ -1,8 +1,13 @@
 # Fourth Batch — Trust, Egress, and the Measurement Spine
 
-> **Status: planned, not started.** This document is the plan. No source change
-> accompanies it; `docs/10` carries the one owning-doc rewrite this batch
-> authorizes.
+> **Status: shipped in 0.0.3.** Every decision below landed. Where the plan was
+> wrong, the code is the record: the install writes to the user scope rather than
+> project scope (`25` is authoritative there), the gate's own command is
+> harness-owned so the approval policy does not deny it, and a read-only
+> subagent's registry fails closed rather than skipping a tool it could not copy.
+>
+> Verified: 694 test cases, 4461 assertions, 155 smoke checks, clang gate exit 0,
+> and the exploit measured inert end to end.
 
 > TL;DR: Three of mcode's four differentiators are **documentation, not code**.
 > `12` specifies a repo-local trust gate and calls the egress proxy "the single

@@ -8,7 +8,7 @@ Entries are one line per change, under the type of change: **Added**, **Changed*
 
 ## [Unreleased]
 
-## [0.0.3] - 2026-10-10
+## [0.0.3] - 2026-10-11
 
 The fourth batch. Three of the harness's four differentiators were documentation
 rather than code: a repo-local extension trust gate that did not exist and was
