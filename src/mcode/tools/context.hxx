@@ -26,15 +26,13 @@ namespace mcode::tools {
 		session_reads* reads = nullptr;
 		perm::permission_engine* permissions = nullptr;
 
-		// Borrowed. When set, a spawned child is pointed at the proxy and the OS
-		// rule permits only its port; null means the child is granted no network at
-		// all, which is the default.
+		// Borrowed. Null grants the child no network at all, which is the default.
 		net::egress_proxy* egress = nullptr;
 
 		// doubles as the artifact directory name under .mcode/artifacts/
 		std::string run_id;
 
-		// --json: no terminal is attached, so every ask resolves to deny
+		// headless (--json): no terminal is attached, so every ask resolves to deny
 		bool headless = false;
 	};
 
@@ -51,7 +49,7 @@ namespace mcode::tools {
 	public:
 		using handler = std::function< result< std::string >( std::string_view args_json ) >;
 
-		// `value`, not `handler`: naming it after the alias trips GCC -Wshadow
+		// not `handler`: naming it after the alias trips GCC -Wshadow
 		auto add_handler( std::string name, handler value ) -> void override {
 			handlers_.push_back( { std::move( name ), std::move( value ) } );
 		}

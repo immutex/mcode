@@ -186,7 +186,6 @@ TEST_CASE( "a spaced asterisk is arithmetic, not emphasis", "[tui][markdown]" ) 
 	CHECK( spans.front( ).text == "2 * 3 * 4" );
 	CHECK_FALSE( spans.front( ).italic );
 
-	// flanking delimiters still emphasise.
 	const auto emphasised = render_inline( "2 *3* 4", token::text );
 
 	auto italic = std::string{ };

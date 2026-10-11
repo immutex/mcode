@@ -48,10 +48,8 @@ TEST_CASE( "the width function truncates on cluster boundaries", "[tui][width]" 
 
 TEST_CASE( "a frame at the two-column policy lays an ambiguous glyph two cells wide",
 	"[tui][frame]" ) {
-	// The frame's own geometry: the typed gutter must occupy two cells at
-	// policy 2 and one at policy 1, so the text after it starts a column
-	// later. The caret is measured from the same width, so this is what keeps
-	// the two in step.
+	// The typed gutter occupies two cells at policy 2 and one at policy 1, and the
+	// caret is measured from the same width.
 	const auto bar = std::string{ "\xE2\x94\x82" };
 
 	auto state = render_state{ };
@@ -68,8 +66,6 @@ TEST_CASE( "a frame at the two-column policy lays an ambiguous glyph two cells w
 	REQUIRE( wide.at( row, prefix ).text == bar );
 	CHECK( wide.at( row, prefix ).width == 2 );
 
-	// At policy 1 the `x` is the next cell; at policy 2 the next cell is the
-	// bar's continuation slot and the `x` follows it.
 	CHECK( narrow.at( row, prefix + 1 ).text == "x" );
 	CHECK( wide.at( row, prefix + 1 ).width == 0 );
 	CHECK( wide.at( row, prefix + 2 ).text == "x" );
@@ -191,14 +187,12 @@ TEST_CASE( "the theme resolves one depth per session", "[tui][theme]" ) {
 	CHECK( token_color( token::accent, capabilities::color_depth::ansi16 ) == "94" );
 	CHECK( token_color( token::accent, capabilities::color_depth::none ).empty( ) );
 
-	// `none` is the absent sentinel and must resolve to no colour at all; a
-	// value here would be emitted after the real one and win.
+	// `none` is the absent sentinel and must resolve to no colour at all.
 	CHECK( token_color( token::none, capabilities::color_depth::truecolor ).empty( ) );
 	CHECK( token_color( token::none, capabilities::color_depth::ansi16 ).empty( ) );
 
-	// A background token is stored foreground-shaped, so it must be rewritten
-	// into the 48 family; reading it through token_color would emit a second
-	// foreground and the code block would render as near-black text.
+	// A background token is stored foreground-shaped, so it must be rewritten into
+	// the 48 family.
 	CHECK( token_background( token::code_bg, capabilities::color_depth::truecolor ) ==
 		"48;2;26;27;38" );
 	CHECK( token_background( token::code_bg, capabilities::color_depth::ansi256 ) ==

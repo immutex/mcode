@@ -12,8 +12,7 @@ namespace mcode {
 
 	namespace {
 
-		// The child's whole tool set. No shell: `python -c` writes files, which is
-		// exactly how a "read-only" mode stops being one.
+		// No shell: `python -c` writes files, which is how a "read-only" mode stops being one.
 		const auto READ_ONLY_TOOLS = std::vector< std::string_view >{
 			"read", "glob", "grep",
 		};
@@ -25,9 +24,7 @@ namespace mcode {
 				!= READ_ONLY_TOOLS.end( );
 		}
 
-		// The child's answer is the last assistant text in its own history. Nothing
-		// else is returned: the trajectory is the thing being discarded, and passing
-		// it back would defeat the isolation the spawn was for.
+		// Only the last assistant text: the trajectory is what the spawn discards.
 		auto last_assistant_text( const std::vector< model::message >& history ) -> std::string {
 			for ( auto index = history.size( ); index > 0; --index ) {
 				const auto& message = history[ index - 1 ];
@@ -60,10 +57,7 @@ namespace mcode {
 				continue;
 			}
 
-			// Fail closed rather than skip. A tool that failed to copy would be
-			// missing from the child, which reads as a capability the subagent
-			// simply does not have -- and the caller has no way to tell that from
-			// the parent never having registered it.
+			// Fail closed: a skipped tool reads as a capability the child lacks.
 			if ( const auto added = child.add( *definition ); !added ) {
 				return std::unexpected( added.error( ) );
 			}
@@ -101,10 +95,7 @@ namespace mcode {
 		budget.max_steps = static_cast< std::uint32_t >( request.max_steps );
 		deps.budget = budget;
 
-		// A fresh window: not the parent's history, not its instruction chain. The
-		// spawn payload carries what the child needs to know, and that forced
-		// explicitness is what stops a blind subtask from making decisions the
-		// parent would have made differently.
+		// Not the parent's history or instruction chain: the spawn payload is the only context.
 		deps.instruction_chain = { };
 		deps.skill_index = { };
 		deps.snapshots = nullptr;
@@ -135,9 +126,7 @@ namespace mcode {
 		result.summary = last_assistant_text( loop.history( ) );
 
 		if ( result.summary.empty( ) ) {
-			// Cancelled or exhausted before it answered. Reported as truncated with
-			// what there is, rather than as an error: the exploration still happened,
-			// and a partial report is worth more than a discarded one.
+			// Cancelled or exhausted before it answered: a partial report beats none.
 			result.truncated = true;
 			result.summary = "the subagent stopped before producing a report";
 		}

@@ -31,7 +31,6 @@ namespace mcode::perm {
 
 			auto line = std::string{ };
 
-			// EOF or a closed stdin is a deny, never an allow.
 			if ( !std::getline( std::cin, line ) ) {
 				return approval_outcome::refused;
 			}

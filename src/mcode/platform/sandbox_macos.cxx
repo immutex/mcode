@@ -64,10 +64,8 @@ namespace mcode::platform {
 		if ( !profile.allow_network ) {
 			text += "(deny network*)\n";
 		} else if ( profile.egress.active( ) ) {
-			// Deny first, then punch the proxy ports. `(remote ip "localhost:PORT")`
-			// and never `(local ip ...)`: the latter is evaluated against the source
-			// address, which for an unbound socket is INADDR_ANY at connect() time,
-			// so any value there admits every outbound connection.
+			// `(remote ip ...)`, never `(local ip ...)`: for an unbound socket the
+			// local address is INADDR_ANY at connect() time, admitting everything.
 			text += "(deny network*)\n";
 
 			if ( profile.egress.http_port != 0 ) {

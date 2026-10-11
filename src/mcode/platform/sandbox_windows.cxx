@@ -14,49 +14,48 @@ namespace mcode::platform {
 
 #if defined( _WIN32 )
 
-	inline constexpr auto JOB_ACTIVE_PROCESS_LIMIT = std::uint32_t{ 32 };
-	inline constexpr auto JOB_MEMORY_LIMIT_BYTES = std::uint64_t{ 2u * 1024u * 1024u * 1024u };
-
-	// low IL with no-write-up, and Medium IL restoring the default on deny subtrees.
-	inline constexpr wchar_t LOW_IL_SDDL[] = L"S:(ML;;NW;;;LW)";
-	inline constexpr wchar_t MEDIUM_IL_SDDL[] = L"S:(ML;;NW;;;ME)";
-
-	// the pipe server always holds the child's end, and CreateNamedPipeW fixes its direction.
-	enum class sandbox_pipe_direction { child_reads, child_writes };
-
-	[[nodiscard]] auto last_error_message( const DWORD error ) -> std::string {
-		auto* buffer = LPWSTR{ nullptr };
-
-		const auto length = ::FormatMessageW( FORMAT_MESSAGE_ALLOCATE_BUFFER |
-			FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-			nullptr, error, 0,
-			reinterpret_cast< LPWSTR >( &buffer ), 0, nullptr );
-
-		if ( length == 0 || buffer == nullptr ) {
-			return "windows error " + std::to_string( error );
-		}
-
-		const auto text = std::wstring{ buffer, length };
-		::LocalFree( buffer );
-
-		auto utf8 = std::string{ };
-		const auto bytes = ::WideCharToMultiByte( CP_UTF8, 0, text.c_str( ),
-			static_cast< int >( text.size( ) ), nullptr, 0, nullptr, nullptr );
-
-		if ( bytes > 0 ) {
-			utf8.resize( static_cast< std::size_t >( bytes ) );
-			::WideCharToMultiByte( CP_UTF8, 0, text.c_str( ),
-				static_cast< int >( text.size( ) ), utf8.data( ), bytes, nullptr, nullptr );
-		}
-
-		while ( !utf8.empty( ) && ( utf8.back( ) == '\r' || utf8.back( ) == '\n' ) ) {
-			utf8.pop_back( );
-		}
-
-		return utf8;
-	}
-
 	namespace {
+
+		inline constexpr auto JOB_ACTIVE_PROCESS_LIMIT = std::uint32_t{ 32 };
+		inline constexpr auto JOB_MEMORY_LIMIT_BYTES = std::uint64_t{ 2u * 1024u * 1024u * 1024u };
+
+		// low IL with no-write-up, and Medium IL restoring the default on deny subtrees.
+		inline constexpr wchar_t LOW_IL_SDDL[] = L"S:(ML;;NW;;;LW)";
+		inline constexpr wchar_t MEDIUM_IL_SDDL[] = L"S:(ML;;NW;;;ME)";
+
+		enum class sandbox_pipe_direction { child_reads, child_writes };
+
+		[[nodiscard]] auto last_error_message( const DWORD error ) -> std::string {
+			auto* buffer = LPWSTR{ nullptr };
+
+			const auto length = ::FormatMessageW( FORMAT_MESSAGE_ALLOCATE_BUFFER |
+				FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+				nullptr, error, 0,
+				reinterpret_cast< LPWSTR >( &buffer ), 0, nullptr );
+
+			if ( length == 0 || buffer == nullptr ) {
+				return "windows error " + std::to_string( error );
+			}
+
+			const auto text = std::wstring{ buffer, length };
+			::LocalFree( buffer );
+
+			auto utf8 = std::string{ };
+			const auto bytes = ::WideCharToMultiByte( CP_UTF8, 0, text.c_str( ),
+				static_cast< int >( text.size( ) ), nullptr, 0, nullptr, nullptr );
+
+			if ( bytes > 0 ) {
+				utf8.resize( static_cast< std::size_t >( bytes ) );
+				::WideCharToMultiByte( CP_UTF8, 0, text.c_str( ),
+					static_cast< int >( text.size( ) ), utf8.data( ), bytes, nullptr, nullptr );
+			}
+
+			while ( !utf8.empty( ) && ( utf8.back( ) == '\r' || utf8.back( ) == '\n' ) ) {
+				utf8.pop_back( );
+			}
+
+			return utf8;
+		}
 
 		[[nodiscard]] auto fail_win( const std::string& what, const DWORD error )
 			-> mcode::error {
@@ -119,16 +118,16 @@ namespace mcode::platform {
 #endif
 
 	auto sandbox_windows_child_token( )
-		-> result< unique_job_windows > {
+		-> result< unique_handle_windows > {
 #if defined( _WIN32 )
-		auto process_token = unique_job_windows{ nullptr };
+		auto process_token = unique_handle_windows{ nullptr };
 
 		if ( !::OpenProcessToken( ::GetCurrentProcess( ), TOKEN_DUPLICATE | TOKEN_QUERY,
 			reinterpret_cast< HANDLE* >( &process_token ) ) ) {
 			return std::unexpected( fail_win( "OpenProcessToken", ::GetLastError( ) ) );
 		}
 
-		auto primary = unique_job_windows{ nullptr };
+		auto primary = unique_handle_windows{ nullptr };
 
 		if ( !::DuplicateTokenEx( process_token.get( ), MAXIMUM_ALLOWED, nullptr,
 			SecurityImpersonation, TokenPrimary,
@@ -186,9 +185,9 @@ namespace mcode::platform {
 #endif
 	}
 
-	auto sandbox_windows_job_create( ) -> result< unique_job_windows > {
+	auto sandbox_windows_job_create( ) -> result< unique_handle_windows > {
 #if defined( _WIN32 )
-		auto job = unique_job_windows{ ::CreateJobObjectW( nullptr, nullptr ) };
+		auto job = unique_handle_windows{ ::CreateJobObjectW( nullptr, nullptr ) };
 
 		if ( job == nullptr ) {
 			return std::unexpected( fail_win( "CreateJobObjectW", ::GetLastError( ) ) );
@@ -242,7 +241,7 @@ namespace mcode::platform {
 						::GetLastError( ) ) );
 			}
 
-			auto guard = unique_job_windows{ descriptor };
+			auto guard = unique_handle_windows{ descriptor };
 
 			auto* sacl = PACL{ nullptr };
 			auto present = BOOL{ FALSE };

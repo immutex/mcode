@@ -33,7 +33,6 @@ namespace mcode::ext::detail {
 			return;
 		}
 
-		watchdog->expired = true;
 		++watchdog->breaches;
 
 		luaL_error( state, "extension exceeded its time budget" );

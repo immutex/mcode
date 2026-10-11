@@ -29,7 +29,6 @@ namespace mcode::model {
 
 	[[nodiscard]] auto classify_failure( const int status, const std::string_view body ) -> failure_class;
 
-	// full jitter: a uniform draw from [0, min(cap, base * 2^attempt)].
 	[[nodiscard]] auto backoff_delay( const unsigned attempt, std::mt19937_64& rng )
 		-> std::chrono::milliseconds;
 
@@ -37,10 +36,8 @@ namespace mcode::model {
 	[[nodiscard]] auto retry_after_seconds( const net::http_failure& failure )
 		-> std::optional< std::int64_t >;
 
-	// A 400 whose body names a request field means the gateway does not implement that field,
-	// not that the request is malformed. The field is switched off for the rest of the session
-	// and the request retried, because failing the whole run over an unsupported optimisation
-	// is worse than running without it.
+	// A 400 naming a request field means the gateway lacks that field, not that the request is
+	// malformed; the field is switched off and the request retried.
 	struct feature_downgrade {
 		std::string field;
 		bool matched = false;

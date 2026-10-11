@@ -24,12 +24,8 @@
 #include <mach-o/dyld.h>
 #endif
 
-#if defined( _WIN32 )
-#include "mcode/platform/sandbox_windows.hxx"
-#elif defined( __linux__ )
+#if defined( __linux__ )
 #include "mcode/platform/sandbox_linux.hxx"
-#elif defined( __APPLE__ )
-#include "mcode/platform/sandbox_macos.hxx"
 #endif
 
 namespace mcode::platform {
@@ -41,9 +37,6 @@ namespace mcode::platform {
 #else
 	inline constexpr auto MAX_PROCESS_ID = std::uint32_t{ 0x7FFFFFFF };
 #endif
-
-	// distinct from 0 so a supervisor can tell a killed child from a finished one.
-	inline constexpr auto TERMINATED_EXIT_CODE = unsigned{ 1 };
 
 	inline constexpr auto MAX_EXECUTABLE_PATH_BYTES = std::size_t{ 64u * 1024u };
 
@@ -82,7 +75,6 @@ namespace mcode::platform {
 
 	auto sandbox_capability_level( ) noexcept -> sandbox_capability {
 	#if defined( _WIN32 )
-		// integrity levels have no read-down restriction, so reads are not confined.
 		return sandbox_capability::write_boundary;
 	#elif defined( __linux__ )
 		return sandbox_capability::filesystem;
@@ -126,106 +118,12 @@ namespace mcode::platform {
 	#endif
 	}
 
-	auto apply_sandbox( const sandbox_profile& profile ) -> status {
-#if defined( _WIN32 )
-		// in-process only; the child path applies the Low IL token at spawn.
-		if ( const auto marked = sandbox_windows_mark_write_paths(
-			profile.write_paths, profile.deny_paths ); !marked ) {
-			return std::unexpected( marked.error( ) );
-		}
-
-		return { };
-#elif defined( __linux__ )
-		const auto abi = sandbox_linux_abi( );
-
-		if ( !abi ) {
-			return std::unexpected( abi.error( ) );
-		}
-
-		if ( *abi < 1 ) {
-			return std::unexpected( mcode::fail( mcode::errc::unsupported,
-				"the kernel reports no usable Landlock ABI" ) );
-		}
-
-		auto ruleset = sandbox_linux_ruleset( *abi, profile );
-
-		if ( !ruleset ) {
-			return std::unexpected( ruleset.error( ) );
-		}
-
-		return sandbox_linux_restrict( *abi, *ruleset, profile );
-#elif defined( __APPLE__ )
-		const auto temp = temp_directory( );
-
-		if ( !temp ) {
-			return std::unexpected( temp.error( ) );
-		}
-
-		return sandbox_macos_init( profile, *temp );
-#else
-		return std::unexpected( mcode::fail( mcode::errc::unsupported,
-			"no sandbox implementation for this platform" ) );
-#endif
-	}
-
 	auto current_process_id( ) noexcept -> std::uint64_t {
 #if defined( _WIN32 )
 		return static_cast< std::uint64_t >( ::GetCurrentProcessId( ) );
 #else
 		return static_cast< std::uint64_t >( ::getpid( ) );
 #endif
-	}
-
-	auto terminate_process( const std::uint64_t process_id, const bool force ) -> status {
-		if ( !is_plausible_process_id( process_id ) ) {
-			return std::unexpected( fail( errc::io,
-				"invalid process id " + std::to_string( process_id ) ) );
-		}
-
-	#if defined( _WIN32 )
-		const auto handle = OpenProcess( PROCESS_TERMINATE, FALSE,
-			static_cast< DWORD >( process_id ) );
-
-		if ( handle == nullptr ) {
-			return std::unexpected( fail( errc::io, "OpenProcess failed" ) );
-		}
-
-		// Windows has no graceful stop; the flag is accepted and ignored.
-		(void)force;
-
-		const auto killed = TerminateProcess( handle, TERMINATED_EXIT_CODE );
-		CloseHandle( handle );
-
-		if ( killed == 0 ) {
-			return std::unexpected( fail( errc::io, "TerminateProcess failed" ) );
-		}
-
-		return { };
-	#else
-		if ( ::kill( static_cast< pid_t >( process_id ), force ? SIGKILL : SIGTERM ) != 0 ) {
-			return std::unexpected( fail( errc::io, "kill failed" ) );
-		}
-
-		return { };
-	#endif
-	}
-
-	auto terminate_process_tree( const std::uint64_t process_id, const bool force ) -> status {
-	#if defined( _WIN32 )
-		(void)process_id;
-		(void)force;
-
-		return std::unexpected( fail( errc::unsupported,
-			"process-tree termination needs the spawn-time Job Object handle, "
-			"which M0 does not yet thread through" ) );
-	#else
-		(void)process_id;
-		(void)force;
-
-		return std::unexpected( fail( errc::unsupported,
-			"process-tree termination needs the child spawned into its own group, "
-			"which M0 does not yet do" ) );
-	#endif
 	}
 
 	auto process_is_alive( const std::uint64_t process_id ) -> bool {
@@ -282,8 +180,7 @@ namespace mcode::platform {
 	}
 
 	auto sandbox_temp_directory( ) -> result< std::filesystem::path > {
-		// Created on first use and reused for the process lifetime, so a session
-		// leaves one directory rather than one per command.
+		// Created once per process, so a session leaves one directory, not one per command.
 		static auto cached = std::optional< std::filesystem::path >{ };
 
 		if ( cached ) {
@@ -331,13 +228,8 @@ namespace mcode::platform {
 			return path;
 		}
 
-		// Windows rejects a forward slash ANYWHERE in a `\\?\` path, and a
-		// relative path produced by `display_path` carries them by design. The
-		// join `root / "src/page.html"` is therefore mixed, and the prefixed
-		// result does not resolve: every read through this seam failed with
-		// "No such file or directory". Measured effect: `grep` scoped to a
-		// directory skipped every file and reported zero matches, a silent
-		// false negative the model could not distinguish from "no matches".
+		// Windows rejects a forward slash anywhere in a `\\?\` path, and the
+		// relative paths `display_path` produces carry them by design.
 		std::replace( text.begin( ), text.end( ), L'/', L'\\' );
 
 		if ( text.starts_with( L"\\\\" ) ) {

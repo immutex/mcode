@@ -138,16 +138,8 @@ namespace mcode::text {
 			const auto lead = static_cast< unsigned char >( input[ index ] );
 			const auto length = sequence_length( lead );
 
-			// The bytes the sequence actually covers: the lead plus the
-			// continuation bytes that really followed it, whether the sequence
-			// was cut short by a non-continuation or by the end of the input.
-			//
-			// Advancing by the lead byte's CLAIMED length instead was wrong in
-			// both cases: `caf\xe9 x` swallowed the " x" after a lone Latin-1
-			// lead, and a sequence truncated at the end of the input
-			// (`\xf0\x9f` + "A") advanced past the end and dropped the "A".
-			// This feeds the model the file it anchors an edit on, so the loss
-			// was silent and the edit then failed to match.
+			// the bytes the sequence actually covers, not the lead byte's claimed
+			// length: a lone or truncated lead must not swallow what follows it.
 			auto consumed = std::size_t{ 1 };
 
 			if ( length > 1 ) {
@@ -223,8 +215,7 @@ namespace mcode::text {
 		out.reserve( input.size( ) );
 
 		for ( const auto character : input ) {
-			// Arithmetic rather than `std::tolower`: that one is locale-sensitive,
-			// so the same byte folds differently in a Turkish locale.
+			// arithmetic, not `std::tolower`, which folds differently per locale.
 			out.push_back( character >= 'A' && character <= 'Z'
 				? static_cast< char >( character - 'A' + 'a' )
 				: character );
@@ -233,14 +224,8 @@ namespace mcode::text {
 		return out;
 	}
 
-	auto is_ascii_space( const char character ) noexcept -> bool {
-		return character == ' ' || character == '\t' || character == '\n'
-			|| character == '\r' || character == '\f' || character == '\v';
-	}
-
 	auto program_basename( const std::string_view program ) -> std::string {
-		// Both separators, because a Windows path reaches here from a config or a
-		// command line and may carry either.
+		// a Windows path may carry either separator.
 		const auto slash = program.find_last_of( "/\\" );
 		const auto base = slash == std::string_view::npos
 			? program
@@ -249,17 +234,12 @@ namespace mcode::text {
 		return ascii_lower( base );
 	}
 
-	// Per-extension memory is a budget the project tracks (`docs/28` measured
-	// ~320 KB per VM), and a session's log size is what tells a reader whether it
-	// is the one they want. One implementation so the two reports cannot disagree.
+	// one implementation, so the memory and log-size reports cannot disagree.
 	auto human_bytes( const std::uint64_t bytes ) -> std::string {
 		constexpr auto BYTES_PER_KILOBYTE = std::uint64_t{ 1024 };
 		constexpr auto BYTES_PER_MEGABYTE = BYTES_PER_KILOBYTE * 1024;
 		constexpr auto BYTES_PER_GIGABYTE = BYTES_PER_MEGABYTE * 1024;
 
-		// The ladder matters for the values this is used on: a 12 MB session log
-		// rendered as "12288 KB" is a number a reader has to convert before they
-		// can compare it with the next row.
 		if ( bytes >= BYTES_PER_GIGABYTE ) {
 			return std::to_string( bytes / BYTES_PER_GIGABYTE ) + " GB";
 		}
@@ -277,7 +257,7 @@ namespace mcode::text {
 
 	namespace {
 
-		// UTF-8 decode of one codepoint; returns the length consumed, 0 on error.
+		// 0 for an invalid or truncated sequence.
 		auto decode_one( const std::string_view input, const std::size_t offset,
 			std::uint32_t& out ) -> std::size_t {
 			const auto first = static_cast< unsigned char >( input[ offset ] );
@@ -350,7 +330,7 @@ namespace mcode::text {
 				return true;
 			}
 
-			// Variation selectors: the GlassWorm payload alphabet.
+			// variation selectors: invisible on their own.
 			if ( codepoint >= 0xFE00u && codepoint <= 0xFE0Fu ) {
 				return true;
 			}

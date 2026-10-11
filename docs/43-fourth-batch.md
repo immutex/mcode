@@ -320,7 +320,7 @@ in-process fetch tool cannot be a bypass — closing `12`'s residual risk #9
 ### Wiring: the OS rule is the boundary, the env var is the hint
 
 `sandbox_profile` gains an `egress_endpoint { host, http_port, socks_port }`.
-`apply_sandbox` sets `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` in
+The spawn path sets `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` in
 `minimal_environment()` (`proc/process.cxx:139`), which already scrubs the
 environment to a known-safe set on all three platforms.
 

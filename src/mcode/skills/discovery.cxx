@@ -242,7 +242,7 @@ namespace mcode::skills {
 			scan( root / "skills", skill_origin::extension );
 		}
 
-		// The highest-precedence origin wins; no second index line exists for the losers.
+		// One entry per name survives: the highest-precedence origin.
 		std::sort( report.entries.begin( ), report.entries.end( ),
 			[]( const skill_entry& left, const skill_entry& right ) {
 				if ( left.name != right.name ) {

@@ -71,6 +71,17 @@ namespace {
 		bool json_;
 	};
 
+	// The same failure reaches the human on stderr and a `--json` consumer on the
+	// stream, and both get the exit code the error maps to.
+	auto report_failure( mcode::cli::json_stream& stream, const mcode::error& failure ) -> int {
+		const auto code = mcode::cli::exit_code_for( failure.code );
+
+		std::fprintf( stderr, "mcode: %s\n", failure.msg.c_str( ) );
+		stream.emit_run_end( code, failure.msg );
+
+		return mcode::cli::to_int( code );
+	}
+
 }
 
 auto run_exec( const std::vector< std::string >& arguments ) -> int {
@@ -91,8 +102,7 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		return mcode::cli::to_int( mcode::cli::exit_code::usage_error );
 	}
 
-	// A listing runs no turn, so it is answered before any config, provider or key work:
-	// it must succeed on a machine whose model is not configured yet.
+	// Answered before any config or provider work: a listing must succeed unconfigured.
 	if ( parsed->list_sessions ) {
 		return mcode::cli::to_int( mcode::cli::print_sessions(
 			parsed->working_directory.empty( )
@@ -100,10 +110,7 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 				: std::filesystem::path{ parsed->working_directory } ) );
 	}
 
-	// A named session is resolved before any provider or key work, so a mistyped id is
-	// reported as the argument error it is -- naming the id -- rather than as whatever
-	// the provider lookup complains about first. A resume never falls back to a fresh
-	// session, so this is a hard stop.
+	// Resolved before any provider work, so a mistyped id is reported as the argument error it is.
 	if ( !parsed->resume_session.empty( ) || parsed->continue_session ) {
 		const auto root = parsed->working_directory.empty( )
 			? std::filesystem::current_path( )
@@ -167,19 +174,14 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		? std::filesystem::current_path( )
 		: std::filesystem::path{ parsed->working_directory };
 
-	// A worktree is created before anything else resolves the root, so every path the run
-	// touches - the workspace, the instruction chain, the tools - points into it.
+	// Created before anything resolves the root, so every path the run touches points into it.
 	auto effective_workspace = workspace_path;
 
 	if ( parsed->worktree ) {
 		auto created = mcode::cli::create_worktree( workspace_path, parsed->worktree_name );
 
 		if ( !created ) {
-			std::fprintf( stderr, "mcode: %s\n", created.error( ).msg.c_str( ) );
-			stream.emit_run_end( mcode::cli::exit_code_for( created.error( ).code ),
-				created.error( ).msg );
-
-			return mcode::cli::to_int( mcode::cli::exit_code_for( created.error( ).code ) );
+			return report_failure( stream, created.error( ) );
 		}
 
 		effective_workspace = *created;
@@ -218,7 +220,7 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	// Read by the MCP connect step after the loader has run.
 	auto extension_servers = mcode::ext::mcp_server_store{ };
 
-	// Opened before the loader: the surface's `fs.*` entries use this same context.
+	// The loader's `fs.*` surface entries use this same context.
 	auto space = mcode::workspace::open( effective_workspace );
 
 	if ( !space ) {
@@ -409,8 +411,7 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	tools_context.run_id = run_id;
 	tools_context.headless = parsed->json;
 
-	// Only when `[egress] allow` names a host. Absent means the child gets no
-	// network at all, which is the default and the strongest setting.
+	// Only when `[egress] allow` names a host; absent means the child gets no network at all.
 	auto egress = mcode::cli::start_egress_if_configured( *config );
 	tools_context.egress = egress.get( );
 
@@ -419,11 +420,7 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	const auto registered = mcode::tools::register_core_tools( tool_registry, sink, tools_context );
 
 	if ( !registered ) {
-		std::fprintf( stderr, "mcode: %s\n", registered.error( ).msg.c_str( ) );
-		stream.emit_run_end( mcode::cli::exit_code_for( registered.error( ).code ),
-			registered.error( ).msg );
-
-		return mcode::cli::to_int( mcode::cli::exit_code_for( registered.error( ).code ) );
+		return report_failure( stream, registered.error( ) );
 	}
 
 	auto budget = mcode::session_budget{ };
@@ -444,27 +441,17 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 
 	auto log = mcode::event_log{ };
 
-	// The session file is opened before the turn runs, so every event from the first
-	// step lands on disk. A resume names its file; an unknown id or a workspace with no
-	// session at all is refused here, before any model call is made.
+	// Opened first, so every event from the first step lands on disk.
 	const auto session = mcode::cli::open_session_for_run( *parsed, space->root( ) );
 
 	if ( !session ) {
-		std::fprintf( stderr, "mcode: %s\n", session.error( ).msg.c_str( ) );
-		stream.emit_run_end( mcode::cli::exit_code_for( session.error( ).code ),
-			session.error( ).msg );
-
-		return mcode::cli::to_int( mcode::cli::exit_code_for( session.error( ).code ) );
+		return report_failure( stream, session.error( ) );
 	}
 
 	const auto resumed = !parsed->resume_session.empty( ) || parsed->continue_session;
 
 	if ( const auto opened = log.open( session->path ); !opened ) {
-		std::fprintf( stderr, "mcode: %s\n", opened.error( ).msg.c_str( ) );
-		stream.emit_run_end( mcode::cli::exit_code_for( opened.error( ).code ),
-			opened.error( ).msg );
-
-		return mcode::cli::to_int( mcode::cli::exit_code_for( opened.error( ).code ) );
+		return report_failure( stream, opened.error( ) );
 	}
 
 	std::fputs( mcode::cli::start_session_log( log, *session, resumed ).c_str( ), stderr );
@@ -487,8 +474,7 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 	dependencies.instruction_chain = skills_context.chain.text;
 	dependencies.skill_index = skills_context.skill_index;
 
-	// A headless run edits files too, so it gets the same undo store the interactive path
-	// has; without it a `--json` run would have no rollback at all.
+	// A headless run edits files too, so it needs the same undo store the interactive path has.
 	std::optional< mcode::snapshot_store > snapshots;
 
 	if ( auto data = mcode::platform::app_data_path( mcode::platform::data_kind::data ) ) {
@@ -496,7 +482,7 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		dependencies.snapshots = &*snapshots;
 	}
 
-	// the loop drives the timers: one pump per step, on the thread the VM belongs to.
+	// The loop drives the timers: one pump per step, on the thread the VM belongs to.
 	dependencies.pump_timers = [ &extensions ]( ) { extensions.pump_timers( ); };
 
 	// Must outlive the loop: the supervisors own the child processes the loop dispatches into.
@@ -504,9 +490,7 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 
 	auto loop = mcode::agent_loop{ dependencies };
 
-	// The gate is armed from configuration, never from the model's own output: a
-	// run that can choose its own success criterion has no criterion. An empty
-	// command is a legitimate state, reported as `no-tests` rather than verified.
+	// Armed from configuration, never from the model's own output.
 	{
 		auto command = parsed->verify_command;
 
@@ -519,9 +503,7 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		}
 	}
 
-	// A resumed session continues its conversation. The transcript is rebuilt from
-	// the log and seeded before the turn runs, so the model picks up where it left
-	// off instead of starting from an empty history.
+	// Seeded first, so the model continues instead of starting from empty.
 	if ( resumed ) {
 		auto restored = mcode::cli::restore_transcript( log );
 
@@ -552,21 +534,16 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 			.loop = &loop, .owned = &mcp_servers } );
 
 	if ( !connected ) {
-		std::fprintf( stderr, "mcode: %s\n", connected.error( ).msg.c_str( ) );
-		stream.emit_run_end( mcode::cli::exit_code_for( connected.error( ).code ),
-			connected.error( ).msg );
-
-		return mcode::cli::to_int( mcode::cli::exit_code_for( connected.error( ).code ) );
+		return report_failure( stream, connected.error( ) );
 	}
 
 	const auto outcome = loop.run( parsed->prompt );
 
 	if ( !outcome ) {
-		std::fprintf( stderr, "\nmcode: %s\n", outcome.error( ).msg.c_str( ) );
-		stream.emit_run_end( mcode::cli::exit_code_for( outcome.error( ).code ),
-			outcome.error( ).msg );
+		// Separated from the streamed answer above it, which a failure may have cut mid-line.
+		std::fputc( '\n', stderr );
 
-		return mcode::cli::to_int( mcode::cli::exit_code_for( outcome.error( ).code ) );
+		return report_failure( stream, outcome.error( ) );
 	}
 
 	const auto code = mcode::cli::exit_code_for_run( *outcome, loop.budget( ).exhausted( ),
@@ -582,9 +559,7 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 			cost );
 	}
 
-	// A `--json` consumer reads one JSON object per line, so the blank line that
-	// separates the answer from the summary in the human view is not written
-	// there.
+	// A `--json` consumer reads one object per line, so no separating blank line is written.
 	if ( !parsed->json ) {
 		std::fputc( '\n', stdout );
 	}
@@ -602,9 +577,7 @@ auto run_exec( const std::vector< std::string >& arguments ) -> int {
 		}
 	}
 
-	// Stated in every run, including the ones that succeeded: `no-tests` is the
-	// honest answer for a run whose success was never checked, and printing it only
-	// on failure would make silence read as verification.
+	// Printed in every run: showing `no-tests` only on failure reads as verification.
 	if ( parsed->verbose || outcome->verdict != mcode::verification_verdict::no_tests ) {
 		std::fprintf( stderr, "mcode: verification: %s",
 			std::string{ to_string( outcome->verdict ) }.c_str( ) );

@@ -82,9 +82,8 @@ TEST_CASE( "sanitize replaces invalid sequences and preserves valid ones", "[tex
 	CHECK( sanitize_utf8( EMOJI ) == std::string{ EMOJI } );
 }
 
-// A rejected sequence must consume only the bytes it actually covered. Advancing
-// by the lead byte's claimed length swallowed the valid characters that followed
-// a truncated sequence, and this feeds the model the file it anchors an edit on.
+// A rejected sequence must consume only the bytes it covered: advancing by the lead
+// byte's claimed length swallowed the characters that followed a truncated sequence.
 TEST_CASE( "sanitize does not eat the characters after a truncated sequence", "[text]" ) {
 	const auto cases = std::vector< std::string >{
 		"caf\xE9 x",        // Latin-1 lead, no continuation: the " x" must survive

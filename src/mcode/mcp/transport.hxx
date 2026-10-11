@@ -37,7 +37,6 @@ namespace mcode::mcp {
 		// ends the child's input without tearing the session down
 		virtual auto close_input( ) -> status = 0;
 
-		// gives the child up to `timeout` to exit on its own after close_input
 		virtual auto wait_exit( std::chrono::milliseconds timeout ) -> void = 0;
 
 		virtual auto stop( ) -> void = 0;

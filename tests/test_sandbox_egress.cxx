@@ -70,7 +70,6 @@ TEST_CASE( "allow_network = false blocks egress", "[sandbox][egress]" ) {
 
 	const auto outcome = run_process( options );
 
-	// a refused profile and a missing binary both arrive as a failed spawn needing separate fixes
 	if ( !outcome ) {
 		FAIL( "the sandboxed spawn failed: " << outcome.error( ).msg );
 	}

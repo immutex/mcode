@@ -25,7 +25,6 @@ namespace mcode::tools {
 	[[nodiscard]] auto check_write_permission( tool_context& context,
 		const std::string_view path ) -> std::optional< std::string >;
 
-	// strips CR for comparison only; the file's own endings are restored on write
 	[[nodiscard]] auto normalise( std::string_view text ) -> std::string;
 
 }

@@ -29,7 +29,6 @@ namespace mcode::tui {
 	inline constexpr std::size_t TOKEN_COUNT =
 		static_cast< std::size_t >( token::diff_del_emph ) + 1;
 
-	// Resolved once per session by the emitter; the depth is never per cell.
 	struct style {
 		token foreground = token::text;
 		token background = token::none;
@@ -41,8 +40,8 @@ namespace mcode::tui {
 		[[nodiscard]] auto operator==( const style& other ) const noexcept -> bool = default;
 	};
 
-	// One display column. `text` is a whole grapheme cluster; `width` 0 marks
-	// the continuation slot of a wide cluster, which the emitter skips.
+	// One display column; `width` 0 marks the continuation slot of a wide
+	// cluster, which the emitter skips.
 	struct cell {
 		std::string text;
 		style cell_style;
@@ -51,7 +50,6 @@ namespace mcode::tui {
 		[[nodiscard]] auto operator==( const cell& other ) const noexcept -> bool = default;
 	};
 
-	// A run of text sharing one style.
 	struct styled_span {
 		std::string text;
 		token color = token::text;
@@ -86,12 +84,9 @@ namespace mcode::tui {
 		auto set_cluster( std::size_t row, std::size_t column, std::string_view cluster_text,
 			std::size_t cluster_width, const style& value ) -> std::size_t;
 
-		// Writes styled text, clipping on cluster boundaries at the row edge.
-		// Returns the column past the last written cluster.
 		auto write_text( std::size_t row, std::size_t column, std::string_view text,
 			const style& value ) -> std::size_t;
 
-		// Writes styled spans, clipping on cluster boundaries.
 		auto write_line( std::size_t row, const styled_line& line ) -> std::size_t;
 
 	private:
@@ -112,25 +107,19 @@ namespace mcode::tui {
 	// the byte length a sequence lead starts: 0 when it cannot start one; continuations unchecked
 	[[nodiscard]] auto utf8_lead_length( char lead ) noexcept -> std::size_t;
 
-	// Display width of one code point. East Asian ambiguous characters count
-	// as one column or two, per the session's probed
-	// `capabilities::ambiguous_width`; a mismatch mis-measures every line
-	// containing one, so the frame builder and the caret must read the same
-	// value.
+	// An East Asian ambiguous code point is one column or two per the session's
+	// probed width; a mismatch mis-measures every line that contains one.
 	[[nodiscard]] auto codepoint_width( char32_t value, std::size_t ambiguous_width ) noexcept
 		-> std::size_t;
 
-	// Advances one grapheme cluster: base + extending marks + ZWJ sequences +
-	// variation selectors + regional-indicator pairs. Returns its bytes and
-	// display width. One invalid byte is its own cluster.
+	// Advances one grapheme cluster: base, extending marks, ZWJ sequences,
+	// variation selectors, regional-indicator pairs. One invalid byte is a cluster.
 	[[nodiscard]] auto next_cluster( std::string_view text, std::size_t ambiguous_width )
 		-> std::pair< std::string_view, std::size_t >;
 
 	[[nodiscard]] auto string_width( std::string_view text, std::size_t ambiguous_width )
 		-> std::size_t;
 
-	// Truncates on cluster boundaries to fit `max_width` display columns.
-	// Never mid-cluster, never a byte count.
 	[[nodiscard]] auto truncate_to_width( std::string_view text, std::size_t max_width,
 		std::size_t ambiguous_width ) -> std::string;
 

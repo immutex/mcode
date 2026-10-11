@@ -17,9 +17,6 @@ namespace mcode::memory {
 		constexpr std::string_view NOTES_DIRECTORY = "notes";
 		constexpr std::string_view LEDGER_NAME = "notes.md";
 
-		// Project scope only, and never inside the workspace: a ledger that a
-		// repository could ship would be a file arriving from someone else that the
-		// prompt reads as trusted.
 		auto digest_of( const std::filesystem::path& workspace ) -> std::string {
 			const auto canonical = std::filesystem::weakly_canonical( workspace );
 			const auto folded = text::ascii_lower( canonical.generic_string( ) );

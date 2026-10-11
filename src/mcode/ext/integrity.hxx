@@ -20,9 +20,7 @@ namespace mcode::ext {
 		std::string bytes;
 	};
 
-	// The bytes that were hashed are the bytes that get compiled. Every file is
-	// read exactly once, so there is no second read and therefore no TOCTOU
-	// window between the trust check and execution.
+	// the bytes hashed are the bytes compiled: one read, so no window between them.
 	struct extension_snapshot {
 		std::string tree_sha256;
 		std::vector< snapshot_entry > files;

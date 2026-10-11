@@ -36,8 +36,7 @@ namespace mcode::mcp {
 		server_source source = server_source::config;
 	};
 
-	// The transports this build speaks. `stdio` spawns a child; `http` posts to a
-	// url. Anything else is refused rather than silently treated as one of them.
+	// the only transports this build speaks; anything else is refused.
 	inline constexpr auto STDIO_TRANSPORT = std::string_view{ "stdio" };
 	inline constexpr auto HTTP_TRANSPORT = std::string_view{ "http" };
 

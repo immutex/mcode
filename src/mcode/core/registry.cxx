@@ -10,8 +10,7 @@ namespace mcode {
 
 	namespace {
 
-		// Both queries hand back a name-ordered list, so the order does not depend
-		// on the hash map's iteration order.
+		// Name-ordered, so the result does not depend on the hash map's iteration order.
 		auto by_name( const tool_def* left, const tool_def* right ) -> bool {
 			return left->name < right->name;
 		}

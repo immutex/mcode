@@ -6,7 +6,7 @@
 
 namespace mcode::perm {
 
-	// deny_session outranks later allows; detail asks for the `[?]` view and re-prompts.
+	// deny_session outranks later allows; a source returning detail is denied.
 	enum class approval_outcome {
 		allow_once,
 		allow_remember,
@@ -16,7 +16,7 @@ namespace mcode::perm {
 		refused,
 	};
 
-	// fully rendered by the engine: the source is presentation, it asks but does not decide.
+	// fully rendered by the engine; the source only asks.
 	struct approval_request {
 		std::string action;
 

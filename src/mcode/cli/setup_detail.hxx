@@ -10,19 +10,14 @@
 
 #include "mcode/core/error.hxx"
 
-// Shared by the `setup` wizard's translation units: the provider catalogue and
-// the config-file editor. Neither is part of the CLI's interface, and both are
-// used by the flow in `setup.cxx`, so they live in one named place rather than
-// in an anonymous namespace only one file can see.
 namespace mcode::cli::detail {
 
-	// The `[model]` section this writes, as its bare name. One place, so the
-	// header it looks for and the header it writes cannot drift apart.
+	// One place, so the header looked for and the header written cannot drift apart.
 	inline constexpr std::string_view SECTION_NAME = "model";
 	inline constexpr std::string_view CONFIG_FILE_NAME = "config.toml";
 
-	// Endpoints and key names mirror the shipped provider descriptors, so a
-	// config written here is one the extension already knows how to talk to.
+	// Mirrors the shipped provider descriptors, so a config written here is one
+	// the extension can talk to.
 	struct provider_choice {
 		std::string_view label;
 		std::string_view descriptor;
@@ -42,9 +37,7 @@ namespace mcode::cli::detail {
 			"", "MCODE_API_KEY", "any /v1/chat/completions gateway" },
 	};
 
-	// Only the models the compiled-in table prices. A model outside it needs a
-	// `[models."id"]` block, which the wizard names rather than silently writing
-	// a config that would refuse to run.
+	// Only models the compiled-in table prices; others need a `[models."id"]` block.
 	[[nodiscard]] auto suggested_models( std::size_t provider_index )
 		-> std::vector< std::string >;
 
@@ -59,11 +52,8 @@ namespace mcode::cli::detail {
 
 	[[nodiscard]] auto render_section( const model_settings& settings ) -> std::string;
 
-	// Replaces the `[model]` section in `existing`, or appends it. `section` is
-	// the already-rendered replacement. Everything outside the section is
-	// preserved: the file is edited as text because a parse-and-reserialise
-	// round trip would drop the comments that carry the `[models."..."]`
-	// pricing rationale, and no TOML writer exists here.
+	// Preserves everything outside the section: a parse-and-reserialise round trip
+	// would drop the comments that carry the `[models."..."]` pricing rationale.
 	[[nodiscard]] auto splice_section( std::string_view existing,
 		const std::string& section ) -> std::string;
 
@@ -76,7 +66,6 @@ namespace mcode::cli::detail {
 
 	[[nodiscard]] auto config_path( ) -> std::filesystem::path;
 
-	// The running executable's own path, for the verification child.
 	[[nodiscard]] auto self_path( ) -> std::filesystem::path;
 
 }

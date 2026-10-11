@@ -132,7 +132,7 @@ namespace mcode::skills {
 		auto block = text.substr( 0, *span );
 		auto cursor = block.find( '\n' ) + 1;
 
-		// Stop before the closing delimiter: a `---` line has no colon and would parse as an error.
+		// Stop short of the closing delimiter: a `---` line has no colon and would fail to parse.
 		const auto content_end = block.size( ) > 5
 			? block.rfind( '\n', block.size( ) - 5 ) : 0;
 

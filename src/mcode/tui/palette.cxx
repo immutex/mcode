@@ -13,9 +13,7 @@ namespace mcode::tui {
 
 		auto out = std::vector< slash_command >{ };
 
-		// A prefix match first, so typing `/mo` offers `/model` ahead of a
-		// command that merely contains "mo". Order within each group is the
-		// registration order, which keeps the list stable as it filters.
+		// Prefix matches rank first; ties keep registration order.
 		for ( const auto& entry : commands ) {
 			if ( entry.name.starts_with( query ) ) {
 				out.push_back( entry );
@@ -39,8 +37,7 @@ namespace mcode::tui {
 
 		const auto body = input.substr( 1 );
 
-		// A space ends the name: past that point the user is typing arguments,
-		// not searching for a command.
+		// A space ends the name: past it the user is typing arguments.
 		if ( body.find( ' ' ) != std::string_view::npos ) {
 			return std::nullopt;
 		}
@@ -65,9 +62,8 @@ namespace mcode::tui {
 			return std::string{ typed };
 		}
 
-		// The row's own name, not the typed prefix: Enter runs the command the
-		// user selected. No trailing space, because this line is submitted
-		// rather than edited further.
+		// The row's own name, not the typed prefix; no trailing space, since
+		// this line is submitted rather than edited.
 		return std::string{ "/" } + row->name;
 	}
 

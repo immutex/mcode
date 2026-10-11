@@ -286,7 +286,7 @@ static void interrupt( lua_State* thread, int gc ) {
     auto* watchdog = watchdog_for( thread );      // thread -> extension, via the registry
     if ( watchdog == nullptr || !watchdog->armed ) return;
     if ( std::chrono::steady_clock::now() < watchdog->deadline ) return;
-    watchdog->expired = true;
+    watchdog->breaches += 1;
     luaL_error( thread, "extension exceeded its time budget" );
 }
 ```

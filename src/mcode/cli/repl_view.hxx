@@ -12,11 +12,7 @@
 #include "mcode/tui/render.hxx"
 #include "mcode/tui/tty.hxx"
 
-// The prompt loop's view and key glue: the small helpers `run_repl` uses to
-// keep the coordinator fed and to map terminal keys onto the view and the
-// editor. Everything here is called on the main thread. `render_gate` is not a
-// recursive mutex, so each function that touches the coordinator states
-// whether it locks the gate or expects the caller to already hold it.
+// `render_gate` is not recursive, so each function states whether it locks it.
 
 // Caller holds `render_gate`.
 auto refresh( mcode::tui::render_coordinator& coordinator, const mcode::agent_loop& loop,
@@ -42,7 +38,5 @@ auto return_to_live( mcode::tui::render_coordinator& coordinator, std::mutex& re
 	std::atomic< bool >& interrupted, const mcode::tui::tty_session& session_tty,
 	const mcode::tui::key_event& key ) -> bool;
 
-// The editor's own key event for a terminal key, or nothing when the key is
-// not one the editor takes.
 [[nodiscard]] auto translate_key( const mcode::tui::key_event& key )
 	-> std::optional< mcode::tui::input_editor::key_event >;

@@ -10,6 +10,10 @@ add_executable(mcode_tests
     test_workspace.cxx
     test_snapshot.cxx
     test_tools.cxx
+    test_tools_search.cxx
+    test_tools_args.cxx
+    test_tools_result.cxx
+    test_tools_perm.cxx
     test_tools_bash.cxx
     test_schema_check.cxx
     test_permissions.cxx
@@ -17,16 +21,24 @@ add_executable(mcode_tests
     test_permission_store.cxx
     test_model_types.cxx
     test_provider.cxx
+    test_provider_stream.cxx
+    test_provider_events.cxx
     test_dogfood_providers.cxx
     test_render.cxx
     test_model_client.cxx
     test_capabilities.cxx
-    test_config_and_platform.cxx
+    test_toml.cxx
+    test_config.cxx
+    test_platform.cxx
+    test_cli_exec.cxx
+    test_cli_session.cxx
     test_mcp_config.cxx
     test_event_log.cxx
     test_repetition_guard.cxx
     test_message_json.cxx
     test_loop.cxx
+    test_loop_thrash.cxx
+    test_loop_prompt.cxx
     test_loop_history.cxx
     test_loop_events.cxx
     test_loop_e2e.cxx
@@ -39,6 +51,7 @@ add_executable(mcode_tests
     test_subagent.cxx
     test_memory.cxx
     test_loader.cxx
+    test_loader_tools.cxx
     test_loader_failures.cxx
     test_extension_trust.cxx
     test_lua_host.cxx
@@ -64,6 +77,8 @@ add_executable(mcode_tests
     test_tui_status.cxx
     test_tui_transcript.cxx
     test_cli_slash.cxx
+    test_cli_palette.cxx
+    test_cli_mention.cxx
     test_sandbox.cxx
     test_sandbox_egress.cxx
 )

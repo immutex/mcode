@@ -234,8 +234,6 @@ namespace mcode::model {
 			descriptor.auth.scheme = *scheme;
 		}
 
-		// These three are the request-block names, not top-level keys: reading them from the
-		// top level silently ignored `/request/tools` while the allowlist accepted it.
 		if ( auto field = parsed->pointer_string( "/request/model" ) ) {
 			descriptor.request.model = *field;
 		}
@@ -363,7 +361,6 @@ namespace mcode::model {
 			descriptor.stream.tool_call_events = *gated;
 		}
 
-		// terminal markers differ per provider ([DONE] sentinel, message_stop, response.completed).
 		if ( parsed->has_pointer( "/stream/terminal_events" ) ) {
 			auto terminal = parsed->pointer_string_array( "/stream/terminal_events" );
 

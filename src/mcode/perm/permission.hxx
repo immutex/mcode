@@ -15,9 +15,6 @@
 
 namespace mcode::perm {
 
-	inline constexpr std::string_view DENIED_FLOOR_MESSAGE =
-		"refused by the hard-deny floor, which no flag or config can override";
-
 	enum class permission_decision {
 		allow,
 		ask,
@@ -54,7 +51,7 @@ namespace mcode::perm {
 		std::string reason;
 	};
 
-	// exec patterns match the canonical argv exactly; read/write patterns glob the path.
+	// exec patterns match the canonical argv exactly, never a prefix; read/write glob the path.
 	struct rule {
 		tool_class klass = tool_class::exec;
 		std::string pattern;
@@ -86,11 +83,9 @@ namespace mcode::perm {
 		struct options {
 			bool yolo = false;
 			bool headless = false;
-			// read-only: write, exec, net and spawn are denied before the rule merge.
+			// read-only: write, exec, net and spawn are denied ahead of the rule merge.
 			bool plan_mode = false;
-			// The engine's own default stays conservative: a session with no human present
-			// must fail closed rather than auto-allow. The interactive session opts into the
-			// permissive `never` explicitly, and prints the boundary when it does.
+			// the default is conservative: a session with no human present must fail closed.
 			std::string approval = "on-request";
 		};
 
@@ -99,7 +94,6 @@ namespace mcode::perm {
 		auto set_approval_source( approval_source* source ) -> void;
 		auto set_options( const options& value ) -> void;
 
-		// The mode the engine is running under, for a UI that has to state it.
 		[[nodiscard]] auto approval_mode( ) const noexcept -> std::string_view {
 			return options_.approval;
 		}
@@ -111,14 +105,9 @@ namespace mcode::perm {
 
 		[[nodiscard]] auto load_store( ) -> status;
 
-		// Set once untrusted content has entered the context. Never cleared by tool
-		// output: a session that has read a hostile file stays marked, because the
-		// instruction it carried is still in the window.
+		// Set once untrusted content has entered the context; never cleared, because
+		// the instruction it carried is still in the window.
 		auto mark_untrusted_ingested( ) -> void { untrusted_ingested_ = true; }
-
-		[[nodiscard]] auto untrusted_ingested( ) const noexcept -> bool {
-			return untrusted_ingested_;
-		}
 
 		// the repository's own `.mcode/permissions.json`; a clone's allows are dropped.
 		[[nodiscard]] auto load_project_store( remember_store& store ) -> status;

@@ -111,6 +111,15 @@ three places the plan was wrong.
 > `ext install` in `25`. It also arms the verification gate, fixes the context
 > meter, and adds memory, read-only subagents and MCP over HTTP.
 >
+> **0.0.4 is a code-quality pass, not a feature batch.** It deletes dead code and
+> comments a reader does not need, splits every file past 600 lines, and makes
+> the comment rule enforceable (`tools/comment_lint.py`, wired into CI) rather
+> than aspirational. Three defects ride along, all found by running the code
+> rather than by a test: the egress proxy sent a SOCKS5 reply with `ATYP = 0`,
+> `mcode ext deny` wrote a trust record its own parser rejected and so lost every
+> grant beside it, and `last_error_message` plus four limits sat outside an
+> anonymous namespace in `mcode::platform`. The traps it produced are 132–135.
+>
 > The deviations a reader would otherwise get wrong are in
 > [`docs/40`](40-non-obvious-constraints.md) (items 48–67): workspace writes are
 > `allow` by default, `--yolo` skips questions but not the hard-deny floor, and
@@ -198,7 +207,7 @@ three places the plan was wrong.
 | Area | State |
 |---|---|
 | Docs `00`–`43` | Written. `40-non-obvious-constraints.md` is the numbered trap reference; `41-session-analysis.md` is the live-run analysis; `43-fourth-batch.md` is the fourth batch, shipped in 0.0.3. |
-| Code | Four batches shipped: agent loop, permissions, skills, MCP (stdio + HTTP), TUI, Lua API, sandbox, sessions, extension trust, egress, verification, context controller, memory, subagents. |
+| Code | Four batches shipped: agent loop, permissions, skills, MCP (stdio + HTTP), TUI, Lua API, sandbox, sessions, extension trust, egress, verification, context controller, memory, subagents. 0.0.4 is a quality pass over all of it: dead code and narration deleted, every file under 600 lines, comment discipline enforced by `tools/comment_lint.py`. |
 | Not built | OSC 52 clipboard, and the `/skill`, `/mcp`, `/session`, `/reload` commands |
 
 ## Open questions (cross-cutting)

@@ -17,12 +17,10 @@ namespace mcode::instruct {
 		// text::truncate appends a 3-byte ellipsis, so the slack must come off the cap first.
 		inline constexpr std::uintmax_t TRUNCATION_ELLIPSIS_BYTES = 3;
 
-		// The pointer left behind, so the model can `read` the rest rather than lose it.
 		auto truncation_pointer( const std::filesystem::path& file ) -> std::string {
 			return "[truncated: read " + file.string( ) + " for the rest]\n";
 		}
 
-		// A budget cut names itself, so the model knows the chain was elided, not shortened.
 		auto budget_truncation_pointer( const std::filesystem::path& file ) -> std::string {
 			return "[truncated: over the instruction-chain budget; read " + file.string( )
 				+ " for the rest]\n";
@@ -40,9 +38,7 @@ namespace mcode::instruct {
 			return total;
 		}
 
-		// Cuts the broadest entries until the chain fits, leaving the closest one whole: an
-		// over-budget chain loses its outermost context, never the rules for the work at hand.
-		// Returns whether it cut anything, so the caller can say so in the warnings.
+		// The closest entry is never cut: an over-budget chain loses its outermost context.
 		auto enforce_chain_cap( instruction_chain& chain, const std::uintmax_t cap,
 			const bool budget_cut ) -> bool {
 			if ( chain.entries.size( ) < 2 ) {
@@ -60,8 +56,6 @@ namespace mcode::instruct {
 
 				auto& entry = chain.entries[ index ];
 
-				// The file cap already cut this one as far as it can; the budget pass is the
-				// one that must still cut it.
 				if ( !budget_cut && entry.truncated ) {
 					continue;
 				}
@@ -91,7 +85,6 @@ namespace mcode::instruct {
 			return cut;
 		}
 
-		// The one join rule, so every cut is measured exactly as the chain will be sent.
 		auto join_chain( instruction_chain& chain ) -> void {
 			chain.text.clear( );
 
@@ -125,7 +118,6 @@ namespace mcode::instruct {
 			return std::filesystem::exists( directory / ".git", error ) && !error;
 		}
 
-		// First match per directory wins: AGENTS.md, else CLAUDE.md, else GEMINI.md.
 		auto instruction_file( const std::filesystem::path& directory ) -> std::filesystem::path {
 			for ( const auto* name : { "AGENTS.md", "CLAUDE.md", "GEMINI.md" } ) {
 				const auto candidate = directory / name;
@@ -140,7 +132,6 @@ namespace mcode::instruct {
 			return { };
 		}
 
-		// Collected closest first, reversed before returning: broadest first, closest last.
 		auto walk_ancestors( const std::filesystem::path& start ) ->
 			std::vector< std::filesystem::path > {
 			auto files = std::vector< std::filesystem::path >{ };
@@ -200,9 +191,7 @@ namespace mcode::instruct {
 			chain.entries.push_back( std::move( entry ) );
 		}
 
-		// Two caps, broadest entry first: the byte cap bounds a pathological file, the token
-		// cap is the real session budget. The closest entry is never cut, so a lone
-		// over-budget AGENTS.md is warned about and sent whole - only outer files are elided.
+		// Two caps, broadest entry first: the byte cap bounds a pathological file.
 		const auto byte_cut = enforce_chain_cap( chain, CHAIN_BYTE_CAP, false );
 		const auto budget_cut = enforce_chain_cap( chain,
 			static_cast< std::uintmax_t >( INSTRUCTION_CHAIN_TOKEN_BUDGET ) *
@@ -214,9 +203,7 @@ namespace mcode::instruct {
 		chain.estimated_tokens = static_cast< std::int64_t >(
 			chain.text.size( ) / CHARS_PER_TOKEN_ESTIMATE );
 
-		// The closest entry can still be over budget on its own; then nothing was cut and the
-		// lint warning is the only signal. Otherwise a cut is named, so the user knows the
-		// outermost instructions were elided rather than shortened.
+		// Only the lint warning fires when the closest entry alone is over budget.
 		if ( chain.estimated_tokens > INSTRUCTION_CHAIN_TOKEN_BUDGET ) {
 			chain.warnings.push_back( "instruction chain is about " +
 				std::to_string( chain.estimated_tokens ) + " tokens, over the " +

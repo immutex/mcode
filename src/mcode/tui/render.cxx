@@ -19,9 +19,7 @@ namespace mcode::tui {
 			"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
 		};
 
-		// The byte offset whose display width reaches `column`. The caret is
-		// tracked as a display column, so a split taken at the raw column
-		// would cut a wide cluster in half and mangle the row.
+		// Display columns, not bytes: a split mid-cluster would mangle the row.
 		[[nodiscard]] auto byte_offset_at_column( const std::string_view text,
 			const std::size_t column, const std::size_t ambiguous_width ) -> std::size_t {
 			auto width = std::size_t{ 0 };
@@ -42,8 +40,6 @@ namespace mcode::tui {
 			return offset;
 		}
 
-		// Measured over every tool, not the visible ones, so the target column
-		// does not shift as calls come and go.
 		[[nodiscard]] auto widest_verb( const std::vector< render_state::active_tool >& tools,
 			const std::size_t ambiguous_width ) -> std::size_t {
 			auto widest = std::size_t{ 0 };
@@ -66,12 +62,8 @@ namespace mcode::tui {
 			return widest;
 		}
 
-		// A call faster than this rounds to 0.0s, which is noise on the row.
 		inline constexpr std::uint64_t MIN_SHOWN_ELAPSED_MS = 100;
 
-		// Re-renders one streamed buffer whose rows have fallen behind its
-		// text. This is the whole-buffer render the correctness model calls
-		// for, done once per read instead of once per delta.
 		auto refresh_one( const std::string_view text, bool& stale,
 			std::vector< styled_line >& rows, const token color, std::uint64_t& renders )
 			-> void {
@@ -79,8 +71,6 @@ namespace mcode::tui {
 				return;
 			}
 
-			// A commit clears a buffer's text and its rows together, so an
-			// empty buffer has nothing left to render.
 			if ( text.empty( ) ) {
 				rows.clear( );
 			} else {
@@ -91,9 +81,6 @@ namespace mcode::tui {
 			stale = false;
 		}
 
-		// The one reader-side entry point: every path that hands out the row
-		// vectors calls this first, so a stale cache is never observed. It is
-		// idempotent, so calling it twice in a paint costs nothing.
 		auto refresh_streamed_rows( const render_state& state ) -> void {
 			refresh_one( state.thinking_text, state.thinking_stale, state.thinking_rows,
 				token::thinking, state.stream_render_count );
@@ -151,13 +138,8 @@ namespace mcode::tui {
 		previous_.resize( painted_rows_, screen_columns_ );
 		current_.resize( painted_rows_, screen_columns_ );
 
-		// The history viewport's height is the screen's, so a resize changes
-		// how far it reaches: re-clamped, or its old depth would leave blanks.
 		clamp_scroll( );
 
-		// A size change invalidates the tracked frame: the first flush after
-		// it erases the region at its old height and repaints every row, so a
-		// SHRINK cannot leave a row the region no longer covers on screen.
 		if ( changed ) {
 			resize_pending_ = true;
 		}
@@ -203,10 +185,8 @@ namespace mcode::tui {
 
 	auto render_coordinator::apply( const event_queue::item& value ) -> void {
 		switch ( value.type ) {
-			// A delta appends and marks the rows stale. Re-rendering the whole
-			// buffer here would be quadratic in the answer's length, on the
-			// thread that also runs the agent; the next reader renders it
-			// once, which is at most once per paint.
+			// Re-rendering per delta is quadratic in the answer's length, on the
+			// thread that also runs the agent; the next reader renders it once.
 			case event_queue::kind::thinking_delta: {
 				state_.thinking_text += value.text;
 				state_.thinking_stale = true;
@@ -222,15 +202,10 @@ namespace mcode::tui {
 			}
 
 			case event_queue::kind::tool_start: {
-				// The commit reads the rows, so they are brought current here:
-				// once per closed block, not once per delta.
 				refresh_streamed_rows( state_ );
 
 				queue_thought( );
 
-				// The model ended its prose before calling the tool, so this
-				// block closes here. What streams after the call opens a new
-				// one; the closed block is never committed twice.
 				queue_block( std::move( state_.streaming_rows ) );
 				state_.streaming_text.clear( );
 				state_.streaming_rows.clear( );
@@ -255,7 +230,6 @@ namespace mcode::tui {
 					const auto& tool = state_.tools.back( );
 
 					if ( !tool.target.empty( ) ) {
-						// The live row's target column, so targets line up.
 						const auto verb_width = string_width( value.text, caps_.ambiguous_width );
 						const auto widest = widest_verb( state_.tools, caps_.ambiguous_width );
 						const auto gap = widest + 2 > verb_width ? widest + 2 - verb_width
@@ -265,8 +239,6 @@ namespace mcode::tui {
 						line.push_back( { tool.target, token::muted } );
 					}
 
-					// An unstamped call never ran a clock, and a call that
-					// rounds to 0.0s is noise on the row.
 					if ( tool.started_ms != 0 && tool.elapsed_ms >= MIN_SHOWN_ELAPSED_MS ) {
 						line.push_back( { "  " + format_elapsed( tool.elapsed_ms ),
 							token::muted } );
@@ -294,14 +266,10 @@ namespace mcode::tui {
 			}
 
 			case event_queue::kind::turn_end: {
-				// As at a tool call: the rows are brought current once, then
-				// committed as they stand.
 				refresh_streamed_rows( state_ );
 
 				queue_thought( );
 
-				// Only what is still buffered: a block already closed by a
-				// tool call is committed once, not again here.
 				queue_block( std::move( state_.streaming_rows ) );
 
 				state_.tools.clear( );
@@ -330,10 +298,6 @@ namespace mcode::tui {
 	}
 
 	auto render_coordinator::state( ) const -> const render_state& {
-		// The rows are a cache of the buffers, so they are brought current
-		// here rather than left for the caller to notice. Every other reader
-		// goes through this or through `region_rows_for`, so no path can see
-		// rows that lag their buffer.
 		refresh_streamed_rows( state_ );
 
 		return state_;
@@ -344,31 +308,10 @@ namespace mcode::tui {
 	}
 
 	auto render_coordinator::flush( ) -> std::string {
-		// The commit erases the region to print above it, so the region must be
-		// repainted in the same flush: returning the commit alone leaves the
-		// screen with no prompt row until the next event, which is what makes
-		// the input appear to vanish mid-turn.
 		auto out = std::string{ };
 
-		// Sizing reads the streamed rows, so it materialises them first: the
-		// one whole-buffer render a paint costs happens here, however many
-		// deltas landed since the last one.
 		const auto rows = region_rows( );
 
-		// A height change moves every row. The terminal still shows the old
-		// region, so it is erased first: clearing the tracked buffer alone
-		// would diff the new frame against a blank model of a screen that is
-		// not blank. Growth then scrolls, or the new rows paint over the
-		// transcript above the region. A resize takes the same path, so a
-		// SHRINK erases at the old height before repainting.
-		//
-		// This runs BEFORE the commit, because `commit` scrolls by the region's
-		// height -- the height it will have once the flush is done, not the one
-		// it had before. Committing first used the stale, taller height: the
-		// block landed that many rows higher than the new region's top, leaving
-		// a blank gap between the answer and the status line that grew with the
-		// region's old height, and a commit that also grew the region emitted
-		// its scroll AFTER the commit, which no scroll may follow.
 		auto scroll = std::string{ };
 
 		if ( rows != painted_rows_ || resize_pending_ ) {
@@ -394,6 +337,7 @@ namespace mcode::tui {
 
 		out += scroll;
 
+		// Must precede the commit: `commit` scrolls by the region's new height.
 		if ( !state_.pending_commit.empty( ) ) {
 			out += commit( std::move( state_.pending_commit ) );
 		}
@@ -404,10 +348,6 @@ namespace mcode::tui {
 		out += emitter.emit( previous_, current_, repaint_all_ );
 		repaint_all_ = false;
 
-		// The caret belongs under the typed text, not where the last run ended.
-		// While scrolled the bottom row is the history indicator rather than
-		// the prompt, so the caret parks at its left edge instead of on a
-		// prompt column the viewport is not showing.
 		const auto prompt_row = painted_rows_ - 1;
 		const auto widest = screen_columns_ == 0 ? std::size_t{ 0 } : screen_columns_ - 1;
 		const auto column = state_.scroll_offset > 0 ? std::size_t{ 0 }
@@ -422,24 +362,15 @@ namespace mcode::tui {
 
 	auto region_rows_for( const render_state& state, const std::size_t screen_rows )
 		-> std::size_t {
-		// The row counts below are what this measures, so the buffers are
-		// materialised first: a region sized from stale rows would lag a paint
-		// behind the text. This is also the refresh the paint relies on, since
-		// `flush` sizes the region before it builds the frame.
 		refresh_streamed_rows( state );
 
-		// Bounded by the terminal and by the spec's budget.
 		const auto ceiling = std::max( std::min( LIVE_REGION_MAX_ROWS,
 			screen_rows > 1 ? screen_rows - 1 : std::size_t{ 1 } ), LIVE_REGION_MIN_ROWS );
 
-		// The history viewport is a pager rather than the live region: it is
-		// grown to the whole available height, so a screenful of history is
-		// visible instead of the live region's bounded few rows.
 		if ( state.scroll_offset > 0 ) {
 			return history_region_rows( screen_rows );
 		}
 
-		// prompt + status
 		auto rows = LIVE_REGION_MIN_ROWS;
 
 		if ( state.palette.open && !state.palette.matches.empty( ) ) {
@@ -456,9 +387,6 @@ namespace mcode::tui {
 
 	auto build_frame( const render_state& state, const std::size_t row_count,
 		const std::size_t column_count, const std::size_t ambiguous_width ) -> cell_buffer {
-		// Last line of defence for the invariant: the frame is built from the
-		// same materialised rows every other reader sees. A no-op once the
-		// paint's sizing pass has refreshed them.
 		refresh_streamed_rows( state );
 
 		auto buffer = cell_buffer{ row_count, column_count, ambiguous_width };
@@ -478,18 +406,13 @@ namespace mcode::tui {
 			buffer.write_line( row, line );
 		};
 
-		// While scrolled, the region shows retained history instead of the
-		// live content, grown to the available height. The prompt is not
-		// reachable while scrolled, so the history view owns the whole region.
 		if ( state.scroll_offset > 0 ) {
 			write_history_frame( buffer, state );
 
 			return buffer;
 		}
 
-		// Bottom-up: prompt, palette, status line, then live content.
 		{
-			// the completion's remainder is ghost text, spliced only at the end of the line
 			auto ghost = std::string{ };
 
 			if ( state.palette.open && !state.palette.query.empty( ) &&
@@ -521,7 +444,6 @@ namespace mcode::tui {
 		if ( state.palette.open && !state.palette.matches.empty( ) ) {
 			const auto widest = widest_command_name( state.palette.matches, ambiguous_width );
 
-			// Reversed, because the buffer is filled from the bottom up.
 			for ( auto index = state.palette.matches.size( ); index > 0; --index ) {
 				const auto& entry = state.palette.matches[ index - 1 ];
 				const auto selected = index - 1 == state.palette.selected;
@@ -532,9 +454,6 @@ namespace mcode::tui {
 				line.push_back( { state.palette.prefix + entry.name, selected ? token::accent
 					: token::text, token::none, selected, false, false } );
 
-				// A row without a description, every mention row, has nothing
-				// to align to, so the padding and its empty tail are skipped
-				// rather than trailing dead width.
 				if ( !entry.description.empty( ) ) {
 					const auto padding = widest -
 						string_width( entry.name, ambiguous_width ) + 2;
@@ -548,7 +467,6 @@ namespace mcode::tui {
 
 		write_status_line( buffer, row, state );
 
-		// Oldest first, so the newest call sits nearest the status line.
 		{
 			const auto widest = widest_verb( state.tools, ambiguous_width );
 
@@ -573,7 +491,6 @@ namespace mcode::tui {
 			}
 		}
 
-		// newest row first, capped at `max_rows`: the reasoning cannot push the answer out
 		const auto write_block = [ & ]( const std::vector< styled_line >& rows,
 			const std::size_t max_rows, const std::string_view gutter, const token color ) {
 			const auto first = rows.size( ) - std::min( rows.size( ), max_rows );

@@ -15,20 +15,14 @@ namespace mcode::cli {
 
 		inline constexpr std::uint32_t ANSWER_WAIT_MS = 600'000;
 
-		// The answer row, plus one blank row under it. The line reader's Enter
-		// echo moves the cursor down a row; without that spare row the echo
-		// would scroll the screen and carry the block off its own anchor.
+		// The answer row plus one blank: the reader's Enter echo scrolls the block off its anchor.
 		inline constexpr std::size_t BLOCK_EXTRA_ROWS = 2;
 
-		// The block is bottom-anchored: the request rows, the answer row, and
-		// the spare row below it.
 		[[nodiscard]] auto block_rows( const std::size_t row_count ) -> std::size_t {
 			return row_count + BLOCK_EXTRA_ROWS;
 		}
 
-		// The columns a block row may use. One column is reserved, exactly as
-		// the coordinator reserves it: a row filled to the last column wraps
-		// the cursor, which desyncs every relative move that follows.
+		// One column reserved: a full row wraps the cursor and desyncs every move after it.
 		[[nodiscard]] auto block_columns( const mcode::tui::tty_session& session )
 			-> std::size_t {
 			const auto measured = static_cast< std::size_t >( session.size( ).first );
@@ -36,8 +30,6 @@ namespace mcode::cli {
 			return measured > 1 ? measured - 1 : measured;
 		}
 
-		// The detail view arrives as plain text. One row per line, so a newline
-		// is a row break and not a cursor move inside a row.
 		[[nodiscard]] auto detail_rows( std::string text )
 			-> std::vector< mcode::tui::styled_line > {
 			if ( !text.empty( ) && text.back( ) == '\n' ) {
@@ -70,45 +62,30 @@ namespace mcode::cli {
 		std::atomic< bool >& active, std::mutex& gate,
 		mcode::tui::render_coordinator& coordinator )
 		-> mcode::tui::ui_approval_source {
-		// The rows the block occupies right now, zero when none is drawn.
-		// Shared with the reader and the dismisser: both need the exact height,
-		// because a block that is not erased to its own height either ghosts or
-		// eats the transcript above it.
+		// Shared with the reader and the dismisser: the wrong height ghosts the transcript above.
 		auto rows = std::make_shared< std::size_t >( 0 );
 
-		// The read is the user's typing wait and holds no lock: a lock held
-		// across it would stop the pump from repainting for as long as the
-		// user thinks. Only the coordinator's mutation is serialized.
+		// Holds no lock across the read: the pump would stop repainting while the user thinks.
 		auto read_answer = [ &session, &gate, &coordinator ]( ) {
 			auto answer = session.read_line( ANSWER_WAIT_MS );
 
 			const auto held = std::lock_guard< std::mutex >{ gate };
 
-			// The reader echoed the answer and a newline. On the screen's last
-			// row that echo scrolls, and the coordinator then models a screen
-			// that has moved. The model and the caret are both put right
-			// before anything else is drawn against them.
+			// The echo may have scrolled the screen, so the model and caret are re-parked first.
 			coordinator.invalidate( );
 			session.write( coordinator.park( ) );
 
 			return answer;
 		};
 
-		// Every path out of `ask` ends here: an answered prompt, a denial, or
-		// closed input. The success path and the failure path are the same
-		// bytes, so a rejected answer hands the console back exactly as an
-		// accepted one does. Leaving the block up suppresses the repaint pump
-		// for the rest of the turn, which is what made a bad answer look like a
-		// hung session.
+		// Every exit shares these bytes: a rejected answer frees the console like an accepted one.
 		auto dismiss = [ &session, &active, &gate, &coordinator, rows ]( ) {
 			const auto held = std::lock_guard< std::mutex >{ gate };
 			const auto emitter = mcode::tui::ansi_emitter{ session.caps( ) };
 
 			auto out = coordinator.park( );
 
-			// Exactly the rows the block drew. Nothing drawn, nothing to
-			// erase: a fixed count here would eat the transcript above a short
-			// block, or leave the tall block's own rows behind.
+			// A fixed count eats the transcript above a short block or leaves a tall one's rows.
 			if ( *rows > 0 ) {
 				out += emitter.clear_region( *rows );
 			}
@@ -119,8 +96,7 @@ namespace mcode::cli {
 
 			*rows = 0;
 
-			// Cleared under the same lock the pump checks it under, so a
-			// repaint cannot pass the gate and then race this dismissal.
+			// Cleared under the gate, so a repaint cannot pass it and race this dismissal.
 			active.store( false );
 		};
 
@@ -128,19 +104,15 @@ namespace mcode::cli {
 			const mcode::tui::ui_approval_source::prompt_view& view ) {
 			const auto held = std::lock_guard< std::mutex >{ gate };
 
-			// Set under the same lock the pump reads it under, so a repaint
-			// cannot pass the gate and then race this draw.
+			// Set under the gate, so a repaint cannot pass it and race this draw.
 			active.store( true );
 
-			// Written outside `flush`, so the coordinator's tracked frame no longer matches.
+			// Written outside `flush`, so the coordinator's tracked frame is stale.
 			coordinator.invalidate( );
 
 			auto emitter = mcode::tui::ansi_emitter{ session.caps( ) };
 
-			// The detail view belongs in the transcript, which is where the
-			// terminal approval source puts it too. Queueing it as its own
-			// block and flushing now writes it above the region, and takes any
-			// block the pump queued alongside it rather than dropping it.
+			// The detail belongs above the region, as the terminal approval source puts it.
 			const auto fresh = !view.above.empty( );
 
 			if ( fresh ) {
@@ -158,13 +130,9 @@ namespace mcode::cli {
 
 			const auto wanted = block_rows( lines.size( ) );
 
-			// The block is drawn through the same width policy as the live
-			// region: a row measured with one ambiguous width and painted
-			// with another is exactly what desynchronises the cursor.
+			// Same width policy as the live region: measuring one way and painting another desyncs.
 			const auto ambiguous = session.caps( ).ambiguous_width;
 
-			// The block is bottom-anchored, so the emitter's own geometry
-			// applies: it writes from the parked row upwards.
 			auto blank = mcode::tui::cell_buffer{ wanted, block_columns( session ), ambiguous };
 			auto block = mcode::tui::cell_buffer{ wanted, blank.columns( ), ambiguous };
 
@@ -175,12 +143,7 @@ namespace mcode::cli {
 			block.write_line( lines.size( ), mcode::tui::styled_line{
 				{ std::string{ mcode::tui::PROMPT_PREFIX }, mcode::tui::token::accent } } );
 
-			// What the block covers that already holds something: its own rows
-			// from the last draw, or, on the first draw, the live region it
-			// takes the place of. After a detail commit the region was
-			// re-reserved blank, so there is nothing to erase then. The
-			// region's height is derived per frame, never assumed from a
-			// constant: it runs from two rows to the terminal's own height.
+			// Derived per frame, never assumed: two rows to the terminal's own height.
 			auto replaced = std::size_t{ 0 };
 
 			if ( !fresh ) {
@@ -195,8 +158,7 @@ namespace mcode::cli {
 				out += emitter.clear_region( replaced );
 			}
 
-			// A taller block scrolls its extra rows into existence, rather than
-			// overwriting the transcript that sits above it.
+			// A taller block scrolls its rows into existence instead of overwriting the transcript.
 			if ( wanted > replaced ) {
 				out += coordinator.park( );
 
@@ -207,8 +169,7 @@ namespace mcode::cli {
 
 			out += emitter.emit( blank, block );
 
-			// The caret belongs after the prompt, not on the spare row the
-			// emitter finished on.
+			// The caret belongs after the prompt, not on the spare row the emitter ended on.
 			out += emitter.caret( wanted - 1, wanted - 2, mcode::tui::PROMPT_PREFIX_WIDTH );
 
 			session.write( emitter.synchronized( out ) );

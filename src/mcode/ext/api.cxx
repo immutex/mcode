@@ -30,8 +30,6 @@
 
 namespace mcode::ext {
 
-	const model::provider_registry api_surface::empty_providers_{ };
-
 	namespace {
 
 		constexpr auto EXTENSION_NAME_PATH = "ext.name";
@@ -195,9 +193,7 @@ namespace mcode::ext {
 			lua_error( state );
 		}
 
-		// By identifier, never by position: `register` returns a handle the
-		// extension keeps, and a positional one named a different tool once any
-		// earlier unregister shifted the vector.
+		// by identifier, never by position: the handle must keep naming the same tool.
 		const auto found = std::find_if( self->tools_.begin( ), self->tools_.end( ),
 			[ identifier ]( const registered_tool& candidate ) {
 				return candidate.identifier == identifier;

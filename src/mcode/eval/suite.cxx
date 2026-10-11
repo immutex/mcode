@@ -561,9 +561,7 @@ namespace mcode::eval {
 				++audit.runs;
 
 				if ( !verdict ) {
-					// A run recorded before the verdict existed, or by a build that
-					// did not carry it. Counting it as verified would be a claim the
-					// log does not support.
+					// An absent verdict is not evidence of verification.
 					++audit.no_tests;
 
 					continue;

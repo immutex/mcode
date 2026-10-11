@@ -184,7 +184,6 @@ TEST_CASE( "the loop's run() resets per-run state, not the history", "[tui][repl
 	const auto second = loop.run( "second" );
 	REQUIRE( second.has_value( ) );
 
-	// the reset makes the second run walk the whole path again, from plan
 	CHECK( second->visited == first->visited );
 	CHECK( second->visited.front( ) == loop_state::plan );
 
@@ -232,12 +231,8 @@ TEST_CASE( "the session exit code is the last turn's code", "[tui][repl]" ) {
 			return std::move( loop );
 		} );
 
-	// The second turn runs with the step budget already spent, so the documented
-	// exit is 3 (budget exhausted), not 4. `docs/22` states it: "3 | Budget
-	// exhausted (steps/tokens/USD) — partial state preserved, resumable". The
-	// loop reports a spent budget from its Plan state as `failed`, and checking
-	// the state before the flag classified it as a provider error -- so a
-	// resumable budget stop told a CI script the provider had broken.
+	// The second turn runs with the step budget already spent, so the exit is 3
+	// (budget exhausted), not 4.
 	CHECK( code == mcode::cli::to_int( mcode::cli::exit_code::budget_exhausted ) );
 }
 
@@ -362,8 +357,8 @@ TEST_CASE( "a turn that hands off on a failed model call is not a success",
 
 	auto turn = cli::session{ loop };
 
-	// The plan asks for a tool; the request that follows the tool result finds the script
-	// exhausted, so the loop hands off with a reason rather than finishing the turn.
+	// The plan asks for a tool; the request after the tool result finds the script
+	// exhausted, so the loop hands off with a reason.
 	client.queue( call_response( "echo", R"({"note":"only one call"})" ) );
 
 	const auto code = turn.run_turn( "do something" );

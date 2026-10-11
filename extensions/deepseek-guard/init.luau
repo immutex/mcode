@@ -1,35 +1,9 @@
 --!strict
--- Detects DeepSeek's own tool-call markup leaking into assistant text.
---
--- This is the one failure mode of the three this extension was written for that
--- the harness does NOT already cover, and the live session is what showed that:
---
---   * Reasoning that repeats itself -- the core detects it in
---     `agent/repetition_guard.hxx` and RE-STEERS the model. Reimplementing it
---     here would double the warnings and split one rule across two places.
---   * A tool called repeatedly with identical arguments -- the core's
---     `thrash_detector` refuses the third consecutive dispatch. Same reasoning.
---
--- So what is left is the leak. The model's tool-call wrapper -- `<|DSML|...|>`
--- and friends -- sometimes arrives inside the content stream instead of being
--- parsed into tool calls. It is reported against several serving paths (vLLM,
--- NVIDIA's Spark builds) and several harnesses, which makes it a gateway
--- problem rather than a model-weight one: a harness cannot repair it.
---
--- What a harness CAN do is refuse to let it pass as an answer. Markup in the
--- assistant text is not prose, and a model that has been shown it may imitate
--- it. This says so, once per turn, and counts the occurrences.
---
--- It only notifies. It does not rewrite the text, retry the request, or veto
--- anything: the harness's job at this layer is to make the failure visible
--- rather than to paper over it, and a guard that silently stripped the markup
--- would hide a gateway regression instead of reporting it.
---
--- No permissions: it reads no files, makes no network calls, spawns nothing.
+-- Reports DeepSeek tool-call markup leaking into assistant text. It only
+-- notifies: rewriting or vetoing would hide a gateway fault rather than surface it.
 
--- The wrappers the DeepSeek serving path is known to emit around a tool call.
--- Both the full-width pipe form and the ASCII fallback are matched, because
--- different builds and gateways have emitted either.
+-- Both the full-width pipe form and the ASCII fallback: different builds and
+-- gateways have emitted either.
 local MARKERS = {
 	"\u{FF5C}DSML\u{FF5C}",
 	"<|DSML|",
@@ -72,8 +46,8 @@ mcode.on("assistant.delta", function( event )
 
 	leaks += 1
 
-	-- Once per turn. A leaked wrapper arrives across many deltas, and a
-	-- notification per delta would be the failure rather than the report.
+	-- Once per turn: a leaked wrapper spans many deltas, so a notification per
+	-- delta would be the failure rather than the report.
 	if not reported_this_turn then
 		reported_this_turn = true
 

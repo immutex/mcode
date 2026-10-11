@@ -6,8 +6,7 @@
 
 namespace {
 
-	// One wheel notch. The terminal's own scrollback moves a few rows per
-	// notch, so the in-app viewport does too.
+	// Matches the terminal's own scrollback, a few rows per notch.
 	inline constexpr int WHEEL_SCROLL_ROWS = 3;
 
 	[[nodiscard]] auto page_rows( const mcode::tui::tty_session& session_tty ) -> int {
@@ -16,14 +15,8 @@ namespace {
 		return static_cast< int >( measured > 1 ? measured - 1 : 1 );
 	}
 
-	// The verb reflects what the turn is doing right now, read from the same
-	// state the frame is built from. The renderer appends the ellipsis.
-	//
-	// The last case is the one that makes the harness feel alive: between
-	// submitting and the first delta the model is thinking but nothing has
-	// arrived, and every other signal is empty. Reporting nothing there left a
-	// silent gap that reads as a hang, so the turn is asked whether it is still
-	// running and the answer is `Waiting`.
+	// The renderer appends the ellipsis; the `Waiting` case is the gap between
+	// submitting and the first delta, which would otherwise read as a hang.
 	[[nodiscard]] auto activity_verb( const mcode::tui::render_coordinator& coordinator,
 		const bool turn_running ) -> std::string {
 		const auto& state = coordinator.state( );
@@ -63,9 +56,7 @@ auto refresh( mcode::tui::render_coordinator& coordinator, const mcode::agent_lo
 		budget.usd_used, elapsed );
 	coordinator.set_context( loop.context_used( ), loop.context_capacity( ) );
 
-	// A non-default start time is exactly "a turn is in flight": the REPL sets it
-	// when it submits and clears it when the turn settles, so no extra state is
-	// needed to tell a quiet moment from a busy one.
+	// A non-default start time means a turn is in flight, so no extra flag is needed.
 	const auto turn_running = turn_started != std::chrono::steady_clock::time_point{ };
 
 	coordinator.set_activity( activity_verb( coordinator, turn_running ) );
@@ -106,10 +97,7 @@ auto view_scrolled( const mcode::tui::render_coordinator& coordinator,
 auto handle_turn_key( mcode::tui::render_coordinator& coordinator,
 	std::atomic< bool >& interrupted, const mcode::tui::tty_session& session_tty,
 	const mcode::tui::key_event& key ) -> bool {
-	// Both keys stop the turn, and the flag is read by the loop at its next step
-	// boundary. Esc was the only one handled, so Ctrl+C -- which the session's
-	// own banner advertises -- fell through to the live-view path and did
-	// nothing, and the turn ran to completion on the worker thread.
+	// Both keys set the flag the loop reads at its next step boundary.
 	if ( key.type == mcode::tui::key_event::kind::escape ||
 		key.type == mcode::tui::key_event::kind::interrupt ) {
 		interrupted.store( true );
@@ -127,8 +115,7 @@ auto handle_turn_key( mcode::tui::render_coordinator& coordinator,
 
 	const auto was_scrolled = coordinator.scrolled( );
 
-	// Any other key returns to the live view, so a turn that keeps
-	// streaming never strands the user in history.
+	// Any other key returns to the live view; the return value triggers the repaint.
 	coordinator.scroll_to_bottom( );
 
 	return was_scrolled;

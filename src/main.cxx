@@ -129,10 +129,9 @@ auto main( int argument_count, char** arguments ) -> int {
 				result.failed, result.errored, result.total( ) );
 		}
 
-		// The trustworthiness number, from real runs rather than the fixture suite:
-		// the suite is deterministic and model-free, so it cannot produce a false
-		// success to count. Reported always, including when there is nothing to
-		// report, because a number that appears only when it is good is not a
+		// From real runs, not the fixture suite: the suite is deterministic and
+		// model-free, so it cannot produce a false success to count. Reported even
+		// when empty, because a number that appears only when it is good is not a
 		// measurement.
 		if ( const auto directory = mcode::cli::session_directory( ) ) {
 			if ( const auto audit = mcode::eval::audit_sessions( *directory ) ) {

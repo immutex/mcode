@@ -39,18 +39,13 @@ namespace mcode::cli {
 			case errc::lua_error: return exit_code::verification_failed;
 		}
 
-		// Unreachable while the switch is exhaustive, which the compiler enforces
-		// because errc has no default case here.
+		// Unreachable while the switch is exhaustive, which the compiler enforces.
 		return exit_code::verification_failed;
 	}
 
 	auto exit_code_for_run( const mcode::turn_outcome& outcome, const bool budget_exhausted,
 		const bool permission_denied ) -> exit_code {
-		// A spent budget is its own exit whatever state ended the run. The loop's
-		// plan state reports a spent budget as `failed`, so checking the state
-		// first classified it as a provider error -- and in an interactive session
-		// the step count is cumulative, so the NEXT turn would exit 4 having done
-		// nothing at all.
+		// A spent budget is its own exit whatever state ended the run; the step count is cumulative.
 		if ( budget_exhausted ) {
 			return exit_code::budget_exhausted;
 		}
@@ -67,9 +62,7 @@ namespace mcode::cli {
 			return exit_code::permission_denied;
 		}
 
-		// A handoff is also how a run ends when no verification command is configured, and
-		// that is a completion. The loop records a reason only when it gave up -- a failed
-		// model call or a guard trip -- which is not a success.
+		// A handoff is also how a run ends with no verification command configured: a completion.
 		if ( !outcome.summary_json.empty( ) ) {
 			return exit_code::provider_error;
 		}
@@ -130,8 +123,7 @@ namespace mcode::cli {
 			} else if ( argument == "--worktree" || argument == "-w" ) {
 				options.worktree = true;
 
-				// An optional name: only consumed when the next token is not a flag, so
-				// `--worktree --json` does not swallow `--json` as a branch name.
+				// Consumed only when the next token is not a flag, so `--worktree --json` keeps it.
 				if ( index + 1 < arguments.size( ) && !arguments[ index + 1 ].starts_with( "-" ) ) {
 					options.worktree_name = arguments[ ++index ];
 				}
@@ -200,9 +192,7 @@ namespace mcode::cli {
 					return std::unexpected( value.error( ) );
 				}
 
-				// from_chars, and the whole value must be consumed. `stoul` accepted
-				// a numeric PREFIX and never threw, so `--max-steps 12abc` silently
-				// ran with 12, and a negative value wrapped to a huge step count.
+				// from_chars with the whole value consumed: `stoul` accepted a numeric prefix.
 				const auto* first = value->data( );
 				const auto* last = value->data( ) + value->size( );
 				const auto parsed = std::from_chars( first, last, options.max_steps );
@@ -223,15 +213,12 @@ namespace mcode::cli {
 						"--max-budget-usd needs a number, got '" + *value + "'" ) );
 				}
 			} else if ( argument.starts_with( '-' ) ) {
-				// Unknown flags are collected, never ignored. Silently dropping
-				// `--max-step` (a typo) would run with the default budget and the user
-				// would never know. A single-dash typo (`-x`) is just as invisible.
+				// Collected, never ignored: a dropped typo runs with the default budget.
 				options.unknown_arguments.push_back( argument );
 			} else if ( options.prompt.empty( ) ) {
 				options.prompt = argument;
 			} else {
-				// A second bare argument is a usage error, not a silently ignored
-				// word: the user probably forgot to quote.
+				// A second bare argument is a usage error: the user probably forgot to quote.
 				options.unknown_arguments.push_back( argument );
 			}
 		}
@@ -300,8 +287,7 @@ namespace mcode::cli {
 		}
 
 		if ( !id.empty( ) ) {
-			// The id embeds the workspace digest, so a well-formed id still has to belong
-			// to this workspace; a foreign one is refused by name rather than reopened.
+			// The id embeds the workspace digest, so a well-formed one must still name this workspace.
 			if ( !detail::is_session_id( id ) ) {
 				return std::unexpected( fail( errc::config,
 					"no session named '" + std::string{ id } + "': a session id is 16 hex "
@@ -385,7 +371,7 @@ namespace mcode::cli {
 
 	auto start_session_log( event_log& log, const session_ref& session, const bool resumed )
 		-> std::string {
-		// Read before the marker is appended: this is what was on disk, not what this run adds.
+		// Taken first: this is what was on disk, not what this run adds.
 		const auto restored_events = resumed ? log.size( ) : std::size_t{ 0 };
 		const auto restored_messages = resumed ? restore_transcript( log ).size( )
 			: std::size_t{ 0 };
@@ -500,8 +486,7 @@ namespace mcode::cli {
 			return;
 		}
 
-		// One object per line, matching the session log's envelope so a consumer
-		// parses both the same way.
+		// Matches the session log's envelope so a consumer parses both the same way.
 		auto line = std::string{ "{\"v\":1,\"seq\":" };
 		line += std::to_string( value.sequence );
 		line += ",\"ts\":";
@@ -522,15 +507,13 @@ namespace mcode::cli {
 		const verification_verdict verdict, const std::string_view verification_detail )
 		-> void {
 		if ( !enabled_ ) {
-			// Even when JSON is off, record that the run concluded, so the
-			// destructor's truncated-stream warning stays meaningful.
+			// Recorded even with JSON off, so the destructor's warning stays meaningful.
 			run_end_emitted_ = true;
 
 			return;
 		}
 
-		// Emitted at most once. A consumer treats run.end as the signal that the run
-		// finished rather than was cut off, so a second one would be ambiguous.
+		// At most once: a second run.end leaves a consumer unable to tell finished from cut off.
 		if ( run_end_emitted_ ) {
 			return;
 		}
@@ -559,9 +542,7 @@ namespace mcode::cli {
 
 	json_stream::~json_stream( ) {
 		if ( enabled_ && !run_end_emitted_ ) {
-			// A truncated stream is a bug in the caller, not a normal exit. Saying so
-			// on stderr is better than a consumer waiting for a run.end that will
-			// never arrive.
+			// A caller bug: a consumer would otherwise wait for a run.end that never comes.
 			std::fputs( "mcode: json stream closed without run.end\n", stderr );
 		}
 	}

@@ -37,9 +37,7 @@ namespace mcode::mcp {
 			return text::ascii_lower( content_type ).find( SSE_CONTENT_TYPE ) != std::string::npos;
 		}
 
-		// One `data:` payload per SSE event, which is the whole body of an MCP
-		// response frame. The `event:` and `id:` fields carry no information the
-		// client acts on in this profile.
+		// One `data:` payload per SSE event; `event:` and `id:` carry nothing we act on.
 		auto sse_data_frames( const std::string& body, std::vector< std::string >& out ) -> void {
 			auto start = std::size_t{ 0 };
 
@@ -136,8 +134,8 @@ namespace mcode::mcp {
 			return std::unexpected( response.error( ) );
 		}
 
-		// The session id is issued on `initialize` and echoed on every later request.
-		// A 404 means the server forgot it, which the caller re-initializes from.
+		// The session id is issued on `initialize` and echoed later; a 404 means the
+		// server forgot it, which the caller re-initializes from.
 		if ( const auto issued = header_value( response->headers, SESSION_HEADER );
 			!issued.empty( ) ) {
 			session_id_ = issued;
@@ -153,7 +151,7 @@ namespace mcode::mcp {
 			return std::unexpected( fail( errc::protocol, last_error_ ) );
 		}
 
-		// A notification is answered 202 with no body; there is nothing to dispatch.
+		// A notification is answered with no body, so there is nothing to dispatch.
 		if ( response->body.empty( ) ) {
 			return { };
 		}
@@ -179,9 +177,8 @@ namespace mcode::mcp {
 			return;
 		}
 
-		// A JSON body is one frame. A body that is neither content type is reported
-		// as skipped rather than dropped, so a server speaking something else is
-		// visible instead of looking silent.
+		// A body that is neither content type is reported as skipped rather than
+		// dropped, so a server speaking something else stays visible.
 		if ( is_json_content_type( content_type ) || body.starts_with( '{' ) ) {
 			if ( on_message ) {
 				on_message( inbound{ .skipped = false, .line_json = body } );
@@ -228,8 +225,7 @@ namespace mcode::mcp {
 				break;
 			}
 
-			// Request/response with no listening stream: nothing arrives unless
-			// something was sent, so an idle transport must not spin.
+			// No listening stream: nothing arrives unsent, so an idle transport must not spin.
 			if ( pending_.empty( ) ) {
 				std::this_thread::sleep_for( std::chrono::milliseconds{ 10 } );
 			}

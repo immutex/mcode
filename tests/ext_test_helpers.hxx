@@ -20,10 +20,9 @@ namespace ext_test {
 	// a free function cannot capture, so the installer reads the registry from here.
 	inline mcode::tool_registry* g_registry = nullptr;
 
-	// Notifications an extension raised, newest last, as "level: message". The
-	// surface only forwards `mcode.notify` when a sink is installed, so a test
-	// that wants to assert on one has to provide this -- without it the call is a
-	// silent no-op and the assertion would pass against nothing.
+	// Notifications an extension raised, newest last, as "level: message". Without
+	// an installed sink `mcode.notify` is a silent no-op, so an assertion on one
+	// would pass against nothing.
 	inline std::vector< std::string > g_notifications;
 
 	inline auto g_notifier = std::function< void( const std::string&, const std::string&,

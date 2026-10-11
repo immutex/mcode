@@ -126,9 +126,8 @@ namespace mcode::mcp {
 		}
 	}
 
-	// The one place an EOF or a dead child is turned into the end of the stream. Both
-	// loops call it, so both report the same reason and both flush the same partial
-	// frame.
+	// The one place an EOF or a dead child ends the stream, so both loops report
+	// the same reason and flush the same partial frame.
 	auto stdio_transport::report_end( const std::string_view detail ) -> void {
 		eof_seen_ = true;
 		flush_pending( );

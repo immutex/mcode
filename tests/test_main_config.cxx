@@ -10,7 +10,7 @@ TEST_CASE( "C++23 is the language standard", "[build]" ) {
 }
 
 TEST_CASE( "the error model uses std::expected", "[build]" ) {
-	// <expected> must be included before the macro is checked; `defined` needs a guard.
+	// `<expected>` must be included ahead of this check; `defined` needs a guard.
 #if defined( __cpp_lib_expected )
 	SUCCEED( "std::expected is available" );
 #else

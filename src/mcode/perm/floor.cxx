@@ -63,10 +63,9 @@ namespace mcode::perm {
 			candidate = space.root( ) / candidate;
 		}
 
-		// The floor must compare against the path the OS will act on, not the string typed.
-		// `weakly_canonical` resolves the parent but leaves a final symlink or junction in
-		// place, so `rm -rf link-to-root` would name a path that is not a root. The final
-		// component is resolved too, and an 8.3 short name resolves to its long name with it.
+		// The floor compares against the path the OS will act on: `weakly_canonical` would
+		// leave a final symlink or junction in place, so `rm -rf link-to-root` would name a
+		// path that is not a root.
 		auto error = std::error_code{ };
 		auto resolved = std::filesystem::canonical( candidate, error );
 
@@ -331,7 +330,7 @@ namespace mcode::perm {
 			return std::nullopt;
 		}
 
-		// the wrappers are stripped here and again inside the checks, so `env timeout 5 rm -rf /` fires.
+		// wrappers are stripped here and inside the checks, so `env timeout 5 rm -rf /` fires.
 		const auto argv = unwrap_command( *parsed );
 
 		if ( argv.empty( ) ) {

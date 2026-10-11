@@ -13,7 +13,7 @@ namespace mcode::ext {
 	// both the declaration route and the config route funnel into one consumer.
 	class mcp_server_store {
 	public:
-		// a name already claimed by config or another extension is an error, not a shadow.
+		// a duplicate name is an error, not a shadow.
 		auto add( mcode::mcp::server_config server ) -> status;
 
 		[[nodiscard]] auto all( ) const noexcept -> const std::vector< mcode::mcp::server_config >& {

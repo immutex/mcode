@@ -10,12 +10,10 @@
 
 namespace mcode::mcp {
 
-	// readOnlyHint is a server claim: it must not let a server skip the approval path
 	class source {
 	public:
 		explicit source( tool_registry& registry ) : registry_( &registry ) { }
 
-		// the description is wrapped in untrusted delimiters before it reaches the model
 		auto register_tool( const std::string& server_name, const server_tool& tool )
 			-> result< void >;
 

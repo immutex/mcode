@@ -25,7 +25,6 @@ namespace mcode::test {
 	#endif
 	}
 
-	// unique per process and per call, so the path can never pre-exist.
 	inline auto scratch_directory( const std::string_view prefix ) -> std::filesystem::path {
 		static auto calls = std::atomic< std::uint64_t >{ 0 };
 

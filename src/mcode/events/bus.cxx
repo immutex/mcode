@@ -60,7 +60,7 @@ namespace mcode::events {
 	auto bus::dispatch_one( const event& value ) -> std::optional< veto > {
 		auto& list = subscribers_[ static_cast< std::size_t >( value.type ) ];
 
-		// Snapshot the size: a mid-dispatch subscribe can reallocate, and is not called here.
+		// Snapshot the size: a mid-dispatch subscribe must not see the event in flight.
 		const auto count = list.size( );
 
 		for ( auto index = std::size_t{ 0 }; index < count; ++index ) {
@@ -74,7 +74,6 @@ namespace mcode::events {
 			try {
 				if ( entry_value.veto_function ) {
 					if ( auto decision = entry_value.veto_function( value ) ) {
-						// First veto wins: later handlers are skipped for this dispatch.
 						return decision;
 					}
 
@@ -118,7 +117,6 @@ namespace mcode::events {
 			value.timestamp_ms = support::epoch_milliseconds( );
 		}
 
-		// Re-entrant publish queues instead of recursing, keeping the stack flat.
 		if ( dispatching_ ) {
 			pending_.push_back( std::move( value ) );
 

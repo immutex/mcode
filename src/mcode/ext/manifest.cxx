@@ -158,7 +158,7 @@ namespace mcode::ext {
 					return false;
 				}
 
-				// bounded before the multiply: `current * 10` overflows for a long component.
+				// bounds-check first: `current * 10` overflows for a long component.
 				if ( digits >= MAX_VERSION_DIGITS ) {
 					return false;
 				}
@@ -206,10 +206,6 @@ namespace mcode::ext {
 			return identifier_length > 0;
 		}
 
-	}
-
-	auto known_permissions( ) -> const std::vector< std::string_view >& {
-		return KNOWN_PERMISSIONS;
 	}
 
 	auto manifest::has_permission( const std::string_view permission ) const noexcept -> bool {

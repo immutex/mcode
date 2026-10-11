@@ -12,16 +12,13 @@
 
 namespace mcode {
 
-	// Retained capture groups. Past this the oldest run's blobs are dropped, so a long
-	// session cannot grow the store without bound.
+	// past this the oldest run's blobs are dropped, bounding the store.
 	inline constexpr std::size_t MAX_RETAINED_RUNS = 20;
 
 	inline constexpr std::string_view SNAPSHOT_INDEX_NAME = "index.jsonl";
 	inline constexpr std::string_view SNAPSHOT_BLOB_DIRECTORY = "blobs";
 
-	// Content-addressed store of pre-edit file states, so an edit can be undone in a workspace
-	// that is not a git repository. Blobs live under `<root>/blobs/<hash>`, one append-only
-	// index entry per capture under `<root>/index.jsonl`.
+	// Content-addressed store of pre-edit file states, for undo without a git repository.
 	class snapshot_store {
 	public:
 		struct index_entry {
@@ -44,8 +41,7 @@ namespace mcode {
 			return root_;
 		}
 
-		// Records the file's current bytes, or that it did not exist. The store directory is
-		// created on the first write, so constructing one costs nothing.
+		// Records the file's current bytes, or that it did not exist.
 		auto capture( const std::filesystem::path& workspace_root,
 			const std::filesystem::path& file, const std::string_view run_id ) -> status;
 
@@ -53,7 +49,6 @@ namespace mcode {
 		[[nodiscard]] auto restore_last( const std::filesystem::path& workspace_root,
 			const std::string_view run_id ) -> result< std::size_t >;
 
-		// The same across every run the index holds.
 		[[nodiscard]] auto restore_all( const std::filesystem::path& workspace_root )
 			-> result< std::size_t >;
 
@@ -77,14 +72,12 @@ namespace mcode {
 		[[nodiscard]] auto restore_entry( const std::filesystem::path& workspace_root,
 			const index_entry& entry ) -> result< bool >;
 
-		// Drops the oldest runs past MAX_RETAINED_RUNS, their blobs included.
 		auto evict_over_cap( const std::vector< index_entry >& entries ) -> status;
 
 		std::filesystem::path root_;
 	};
 
-	// The workspace-relative, forward-slash path of `file`, or an error when it is outside
-	// `workspace_root`. A path that has not been created yet still resolves.
+	// or an error when `file` is outside `workspace_root`; a path not yet created resolves.
 	[[nodiscard]] auto workspace_relative_path( const std::filesystem::path& workspace_root,
 		const std::filesystem::path& file ) -> result< std::string >;
 

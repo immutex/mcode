@@ -33,8 +33,6 @@ TEST_CASE( "a message survives a round trip through the log encoding", "[agent][
 		REQUIRE( decoded->blocks.size( ) == 1 );
 		CHECK( decoded->blocks.front( ).kind == mcode::model::block_kind::text );
 
-		// The regression: a dotted JSON path never matches, so the text came back
-		// empty and a resumed session silently lost its transcript.
 		CHECK( decoded->blocks.front( ).text == "ALPHA" );
 	}
 

@@ -48,8 +48,7 @@ namespace mcode::cli {
 			return { };
 		}
 
-		// The same roots the loader walks, so `ext list` cannot disagree with what
-		// a session would load. The bundled root is last: it is the baseline.
+		// Project first, bundled last: the bundled root is the baseline.
 		auto roots_for( const std::filesystem::path& workspace ) -> std::vector< std::filesystem::path > {
 			auto roots = std::vector< std::filesystem::path >{ };
 			const auto project = ext::project_extension_root( workspace );

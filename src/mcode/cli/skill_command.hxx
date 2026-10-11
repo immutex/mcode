@@ -5,8 +5,7 @@
 
 namespace mcode::cli {
 
-	// `mcode skill list|validate` -- inspects the skill roots without starting
-	// a session. Returns the process exit code.
+	// Inspects the skill roots without starting a session.
 	auto run_skill( const std::vector< std::string >& arguments ) -> int;
 
 }

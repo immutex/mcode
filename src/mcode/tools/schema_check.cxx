@@ -11,14 +11,10 @@ namespace mcode::tools {
 
 	namespace {
 
-		// A property name as a JSON Pointer segment.
-		//
-		// The name comes straight from the model's arguments, and a pointer gives
-		// `~` and `/` meaning: a key of `a/b` resolved to the nested node
-		// `properties.a.b` and `a~1b` to `properties.a/b`, so an argument was
-		// validated against a different property's type and enum -- a bypass of
-		// both `additionalProperties: false` and enum membership. RFC 6901 escapes
-		// `~` first, or the `~1` produced by `/` would be re-escaped.
+		// The name comes from the model's arguments, and a pointer gives `~` and `/`
+		// meaning: unescaped, a key of `a/b` resolves to the nested node `properties.a.b`,
+		// validating the argument against a different property -- a bypass of both
+		// `additionalProperties: false` and enum membership. RFC 6901 escapes `~` first.
 		[[nodiscard]] auto pointer_segment( const std::string_view name ) -> std::string {
 			auto out = std::string{ };
 			out.reserve( name.size( ) );
@@ -155,8 +151,7 @@ namespace mcode::tools {
 		}
 
 		for ( const auto& [key, value] : root->members ) {
-			// Escaped: the key is the model's own, and a pointer gives `/` and `~`
-			// meaning, so an unescaped one resolves to a different property.
+			// Escaped: an unescaped key resolves to a different property.
 			const auto escaped = pointer_segment( key );
 			const auto property = schema->pointer_string( "/properties/" + escaped + "/type" );
 

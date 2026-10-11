@@ -8,15 +8,12 @@ namespace mcode::tui {
 
 	namespace {
 
-		// Appended to every rejection. One spelling, so the user learns it once.
 		inline constexpr std::string_view ANSWER_HINT = "  (y/a/n/d, or ? for details)";
 
 		[[nodiscard]] auto is_space( const char byte ) -> bool {
 			return byte == ' ' || byte == '\t' || byte == '\r' || byte == '\n';
 		}
 
-		// The answer without its surrounding whitespace, so " y " is the answer
-		// "y". Interior whitespace is left alone: "y e s" is not an answer.
 		[[nodiscard]] auto trimmed( const std::string& value ) -> std::string_view {
 			auto first = std::size_t{ 0 };
 			auto last = value.size( );
@@ -44,15 +41,10 @@ namespace mcode::tui {
 			return out;
 		}
 
-		// The answer as compared: trimmed, then case-folded. The long spellings
-		// are what a user types when they are not reading the option list, so
-		// they are answers too.
 		[[nodiscard]] auto folded( const std::string& value ) -> std::string {
 			return lowered( trimmed( value ) );
 		}
 
-		// Why the last answer was not taken. It names what arrived, so a user
-		// who mistyped sees their own keystrokes and not a frozen screen.
 		[[nodiscard]] auto rejection( const std::string& value ) -> std::string {
 			const auto typed = trimmed( value );
 
@@ -83,8 +75,6 @@ namespace mcode::tui {
 		rows.push_back( styled_line{ { "    " + request.subject, token::text } } );
 		rows.push_back( styled_line{ { "  rule: " + request.rule, token::muted } } );
 
-		// `a` is the only answer that outlives the turn, so it says where it
-		// goes; `d` is the session one, and the two must not be confused.
 		rows.push_back( styled_line{
 			{ "  [y]", token::accent }, { " allow once   ", token::text },
 			{ "[a]", token::accent },
@@ -101,8 +91,7 @@ namespace mcode::tui {
 		const std::function< std::string( ) >& detail ) -> perm::approval_outcome {
 		++asks_;
 
-		// Every path out of here hands the console back. A block left up
-		// suppresses the repaint pump, and the session then looks hung.
+		// A block left up suppresses the repaint pump, so every path out dismisses.
 		const auto finish = [ & ]( const perm::approval_outcome outcome ) {
 			if ( dismiss_ ) {
 				dismiss_( );
@@ -115,8 +104,7 @@ namespace mcode::tui {
 		auto above = std::string{ };
 
 		while ( true ) {
-			// Presented on every pass, including the re-prompts: a rejected
-			// answer that only redraws nothing is indistinguishable from a hang.
+			// Re-presented on every pass: a redraw that shows nothing looks like a hang.
 			if ( present_ ) {
 				auto view = prompt_view{ };
 				view.rows = render( request );
@@ -144,8 +132,7 @@ namespace mcode::tui {
 				break;
 			}
 
-			// Closed input is `refused`, never a guess. The engine resolves it
-			// as deny, which is the contract the permission layer rests on.
+			// Closed input is `refused`, never a guess; the engine resolves it as deny.
 			if ( !answer ) {
 				break;
 			}
@@ -172,8 +159,8 @@ namespace mcode::tui {
 				++details_;
 				above = detail( );
 
-				// A callback that returns nothing must still be visible as an
-				// answer, or `?` looks exactly like the broken no-op it was.
+				// A detail callback that returns nothing must still show
+				// something, or `?` looks like a no-op.
 				if ( above.empty( ) ) {
 					notice = std::string{ "no further detail for this request" };
 				}
@@ -181,7 +168,6 @@ namespace mcode::tui {
 				continue;
 			}
 
-			// Anything unrecognised re-prompts, and says why. No default.
 			notice = rejection( *answer );
 		}
 

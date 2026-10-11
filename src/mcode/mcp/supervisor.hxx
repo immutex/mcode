@@ -51,10 +51,8 @@ namespace mcode::mcp {
 		// the transport's EOF callback: records a due restart, never resets the transport inline
 		auto on_transport_eof( ) -> void;
 
-		// close stdin, wait, terminate, finalize; the destructor runs this too
 		auto shutdown( ) -> void;
 
-		// services a due restart, then drains; the call path pumps through the client
 		auto pump( std::chrono::milliseconds window ) -> void;
 
 		[[nodiscard]] auto config( ) const noexcept -> const server_config& { return config_; }
@@ -85,8 +83,7 @@ namespace mcode::mcp {
 		server_config config_;
 		handlers handlers_;
 
-		// The interface, not the concrete stdio type: the supervisor drives whichever
-		// transport the server config selects, and neither knows about the other.
+		// The supervisor drives whichever transport the server config selects.
 		std::unique_ptr< transport > transport_;
 		std::unique_ptr< client > client_;
 

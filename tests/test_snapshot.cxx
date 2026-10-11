@@ -16,7 +16,6 @@ using namespace mcode;
 
 namespace {
 
-	// A scratch workspace and a scratch store, both removed on the way out.
 	struct snapshot_fixture {
 		std::filesystem::path workspace;
 		std::filesystem::path store;
@@ -32,7 +31,6 @@ namespace {
 			std::filesystem::remove_all( store, error_code );
 		}
 
-		// The file the store is asked to capture.
 		auto write( const std::string& name, const std::string& content ) const -> void {
 			write_at( workspace, name, content );
 		}
@@ -249,8 +247,6 @@ TEST_CASE( "the oldest run is evicted past the retained-run cap", "[snapshot]" )
 			"run-" + std::to_string( index ) ) );
 	}
 
-	// The oldest run's entry is gone, so it restores nothing rather than reaching for a blob
-	// that was deleted along with it.
 	const auto evicted = store.restore_last( files.workspace, "run-0" );
 
 	REQUIRE( evicted );
@@ -265,7 +261,6 @@ TEST_CASE( "the oldest run is evicted past the retained-run cap", "[snapshot]" )
 	CHECK( *newest == 1 );
 	CHECK( files.read( "a.txt" ) == "seed\n" );
 
-	// Every retained capture holds the same bytes, so exactly one blob survives eviction.
 	CHECK( files.blob_count( ) == 1 );
 }
 
@@ -325,7 +320,6 @@ TEST_CASE( "a write-class tool call is captured before the handler runs", "[snap
 
 	CHECK( files.read( "target.txt" ) == "edited by the tool\n" );
 
-	// The run id groups the capture, which is exactly what /undo restores by.
 	REQUIRE_FALSE( loop.run_id( ).empty( ) );
 
 	const auto restored = fx.store.restore_last( files.workspace, loop.run_id( ) );
@@ -363,6 +357,5 @@ TEST_CASE( "a read-class tool call captures nothing", "[snapshot][loop]" ) {
 	REQUIRE( restored );
 	CHECK( *restored == 0 );
 
-	// Nothing was captured, so the store was never created either.
 	CHECK_FALSE( std::filesystem::exists( files.store / "index.jsonl" ) );
 }

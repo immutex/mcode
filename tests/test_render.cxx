@@ -246,7 +246,6 @@ TEST_CASE( "explicit markers anchor the stable prefix and roll with the newest m
 
 	const auto offsets = model::cache_breakpoints( request, descriptor.request );
 
-	// two messages, so the stable-prefix anchor plus a rolling one on the newest message
 	REQUIRE( offsets.size( ) == 2 );
 	CHECK( offsets.front( ) < offsets.back( ) );
 
@@ -262,11 +261,9 @@ TEST_CASE( "explicit markers anchor the stable prefix and roll with the newest m
 	CHECK( marked->find( R"({"cache_control":{"type":"ephemeral"},"content":"be terse","role":"system"})" )
 		!= std::string::npos );
 
-	// the rolling anchor covers the newest message, so a growing history keeps a live cache
 	CHECK( marked->find( R"({"cache_control":{"type":"ephemeral"},"content":"read the file","role":"user"})" )
 		!= std::string::npos );
 
-	// and a breakpoint the caller supplies is applied verbatim
 	auto manual = request;
 	manual.cache.breakpoints = offsets;
 
@@ -390,7 +387,6 @@ TEST_CASE( "strict tool calling marks every function and widens optional paramet
 	REQUIRE( additional.has_value( ) );
 	CHECK_FALSE( *additional );
 
-	// `limit` was optional, so its type admits null rather than being absent
 	const auto limit_type = parsed->pointer_raw( "/tools/0/function/parameters/properties/limit/type" );
 	REQUIRE( static_cast< bool >( limit_type ) );
 	CHECK( limit_type->find( "null" ) != std::string::npos );
@@ -437,14 +433,12 @@ TEST_CASE( "a response format is dropped when tools are present and the gateway 
 	REQUIRE( static_cast< bool >( dropped ) );
 	CHECK( dropped->find( "response_format" ) == std::string::npos );
 
-	// a gateway that honours both keeps it
 	request.response_format_with_tools = true;
 
 	const auto kept = model::render_chat_completions( request, descriptor.request );
 	REQUIRE( static_cast< bool >( kept ) );
 	CHECK( kept->find( "response_format" ) != std::string::npos );
 
-	// with no tools there is nothing to suppress, so the format is always sent
 	auto tools_free = request;
 	tools_free.tools.clear( );
 	tools_free.response_format_with_tools = false;
@@ -489,11 +483,9 @@ TEST_CASE( "a prefill turn is the last message and leaves the cache prefix stabl
 	auto parsed = json::document::parse( *rendered );
 	REQUIRE( static_cast< bool >( parsed ) );
 
-	// the prefilled assistant turn is appended, so it cannot disturb the stable prefix
 	CHECK( parsed->pointer_string( "/messages/2/role" ).value_or( "" ) == "assistant" );
 	CHECK( parsed->pointer_string( "/messages/2/content" ).value_or( "" ) == "<tool_call>" );
 
-	// and the cache anchor still lands on the first message
 	const auto offsets = model::cache_breakpoints( request, descriptor.request );
 
 	REQUIRE_FALSE( offsets.empty( ) );

@@ -13,9 +13,7 @@ namespace mcode::skills {
 		std::string description;
 		bool disable_model_invocation = false;
 
-		// Where the body starts: just past the closing delimiter. Carried here so a
-		// caller does not recompute it -- and cannot dereference a failed result
-		// doing so, which is what the discovery scan used to do.
+		// Carried here so a caller does not recompute it with a second, fallible parse.
 		std::size_t body_offset = 0;
 	};
 

@@ -57,11 +57,28 @@ No agent behaviour yet: no model client, no tool implementations, no TUI.
 
 ### Comments
 
-- **Default is none.** A comment is justified only when a reader would otherwise get the code *wrong*.
-- Never restate a name, narrate the next line, or describe the obvious.
-- Never a banner, a trailing comment restating the name, or commented-out code.
-- Lowercase, max one line.
-- No `docs/NN` citations in code.
+**Default is none.** A comment is justified only when a reader would otherwise
+get the code *wrong*: a hidden constraint, an invariant, a non-obvious "why".
+Anything a reader can see by reading the code is deleted, not reworded.
+
+Most of these are enforced by `tools/comment_lint.py`, which runs in CI. The
+checks are mechanical on purpose — judgment is what let the ratio drift. The
+line bound is the one the gate cannot judge: it fails a block longer than four
+lines, but one line is the target and two is the most a reader should normally
+need.
+
+- **Never narrate history.** "used to", "was set only on", "this replaced",
+  "previously" — the reader has the current source; what it did before is in the
+  log. This is the single most common violation.
+- **Never narrate the next line**, restate a name, or describe the obvious.
+- **Rationale belongs in `docs/`, not in code.** A paragraph explaining why a
+  design was chosen is a design doc in the wrong file. One line of "why" that a
+  reader would get wrong is fine; a block is not.
+- **Never a banner**, a section divider, a trailing comment restating the name,
+  or commented-out code.
+- **Max one line, lowercase**, except a comment whose grammar genuinely needs two.
+- **No `docs/NN` citations.** The doc cites the code; the code does not cite the
+  doc, because the doc moves and the comment does not.
 - **When code and comment disagree, one of them is a bug** — fix it in the same change.
 
 ### Layout
@@ -142,10 +159,13 @@ pwsh -File scripts/bootstrap.ps1     # once per machine
 cmake --build build/Release
 ctest --preset windows-msvc
 ./build/Release/bin/mcode.exe        # exit code = number of failed checks
+python tools/comment_lint.py         # comment discipline; exit 1 on a finding
 ```
 
 Linux and macOS: `./scripts/bootstrap.sh`, `ctest --preset linux-gcc` or `macos-clang`.
 Strict build: `-DMCODE_WARNINGS_AS_ERRORS=ON`. Fast iteration: the `dev` preset.
+
+`tools/comment_lint.py` takes any mix of files and directories (default `src`) and reports the comment/code ratio. `tools/dead_code_scan.py` lists header-declared functions nothing references — verify each with a grep before deleting, because a virtual override or a function pointer is a false positive.
 
 MSVC is only on `PATH` inside a developer prompt. A MinGW `link.exe` on the same machine shadows the linker and produces confusing errors.
 
@@ -175,7 +195,8 @@ MSVC is only on `PATH` inside a developer prompt. A MinGW `link.exe` on the same
 | Extension runtime, API, lifecycle | `docs/17-lua-runtime.md` … `docs/23-first-party-extensions.md` |
 | Cross-platform, packaging | `docs/24-cross-platform.md`, `docs/25-distribution.md` |
 | **Contributing, style rules, CI traps** | `CONTRIBUTING.md` |
-| **Security policy, what ships vs. what is designed** | `SECURITY.md` |
+| **Security policy, what ships vs. what is designed** | `SECURITY.md` |
+
 | **What changed in each release** | `CHANGELOG.md` |
 | Third-party attribution, licenses | `THIRD-PARTY-NOTICES.md` |
 

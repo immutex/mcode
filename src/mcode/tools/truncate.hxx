@@ -21,6 +21,4 @@ namespace mcode::tools {
 	[[nodiscard]] auto truncate_result( std::string_view text, std::string_view run_id,
 		workspace& space, std::string_view tool_name ) -> std::string;
 
-	[[nodiscard]] auto needs_truncation( std::string_view text ) noexcept -> bool;
-
 }

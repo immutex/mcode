@@ -64,9 +64,7 @@ auto subscribe_event_feed( mcode::events::bus& bus, mcode::tui::event_queue& que
 		const mcode::events::kind source ) {
 		return [ &queue, &interrupted, target, source ](
 			const mcode::events::event& value ) {
-			// An interrupt stops consuming the stream: whatever arrived is
-			// already in the transcript, and the remainder would only append
-			// to text the user asked to stop.
+			// An interrupt stops consuming the stream, so nothing is appended after it.
 			if ( interrupted.load( ) &&
 				( source == mcode::events::kind::assistant_delta ||
 					source == mcode::events::kind::assistant_thinking ) ) {

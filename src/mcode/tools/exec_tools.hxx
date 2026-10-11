@@ -7,7 +7,7 @@
 
 namespace mcode::tools {
 
-	// a non-zero exit is a successful call whose content says so; never retries
+	// a non-zero exit is a successful call whose content says so
 	[[nodiscard]] auto handle_bash( const tool_args& args, tool_context& context )
 		-> result< std::string >;
 
@@ -15,7 +15,7 @@ namespace mcode::tools {
 	[[nodiscard]] auto handle_ask_user( const tool_args& args, tool_context& context )
 		-> result< std::string >;
 
-	// two-stage disclosure: name + one-line description, full schema on expand
+	// two-stage disclosure: name and one-line description, full schema on expand
 	[[nodiscard]] auto handle_tool_search( const tool_args& args, tool_context& context,
 		const class tool_registry& registry ) -> result< std::string >;
 

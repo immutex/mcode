@@ -116,13 +116,13 @@ namespace mcode::net {
 
 	#endif
 
-		// The same call with the cast written out: OpenSSL's SNI macro trips -Wold-style-cast.
+		// OpenSSL's SNI macro trips -Wold-style-cast, so the cast is written out.
 		[[nodiscard]] auto set_sni_host_name( SSL* const handle, const std::string& host ) -> bool {
 			return SSL_ctrl( handle, SSL_CTRL_SET_TLSEXT_HOSTNAME, TLSEXT_NAMETYPE_host_name,
 				const_cast< char* >( host.c_str( ) ) ) == 1;
 		}
 
-		// Verification stays ON: `false` means no trust anchor was found, and that is reported.
+		// Verification is on: `false` means no trust anchor was found, and that is reported.
 		[[nodiscard]] auto make_ssl_context( ) -> result< ssl::context > {
 			auto context = ssl::context{ ssl::context::tls_client };
 
@@ -141,7 +141,7 @@ namespace mcode::net {
 			return context;
 		}
 
-		// Leaked on purpose: a static context torn down during static destruction aborted at exit.
+		// Leaked on purpose: a static context torn down during static destruction aborts at exit.
 		[[nodiscard]] auto shared_ssl_context( ) -> ssl::context* {
 			static auto* holder = []( ) -> ssl::context* {
 				auto built = make_ssl_context( );
@@ -212,8 +212,6 @@ namespace mcode::net {
 						fail( errc::protocol, "SSE stream exceeded the response cap" ) );
 				}
 
-				// The parser's own bounds. A refusal here means the stream is not
-				// parseable, so it is surfaced rather than swallowed.
 				return request.parser_state.feed( bytes );
 			};
 
@@ -415,7 +413,6 @@ namespace mcode::net {
 			auto resolver = tcp::resolver{ context };
 			const auto endpoints = resolver.resolve( parsed->host, parsed->port );
 
-			// On a non-2xx the bounded error body is read so the caller can classify it.
 			auto head_ok = true;
 			auto status_code = 0;
 
@@ -424,11 +421,8 @@ namespace mcode::net {
 
 				status_code = static_cast< int >( parser.get( ).result_int( ) );
 
-				// Any 2xx is a success, not only 200: the header documents that
-				// `failure` is filled for a non-2xx response and untouched
-				// otherwise, and a 201/203/206 was rejected as a protocol error
-				// while still filling `failure`, which is the state the header
-				// says cannot happen.
+				// Any 2xx is a success, not only 200: `failure` is filled for a non-2xx and
+				// left untouched otherwise.
 				if ( status_code >= 200 && status_code < 300 ) {
 					return;
 				}
@@ -543,7 +537,7 @@ namespace mcode::net {
 			return std::unexpected(
 				fail( classify( exception.code( ) ), std::string{ "sse: " } + exception.what( ) ) );
 		} catch ( const std::exception& exception ) {
-			// The callback reports a malformed payload by throwing; an escape here terminates.
+			// A malformed payload is reported by throwing, so the escape must be caught.
 			return std::unexpected(
 				fail( errc::protocol, std::string{ "sse: " } + exception.what( ) ) );
 		}

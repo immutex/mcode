@@ -9,9 +9,8 @@
 
 namespace mcode::tools {
 
-	// The arguments a handler is about to receive, after the model's payload has been repaired
-	// and checked against the schema the model was shown. `failure` is set instead when the call
-	// cannot proceed, and is already the rendered tool-error object to hand back.
+	// The arguments a handler receives after the model's payload has been repaired and checked
+	// against the schema the model saw. `failure` is the already-rendered tool-error object.
 	struct prepared_arguments {
 		std::string json;
 		std::string failure;
@@ -19,17 +18,15 @@ namespace mcode::tools {
 		[[nodiscard]] auto ok( ) const noexcept -> bool { return failure.empty( ); }
 	};
 
-	// Repairs a model-produced argument payload and validates it against a tool's schema.
-	// Repairs only cosmetic breaks - a markdown fence, surrounding prose, a trailing comma,
-	// single quotes, Python literals, a tail cut at a value boundary - and never invents
-	// content. An empty schema means the tool is unconstrained and only repair applies.
+	// Repairs a model-produced payload and validates it against a tool's schema: cosmetic
+	// breaks only, never inventing content. An empty schema means the tool is unconstrained.
 	[[nodiscard]] auto prepare_arguments( std::string_view schema_json,
 		std::string_view args_json ) -> prepared_arguments;
 
 	class tool_args {
 	public:
-		// Strict: a payload that is not already JSON is an error. Callers on a model's output
-		// path want prepare_arguments, which repairs first.
+		// strict: a payload that is not already JSON is an error; model output goes through
+		// prepare_arguments, which repairs first
 		[[nodiscard]] static auto parse( std::string_view args_json )
 			-> result< tool_args >;
 

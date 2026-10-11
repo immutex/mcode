@@ -20,8 +20,7 @@ namespace mcode::cli {
 
 		constexpr auto GIT_TIMEOUT = std::chrono::milliseconds{ 120'000 };
 
-		// Removes the staging tree on every exit path. The success path renames it
-		// into place first, so the destructor then finds nothing to remove.
+		// Removes the staging tree on every exit path; the success path renames it into place.
 		struct staging_guard {
 			std::filesystem::path directory;
 
@@ -37,9 +36,8 @@ namespace mcode::cli {
 			std::string stderr_text;
 		};
 
-		// Every git invocation is offline-safe and hook-free: a clone runs the
-		// remote's repository, so anything that can execute on checkout is disabled
-		// before the first byte arrives.
+		// Offline-safe and hook-free: a clone runs the remote's repository, so anything that
+		// can execute on checkout is disabled up front.
 		auto git( const std::vector< std::string >& args,
 			const std::filesystem::path& working_directory ) -> result< git_result > {
 			auto options = process_options{ };
@@ -69,9 +67,8 @@ namespace mcode::cli {
 			return text;
 		}
 
-		// Resolves a ref to a commit before anything is fetched. An annotated tag
-		// emits two lines and only the `^{}` line is the commit; recording the first
-		// line would pin the tag object instead.
+		// Resolved to a commit before anything is fetched: an annotated tag emits two
+		// lines, and only the `^{}` line is the commit.
 		auto resolve_ref( const std::string& url, const std::string& ref ) -> result< std::string > {
 			auto staging = platform::temp_directory( );
 
@@ -127,8 +124,7 @@ namespace mcode::cli {
 					"ref '" + ref + "' does not exist in " + url ) );
 			}
 
-			// More than one line and no peel means the ref is ambiguous, which is a
-			// mistake to surface rather than to guess at.
+			// More than one line and no peel means the ref is ambiguous.
 			if ( peeled.empty( ) && lines > 1 ) {
 				return std::unexpected( fail( errc::config,
 					"ref '" + ref + "' matches more than one object in " + url ) );
@@ -188,8 +184,7 @@ namespace mcode::cli {
 		auto error = std::error_code{ };
 		std::filesystem::remove_all( staging, error );
 
-		// Outside the clone target: `git clone` needs its destination absent or
-		// empty, so a hooks directory created inside it fails the clone.
+		// Outside the clone target: `git clone` needs its destination absent or empty.
 		const auto hooks = *staging_base
 			/ ( "mcode-ext-hooks-" + std::to_string( platform::current_process_id( ) ) );
 		std::filesystem::remove_all( hooks, error );
@@ -223,8 +218,7 @@ namespace mcode::cli {
 			return to_int( exit_code::usage_error );
 		}
 
-		// A repository carrying submodules is refused, not cloned-and-ignored:
-		// submodules are a code-execution path on checkout.
+		// Refused, not cloned-and-ignored: submodules are a code-execution path on checkout.
 		if ( std::filesystem::exists( staging / ".gitmodules" ) ) {
 			std::fprintf( stderr,
 				"mcode: this repository declares submodules, which are refused\n" );
@@ -276,8 +270,7 @@ namespace mcode::cli {
 			return to_int( exit_code::usage_error );
 		}
 
-		// The same validation the loader applies, so install-time and load-time
-		// acceptance cannot drift.
+		// The same validation the loader applies, so install-time and load-time cannot drift.
 		const auto name = std::filesystem::path{ source.substr( source.rfind( '/' ) + 1 ) }
 			.filename( ).string( );
 
@@ -289,9 +282,7 @@ namespace mcode::cli {
 			return to_int( exit_code::usage_error );
 		}
 
-		// User scope, per `25`: that directory is trusted by location, so an install
-		// the user typed needs no grant record. Project scope is the one that arrives
-		// without the user typing anything, and that is the one the trust gate holds.
+		// User scope is trusted by location, so an install the user typed needs no grant record.
 		const auto user_root = platform::app_data_path( platform::data_kind::config );
 
 		if ( !user_root ) {
@@ -336,11 +327,7 @@ namespace mcode::cli {
 			return to_int( exit_code::usage_error );
 		}
 
-		// The install IS the grant, but by location rather than by record: the user
-		// scope is trusted by location (`19`), and the user typed this command. The
-		// resolved SHA goes in the lockfile, which is the install-time record; the
-		// trust store stays the load-time authority for PROJECT scope, where nothing
-		// was typed.
+		// The lockfile is the install-time record; the trust store stays the load-time authority.
 		const auto lock_path = ext::lockfile::user_path( );
 
 		if ( !lock_path ) {

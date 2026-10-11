@@ -33,7 +33,7 @@ namespace mcode::instruct {
 		std::filesystem::path org_file;
 	};
 
-	// Closest last, so closest wins on contradiction; one file per directory.
+	// Closest last, so closest wins on contradiction.
 	[[nodiscard]] auto assemble_chain( const chain_options& options ) -> instruction_chain;
 
 }

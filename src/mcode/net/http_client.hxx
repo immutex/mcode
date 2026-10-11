@@ -54,8 +54,7 @@ namespace mcode::net {
 		http_client( const http_client& ) = delete;
 		auto operator=( const http_client& ) -> http_client& = delete;
 
-		// Movable so a transport that owns one can be returned by value. The class
-		// holds a byte ceiling and nothing else, so the default is exact.
+		// Movable so a transport that owns one can be returned by value; the default is exact.
 		http_client( http_client&& other ) noexcept = default;
 		auto operator=( http_client&& other ) noexcept -> http_client& = default;
 

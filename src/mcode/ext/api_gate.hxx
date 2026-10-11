@@ -25,7 +25,6 @@ namespace mcode::ext {
 	[[nodiscard]] auto host_declared( const api_surface& surface, std::string_view host )
 		-> bool;
 
-	// a declared `credential:<NAME>` entry, exact.
 	[[nodiscard]] auto credential_declared( const api_surface& surface,
 		std::string_view name ) -> bool;
 

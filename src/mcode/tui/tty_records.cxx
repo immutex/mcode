@@ -1,7 +1,3 @@
-// The Windows console record decoder. A record is translated into the bytes a
-// terminal would have sent and handed to the shared decoder, so there is one
-// implementation of what a key is and one of what a paste is; only the record
-// fields themselves are read here.
 #include "mcode/tui/tty_records.hxx"
 
 #include <cstddef>
@@ -13,17 +9,12 @@ namespace mcode::tui {
 		// One wheel notch; a record can carry several at once.
 		inline constexpr int WHEEL_NOTCH = 120;
 
-		// The wheel delta rides in the high word of `dwButtonState`.
 		inline constexpr unsigned long WHEEL_DELTA_SHIFT = 16;
 		inline constexpr unsigned long WHEEL_DELTA_MASK = 0xFFFF;
 
-		// SGR wheel reporting, the encoding `set_mouse_reporting` asks for.
-		// The coordinates are decoded and dropped, so they are zero here.
 		inline constexpr std::string_view SGR_WHEEL_UP = "\x1b[<64;0;0M";
 		inline constexpr std::string_view SGR_WHEEL_DOWN = "\x1b[<65;0;0M";
 
-		// A record carries `wRepeatCount`: ONE record standing for N presses
-		// of a held key.
 		auto decode_windows_key( const KEY_EVENT_RECORD& key, decode_state& state,
 			std::vector< key_event >& pending ) -> void {
 			switch ( key.wVirtualKeyCode ) {
@@ -76,8 +67,6 @@ namespace mcode::tui {
 
 					return;
 				case VK_ESCAPE:
-					// A bracketed paste's marker starts with this, so it goes
-					// through the decoder rather than straight to the caller.
 					decode_key_bytes( "\x1b", state, pending, false );
 
 					return;
@@ -87,8 +76,7 @@ namespace mcode::tui {
 			const auto character = key.uChar.AsciiChar;
 
 			// Ctrl+C and Ctrl+D first: some hosts report them with a zero
-			// `AsciiChar` and only the virtual key, so the character test alone
-			// dropped them.
+			// `AsciiChar` and only the virtual key.
 			if ( character == '\x03' ||
 				( character == 0 && key.wVirtualKeyCode == 'C' &&
 					( key.dwControlKeyState & ( LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED ) ) != 0 ) ) {
@@ -117,7 +105,6 @@ namespace mcode::tui {
 				return;
 			}
 
-			// A held key reports its repeats in one record.
 			const auto repeats = key.wRepeatCount == 0 ? 1u : key.wRepeatCount;
 
 			for ( auto index = static_cast< unsigned int >( 0 ); index < repeats; ++index ) {
@@ -126,7 +113,6 @@ namespace mcode::tui {
 			}
 		}
 
-		// Wheel only: the button and position fields are decoded and dropped.
 		auto decode_windows_mouse( const MOUSE_EVENT_RECORD& mouse, decode_state& state,
 			std::vector< key_event >& pending, const bool mouse_reporting ) -> void {
 			if ( ( mouse.dwEventFlags & MOUSE_WHEELED ) == 0 ) {

@@ -8,16 +8,10 @@ namespace mcode::tui {
 
 	namespace {
 
-		// A scrolled region is never smaller than its indicator plus one row.
 		inline constexpr std::size_t HISTORY_REGION_MIN_ROWS = 2;
 
-		// The deepest offset the viewport can show. The body holds `window`
-		// rows, so a buffer taller than it stops with the oldest retained row
-		// on the top row -- the furthest back the retained copy reaches, and
-		// no visible row is ever a blank one. A buffer shorter than the body
-		// still pages into the history view, one row deep, so PageUp always
-		// answers; a lone retained row has nothing above the live view to
-		// page to.
+		// A buffer shorter than the body still pages one row deep, so PageUp
+		// always answers.
 		[[nodiscard]] auto scroll_limit( const std::size_t retained, const std::size_t window )
 			-> std::size_t {
 			if ( retained <= 1 ) {
@@ -66,8 +60,6 @@ namespace mcode::tui {
 			return out + std::to_string( fraction );
 		}
 
-		// The context window's fill, e.g. "42%". Capacity zero means unknown,
-		// and the caller omits the span rather than dividing by zero.
 		[[nodiscard]] auto format_context( const std::uint64_t used,
 			const std::uint64_t capacity ) -> std::string {
 			if ( capacity == 0 ) {
@@ -80,8 +72,6 @@ namespace mcode::tui {
 			return std::to_string( percent ) + "%";
 		}
 
-		// The meter's colour: normal below the warn threshold, warn from 80%,
-		// error from 95%.
 		[[nodiscard]] auto context_token( const std::uint64_t used,
 			const std::uint64_t capacity ) -> token {
 			if ( capacity == 0 ) {
@@ -127,8 +117,6 @@ namespace mcode::tui {
 		line.push_back( { " ▸ ", token::muted } );
 		line.push_back( { format_tokens( state.total_tokens ), token::warn } );
 
-		// Capacity zero means unknown: the count shows, the percentage does
-		// not, rather than a division by nothing.
 		const auto percent = format_context( state.context_used, state.context_capacity );
 
 		if ( !percent.empty( ) ) {
@@ -142,8 +130,6 @@ namespace mcode::tui {
 		line.push_back( { " ▸ ", token::muted } );
 		line.push_back( { format_elapsed( state.turn_elapsed_ms ), token::muted } );
 
-		// The activity and its hint ride on the same row, so showing and
-		// clearing the verb never moves the layout.
 		if ( !state.activity.empty( ) ) {
 			line.push_back( { " ▸ ", token::muted } );
 			line.push_back( { state.activity + "...", token::accent } );
@@ -159,10 +145,7 @@ namespace mcode::tui {
 			return;
 		}
 
-		// The window ends `offset` rows above the newest retained row and is
-		// as tall as the region above the indicator. Clamping its start keeps
-		// the oldest retained row on the top row rather than running off the
-		// end of the buffer.
+		// Clamped so the oldest retained row stays on the top row.
 		const auto available = buffer.rows( ) - HISTORY_HEADER_ROWS;
 		const auto newest = state.scrollback.size( ) - state.scroll_offset;
 		const auto oldest = newest > available ? newest - available : std::size_t{ 0 };
@@ -174,8 +157,6 @@ namespace mcode::tui {
 			buffer.write_line( row, state.scrollback[ index - 1 ] );
 		}
 
-		// The header sits on the bottom row, dim: it labels the view rather
-		// than competing with the history above it.
 		auto line = styled_line{ };
 		line.push_back( { std::string{ HISTORY_INDICATOR }, token::muted, token::none,
 			false, false, true } );
@@ -184,9 +165,6 @@ namespace mcode::tui {
 	}
 
 	auto render_coordinator::clamp_scroll( ) -> void {
-		// The viewport stops once the oldest retained row reaches the top of
-		// its body: that is the furthest back the retained buffer can show,
-		// and it keeps every visible row a real one.
 		state_.scroll_offset = std::min( state_.scroll_offset,
 			scroll_limit( state_.scrollback.size( ),
 				history_region_rows( screen_rows_ ) - HISTORY_HEADER_ROWS ) );
@@ -200,8 +178,6 @@ namespace mcode::tui {
 		const auto limit = scroll_limit( state_.scrollback.size( ),
 			history_region_rows( screen_rows_ ) - HISTORY_HEADER_ROWS );
 
-		// Up moves toward history, which grows the offset; the offset counts
-		// rows between the viewport's bottom and the newest retained row.
 		const auto moved = static_cast< long long >( state_.scroll_offset ) -
 			static_cast< long long >( rows );
 
@@ -218,16 +194,12 @@ namespace mcode::tui {
 			state_.scrollback.push_back( row );
 		}
 
-		// The offset is measured from the newest retained row, so appended
-		// rows would otherwise drag the viewport toward live. Advancing it by
-		// the same count keeps the viewport on the content the user chose:
-		// committing while scrolled must not move the view.
+		// The offset is measured from the newest retained row, so appended rows
+		// must advance it or the viewport would drag toward live.
 		if ( state_.scroll_offset > 0 ) {
 			state_.scroll_offset += rows.size( );
 		}
 
-		// Bounded: the oldest rows fall off, and the offset shifts with them
-		// so the viewport keeps showing the same rows while scrolled.
 		while ( state_.scrollback.size( ) > SCROLLBACK_MAX_ROWS ) {
 			state_.scrollback.pop_front( );
 
@@ -236,11 +208,8 @@ namespace mcode::tui {
 			}
 		}
 
-		// No clamp here: advancing the offset by the count appended keeps the
-		// window on the same rows, and that shifted offset is always within
-		// the range the buffer now covers. Clamping would pull a viewport that
-		// was already scrolled toward live whenever the buffer is shorter than
-		// the region -- exactly the movement a commit must not cause.
+		// No clamp: that shifted offset is always within the range the buffer now
+		// covers, and clamping would pull an already-scrolled viewport toward live.
 	}
 
 }

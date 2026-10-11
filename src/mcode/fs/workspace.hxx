@@ -58,7 +58,7 @@ namespace mcode {
 		[[nodiscard]] auto content_hash( std::string_view relative_path ) const
 			-> result< std::string >;
 
-		// A sibling temp file renamed over the target, so a crash leaves the original intact.
+		// A sibling temp file renamed over the target, so a crash leaves the target intact.
 		[[nodiscard]] auto write_file( std::string_view relative_path, std::string_view content,
 			write_mode mode ) -> result< write_receipt >;
 
@@ -73,19 +73,8 @@ namespace mcode {
 		std::filesystem::path canonical_root_;
 	};
 
-	// Whether `candidate` is `root` or sits below it, comparing whole path
-	// components.
-	//
-	// One implementation, because this predicate IS the workspace boundary: the
-	// read and write tools, the snapshot restore path, the permission engine's
-	// extra roots and the `.mcode` protection rule all decide a security question
-	// with it. It was written out four times by hand, so a correction to one --
-	// symlink handling, case folding -- would have left the other three answering
-	// differently with nothing to say which was canonical.
-	//
-	// Both paths are expected canonical; a component-wise comparison is what makes
-	// `/work/mcode-notes` not match a root of `/work/mcode`, which a string prefix
-	// test would.
+	// Whole-component comparison, so `/work/mcode-notes` is not inside `/work/mcode`; both
+	// paths are expected canonical.
 	[[nodiscard]] auto path_is_within( const std::filesystem::path& root,
 		const std::filesystem::path& candidate ) -> bool;
 

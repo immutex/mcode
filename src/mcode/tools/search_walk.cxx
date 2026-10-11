@@ -10,24 +10,6 @@
 
 namespace mcode::tools::search_walk {
 
-	// std::regex backtracks catastrophically, so the cap is per file, enforced mid-scan
-
-	// lines longer than this are skipped: matching inside them is where backtracking lives
-
-	// The line cap does not bound backtracking: `(a+)+$` against a full line
-	// is exponential in its length. This is the wall-clock bound on one call.
-
-	// candidates per possible match, plus a floor, so a narrow pattern still sees the tree
-
-	// The most paths a single glob may ask the walk to enumerate. It is a
-	// bound on the WORK, not on the result: `max_results` multiplies into the
-	// walk budget, so an unbounded value overflows it to a small number and
-	// the caller asking for more results gets fewer.
-
-	// A quantifier applied to a group that contains a quantifier: `(a+)+`,
-	// `(a*)*`, `(a+){2,}`, `([ab]+)*`. Those are the shapes whose match cost
-	// is exponential in the input, and `std::regex` offers no way to bound a
-	// single `regex_search`, so they are refused rather than run.
 	[[nodiscard]] auto has_nested_quantifier( const std::string_view pattern ) -> bool {
 		auto depth = std::size_t{ 0 };
 		auto quantified_inside = false;
@@ -81,8 +63,7 @@ namespace mcode::tools::search_walk {
 					--depth;
 				}
 
-				// The group just closed. If it held a quantifier, a quantifier
-				// on the group itself is the exponential shape.
+				// A quantifier on a group that itself held one is the exponential shape.
 				if ( depth == 0 && quantified_inside ) {
 					const auto next = index + 1 < pattern.size( ) ? pattern[ index + 1 ]
 						: '\0';
@@ -103,14 +84,6 @@ namespace mcode::tools::search_walk {
 		return false;
 	}
 
-	// candidates per possible match, plus a floor, so a narrow pattern still sees the tree
-
-	// The most paths a single glob may ask the walk to enumerate. It is a
-	// bound on the WORK, not on the result: `max_results` multiplies into the
-	// walk budget, so an unbounded value overflows it to a small number and
-	// the caller asking for more results gets fewer.
-
-	// the workspace walk is ignore-blind; these would burn the whole result budget on artifacts
 	[[nodiscard]] auto always_skipped( const std::string_view name ) noexcept -> bool {
 		return name == ".git" || name == ".mcode" ||
 			name == "build" || name == "node_modules" ||
@@ -180,7 +153,6 @@ namespace mcode::tools::search_walk {
 		return false;
 	}
 
-	// `*` stays within one segment; a pattern with no `/` matches the file name anywhere
 	auto ignore_rules::glob_match( const std::string_view pattern,
 		const std::string_view path ) noexcept -> bool {
 			const auto slash = pattern.find( '/' );

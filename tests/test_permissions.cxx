@@ -113,10 +113,8 @@ namespace permission_test {
 		setup.approval.queue( perm::approval_outcome::allow_remember );
 		CHECK( setup.write( target ) == perm::permission_decision::allow );
 
-		// writes outside the workspace are never auto-persisted.
 		CHECK_FALSE( std::filesystem::exists( setup.store.file( ) ) );
 
-		// the answer is a session allow, so the same request does not prompt again.
 		CHECK( setup.write( target ) == perm::permission_decision::allow );
 		CHECK( setup.approval.asks( ) == 1 );
 	}
@@ -198,7 +196,6 @@ namespace permission_test {
 		CHECK( setup.exec( "git status" ) == perm::permission_decision::deny );
 		CHECK( setup.engine.last_verdict( ).reason.find( "plan mode" ) != std::string::npos );
 
-		// a write inside the workspace is still a write.
 		CHECK( setup.write( "src/new-file.cxx" ) == perm::permission_decision::deny );
 
 		auto net_request = perm::permission_request{ };
@@ -213,11 +210,9 @@ namespace permission_test {
 		spawn_request.resource = "worker";
 		CHECK( setup.engine.decide( spawn_request ) == perm::permission_decision::deny );
 
-		// mcp is not a read class, so it is refused too rather than escaping via yolo.
 		CHECK( setup.mcp( "write_file", "{\"path\":\"a.txt\"}" )
 			== perm::permission_decision::deny );
 
-		// reads are untouched: looking without touching is the point.
 		CHECK( setup.read( "src/main.cxx" ) == perm::permission_decision::allow );
 		CHECK( setup.approval.asks( ) == 0 );
 	}
@@ -236,7 +231,6 @@ namespace permission_test {
 		CHECK( ask->ask );
 		CHECK_FALSE( ask->yolo );
 
-		// whichever order the two arrive in, the prompt is restored.
 		auto ask_then_yolo = cli::parse_exec_options( { "--ask", "--yolo" } );
 		REQUIRE( ask_then_yolo.has_value( ) );
 		CHECK( ask_then_yolo->ask );
@@ -247,7 +241,6 @@ namespace permission_test {
 		CHECK( yolo_then_ask->ask );
 		CHECK_FALSE( yolo_then_ask->yolo );
 
-		// --plan is independent: it does not disturb the other flags.
 		auto both = cli::parse_exec_options( { "--plan", "--yolo" } );
 		REQUIRE( both.has_value( ) );
 		CHECK( both->plan );
@@ -301,14 +294,12 @@ namespace permission_test {
 		CHECK( setup.exec( "terraform destroy" ) == perm::permission_decision::deny );
 		CHECK( setup.approval.asks( ) == 1 );
 
-		// the deny is session-scoped, so nothing reached the store file.
 		CHECK_FALSE( std::filesystem::exists( setup.store.file( ) ) );
 	}
 
 	TEST_CASE( "an engine with no approval source fails closed", "[perm][headless]" ) {
 		auto setup = rig{ };
 
-		// a fresh engine over the same space, with no source wired at all.
 		auto engine = perm::permission_engine{ setup.space, &setup.store };
 
 		auto request = perm::permission_request{ };
@@ -361,11 +352,8 @@ namespace permission_test {
 	}
 
 	TEST_CASE( "a quoted metacharacter is data, not a shell operator", "[perm][argv]" ) {
-		// Nothing runs a shell: the tokens become argv directly. So a metacharacter
-		// inside quotes is a literal byte the program receives, and refusing it
-		// rejected real commands. A measured run lost five turns to this: every
-		// `python3 -c '...; ...'` one-liner and a `grep -A 34 '<header>'` were
-		// refused as "compound", and the model fell back to weaker tools.
+		// Nothing runs a shell: the tokens become argv directly, so a metacharacter
+		// inside quotes is a literal byte the program receives.
 		const auto quoted = perm::parse_command_line(
 			R"(grep -n -A 34 '<header class="site-header">' src/index.html)" );
 
@@ -375,11 +363,9 @@ namespace permission_test {
 		CHECK( quoted->at( 1 ) == "-n" );
 		CHECK( quoted->at( 3 ) == "34" );
 
-		// The quotes are stripped and the inner double quotes are preserved.
 		CHECK( quoted->at( 4 ) == R"(<header class="site-header">)" );
 		CHECK( quoted->at( 5 ) == "src/index.html" );
 
-		// A one-liner whose semicolon is inside the quotes.
 		const auto script = perm::parse_command_line(
 			R"(python3 -c 'import re; print(re.sub("a", "b", "a"))')" );
 
@@ -387,14 +373,12 @@ namespace permission_test {
 		CHECK( script->size( ) == 3 );
 		CHECK( script->at( 2 ) == R"(import re; print(re.sub("a", "b", "a")))" );
 
-		// A multi-line script argument is still one token.
 		const auto multiline = perm::parse_command_line(
 			std::string{ "python3 -c 'line one\nline two'" } );
 
 		REQUIRE( multiline.has_value( ) );
 		CHECK( multiline->at( 2 ) == "line one\nline two" );
 
-		// A quoted dollar is literal too.
 		const auto literal_dollar = perm::parse_command_line( R"(echo '$HOME')" );
 
 		REQUIRE( literal_dollar.has_value( ) );
@@ -402,9 +386,7 @@ namespace permission_test {
 	}
 
 	TEST_CASE( "an unquoted operator is still refused", "[perm][argv]" ) {
-		// The guard the fix must not weaken: an unquoted operator means the model
-		// expected a shell, and no shell runs, so its intent would silently not
-		// happen. These are the cases the gate exists for.
+		// An unquoted operator means the model expected a shell, and none runs.
 		CHECK_FALSE( perm::parse_command_line( "echo a; echo b" ).has_value( ) );
 		CHECK_FALSE( perm::parse_command_line( "echo a && echo b" ).has_value( ) );
 		CHECK_FALSE( perm::parse_command_line( "cat a | grep b" ).has_value( ) );
@@ -413,17 +395,14 @@ namespace permission_test {
 		CHECK_FALSE( perm::parse_command_line( "echo $HOME" ).has_value( ) );
 		CHECK_FALSE( perm::parse_command_line( "echo %PATH%" ).has_value( ) );
 
-		// A metacharacter after a closed quote is unquoted and still refused.
 		CHECK_FALSE( perm::parse_command_line( R"(echo 'a' && echo b)" ).has_value( ) );
 	}
 
 } // namespace permission_test
 
 	TEST_CASE( "an escaped quote inside double quotes does not end the string", "[perm][argv]" ) {
-		// The exact command a measured run was refused. The `\"` sequences closed
-		// the quote early, so the `||` after them was scanned as unquoted and read
-		// as a pipe -- the command was rejected as "compound" when nothing about it
-		// was compound. The model lost a turn and had to work around the gate.
+		// The `\"` sequences must not close the quote early, or the `||` after them
+		// is read as a pipe and the command is refused as compound.
 		const auto node = perm::parse_command_line(
 			R"(node -e "const m='x'; console.log(m.match(/id=\"[^\"]+\"/g)||[]);")" );
 
@@ -433,21 +412,17 @@ namespace permission_test {
 		CHECK( node->at( 1 ) == "-e" );
 		CHECK( node->at( 2 ) == R"(const m='x'; console.log(m.match(/id="[^"]+"/g)||[]);)" );
 
-		// A backslash before an ordinary character is literal, so a Windows path
-		// survives. Only the characters sh escapes are consumed.
+		// Only the characters sh escapes are consumed, so a Windows path survives.
 		const auto path = perm::parse_command_line( R"(node "C:\Users\somebody\x.js")" );
 
 		REQUIRE( path.has_value( ) );
 		CHECK( path->at( 1 ) == R"(C:\Users\somebody\x.js)" );
 
-		// A doubled backslash is one backslash, as in sh.
 		const auto doubled = perm::parse_command_line( R"(node -e "a\\b")" );
 
 		REQUIRE( doubled.has_value( ) );
 		CHECK( doubled->at( 2 ) == R"(a\b)" );
 
-		// Single quotes take no escapes: a backslash stays, and the quote inside
-		// cannot end the string.
 		const auto single = perm::parse_command_line( R"(node -e 'a\"b')" );
 
 		REQUIRE( single.has_value( ) );
@@ -455,17 +430,13 @@ namespace permission_test {
 	}
 
 	TEST_CASE( "an unterminated escape at the end of a string is refused", "[perm][argv]" ) {
-		// A trailing backslash inside a quote has nothing to escape, so the quote
-		// never closes and the command cannot be judged.
+		// A trailing backslash has nothing to escape, so the quote never closes.
 		CHECK_FALSE( perm::parse_command_line( R"(node -e "abc\)" ).has_value( ) );
 	}
 
 	TEST_CASE( "the sandbox temp directory is our own, not the user's", "[perm][sandbox]" ) {
-		// The bug this guards: the child was granted the user's whole %TEMP%. On
-		// Windows a write grant is an integrity label, which propagates to every
-		// entry beneath the path, so each bash call walked and relabelled the
-		// entire temp tree -- 20.7 s of a 21.0 s spawn, and a lasting change to
-		// files unrelated to the run.
+		// A Windows write grant is an integrity label that propagates to every entry
+		// beneath the path, so the child must not be granted the user's whole %TEMP%.
 		const auto system_temp = mcode::platform::temp_directory( );
 
 		REQUIRE( system_temp.has_value( ) );
@@ -474,10 +445,7 @@ namespace permission_test {
 
 		REQUIRE( ours.has_value( ) );
 
-		// Inside the system temp, but a subdirectory of it -- never the root itself.
-		// `temp_directory_path` returns a path with a trailing separator, and
-		// `lexically_normal` keeps it on a root path, so it is stripped for the
-		// comparison rather than relied on to be absent.
+		// A subdirectory of the system temp, never the root itself.
 		const auto strip = []( std::string text ) {
 			while ( !text.empty( ) && ( text.back( ) == '\\' || text.back( ) == '/' ) ) {
 				text.pop_back( );
@@ -491,13 +459,11 @@ namespace permission_test {
 		CHECK( ours->filename( ).string( ).starts_with(
 			std::string{ mcode::platform::SANDBOX_TEMP_PREFIX } ) );
 
-		// Usable: created, and a directory.
 		auto error = std::error_code{ };
 		CHECK( std::filesystem::is_directory( *ours, error ) );
 		CHECK_FALSE( static_cast< bool >( error ) );
 
-		// Stable across calls, so a session leaves one directory rather than one
-		// per command.
+		// Stable across calls, so a session leaves one directory.
 		const auto again = mcode::platform::sandbox_temp_directory( );
 
 		REQUIRE( again.has_value( ) );

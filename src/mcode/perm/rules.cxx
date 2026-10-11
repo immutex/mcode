@@ -38,9 +38,8 @@ namespace mcode::perm {
 				mcode::text::ascii_lower( base_name( path ) ) );
 		}
 
-		// A folded whole-name test: the secret names below are matched as
-		// literal names rather than patterns, so `wildcard_match` would give
-		// their `*` and `?` a meaning they do not have.
+		// A folded whole-name test: the secret names are matched as literal names, so
+		// `wildcard_match` would give their `*` and `?` a meaning they do not have.
 		[[nodiscard]] auto name_is( const std::string_view path,
 			const std::string_view name ) -> bool {
 			return mcode::text::ascii_lower( base_name( path ) ) == mcode::text::ascii_lower( name );

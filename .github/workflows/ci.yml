@@ -3,11 +3,11 @@ name: CI
 on:
   push:
     # `master` is the default branch; `main` is listed so a rename does not
-    # silently stop CI from running, which is exactly what happened once already.
+    # silently stop CI from running.
     branches: [master, main]
 
-    # A bare `branches:` filter excludes tags, so pushing `v0.0.1` started
-    # nothing and the release never ran. Tags have to be listed explicitly.
+    # A bare `branches:` filter excludes tags, so tags must be listed explicitly
+    # or a release push starts nothing.
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -26,6 +26,26 @@ env:
   CMAKE_BUILD_PARALLEL_LEVEL: 4
 
 jobs:
+  comment-discipline:
+    name: Comment discipline
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      # The gate fails on the violations that have no legitimate exception:
+      # history narration, next-line narration, section banners, doc citations,
+      # and comment blocks longer than four lines. The ratio is reported, not
+      # enforced, because a legitimate comment can push a small file over any
+      # fixed ceiling.
+      - name: Check comment discipline
+        run: python tools/comment_lint.py src tests
+
   api-definition:
     name: API definition check
     runs-on: ubuntu-24.04
@@ -173,10 +193,9 @@ jobs:
           [ -f "$executable" ] || executable="build/Release/bin/mcode.exe"
           "$executable" --smoke < /dev/null
 
-      # docs/26 E6/E7. Ten deterministic tasks against the fixture repo. No model
-      # involved, so a failure is always a real regression rather than sampling
-      # noise -- which is exactly why docs/11 prefers deterministic fixtures over
-      # small-n suites for a regression gate.
+      # Ten deterministic tasks against the fixture repo. No model involved, so a
+      # failure is always a real regression rather than sampling noise, which is
+      # why the regression gate prefers deterministic fixtures over small-n suites.
       - name: Deterministic eval suite
         shell: bash
         run: |
@@ -193,10 +212,10 @@ jobs:
           path: eval-records.jsonl
           if-no-files-found: ignore
 
-      # docs/26 B5. Gates the measurement spine against tools/bench/budgets.toml.
-      # Memory metrics are deterministic and gated tightly; timing metrics vary
-      # 26-131% run to run, so they are gated against the documented budget with
-      # a wide safety factor rather than against the last run (docs/28).
+      # Gates the measurement spine against tools/bench/budgets.toml. Memory
+      # metrics are deterministic and gated tightly; timing metrics vary 26-131%
+      # run to run, so they are gated against the documented budget with a wide
+      # safety factor rather than against the last run.
       - name: Benchmark budget gate
         shell: bash
         run: |
@@ -259,10 +278,7 @@ jobs:
 
       # Same trap as the build job: `--profile` sets the HOST context only, so
       # the BUILD profile still defaults to ~/.conan2/profiles/default, which a
-      # fresh runner does not have. The package job was tag-gated and had never
-      # run, so it carried this bug from the day it was written: the first tag
-      # failed all three platforms with "The default build profile ... doesn't
-      # exist" before it reached the build.
+      # fresh runner does not have.
       - name: Detect the default Conan profile
         run: conan profile detect --force
 
@@ -331,17 +347,14 @@ jobs:
           mkdir -p stage dist
           cp README.md LICENSE CHANGELOG.md THIRD-PARTY-NOTICES.md stage/
 
-          # The extensions are not optional, and this was a release-blocking
-          # omission: `providers` is what registers every model provider, so a
-          # binary shipped without it cannot run a single turn and says only
-          # "no provider named 'openai-chat-completions' is registered". The
+          # The extensions are not optional: `providers` registers every model
+          # provider, so a binary shipped without it cannot run a turn. The
           # binary resolves them from its own directory, so they travel next to it.
           cp -r extensions stage/extensions
 
           # The startup smoke test asserts the bundled extensions are present and
-          # load, which is exactly the check that would have caught the omission.
-          # It resolves them from the running executable, so it holds for a user's
-          # install and not only for a build tree.
+          # load. It resolves them from the running executable, so it holds for a
+          # user's install and not only for a build tree.
 
           if [ "${{ runner.os }}" = "Windows" ]; then
             # `mcode.exe` inside, because that is the name the installer looks for
@@ -360,10 +373,8 @@ jobs:
 
       # The archive is what a user runs, and it is not the build tree: it has no
       # source, no fixtures and no CMake definitions. This is the only check that
-      # exercises it, and it is here because the 0.0.2 archive shipped without
-      # `extensions/` -- so the binary had no provider, could not run a turn, and
-      # nothing in CI noticed. Unpack, run the smoke test from inside the
-      # unpacked directory, and fail on a non-zero exit.
+      # exercises it. Unpack, run the smoke test from inside the unpacked
+      # directory, and fail on a non-zero exit.
       - name: Smoke-test the packaged archive
         shell: bash
         run: |

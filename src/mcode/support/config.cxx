@@ -34,7 +34,6 @@ namespace mcode::config {
 			return std::filesystem::path{ value };
 		}
 
-		// only these two keys are read; a deeper permissions key would be silently dropped
 		auto validate_permission_key( const std::string_view key, const toml::value& entry )
 			-> status {
 			const auto under_permissions = key == "permissions" ||
@@ -103,7 +102,6 @@ namespace mcode::config {
 			}
 		}
 
-		// project scope may only add restrictions; anything else is rejected at load.
 		if ( level == scope::project ) {
 			for ( const auto& [ key, entry ] : parsed->keys( ) ) {
 				auto permitted = false;
@@ -141,8 +139,6 @@ namespace mcode::config {
 			} );
 
 		for ( auto& source : layers ) {
-			out.loaded_.push_back( source.level );
-
 			for ( auto& [ key, entry ] : source.values.keys( ) ) {
 				const auto existing = out.values_.find( key );
 
@@ -280,14 +276,12 @@ namespace mcode::config {
 	}
 
 	auto unconfigured_message( const std::string_view missing_key ) -> std::string {
-		// No `mcode: ` prefix: every caller adds it, and one that did not would
-		// print `mcode: mcode: ...`.
+		// no `mcode: ` prefix: every caller adds one.
 		auto out = std::string{ "no " };
 		out += missing_key;
 		out += " configured.\n\n";
 
-		// The user scope is the one a person can write; managed is the machine's
-		// and project is a repository's, so naming either would misdirect.
+		// the user scope is the one a person can write; managed and project are not.
 		auto target = std::filesystem::path{ };
 
 		for ( const auto& [ level, path ] : default_layer_paths( ) ) {
@@ -297,8 +291,7 @@ namespace mcode::config {
 		}
 
 		if ( !target.empty( ) ) {
-			// Preferred separators: the environment's `APPDATA` can carry forward
-			// slashes, and a path printed for a person to copy should not be mixed.
+			// the environment's `APPDATA` may carry forward slashes.
 			target.make_preferred( );
 
 			out += "  config file: " + target.string( ) + "\n";

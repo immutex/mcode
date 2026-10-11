@@ -32,10 +32,6 @@ namespace mcode::perm {
 	// single space between tokens, no quoting.
 	[[nodiscard]] auto canonical_argv( const std::vector< std::string >& argv ) -> std::string;
 
-	// absent when the path cannot be canonicalized, which would silently mismatch the entry.
-	[[nodiscard]] auto canonical_path_key( const std::filesystem::path& path )
-		-> std::optional< std::string >;
-
 	// a missing file is the normal first-run case; unparsable JSON is an error, fail closed.
 	class remember_store {
 	public:
@@ -43,7 +39,6 @@ namespace mcode::perm {
 
 		[[nodiscard]] auto load( ) -> result< std::optional< store_layer > >;
 
-		// atomic: sibling temp file plus rename, so a crash mid-write leaves the old contents.
 		[[nodiscard]] auto save( const store_layer& additions ) -> status;
 
 		[[nodiscard]] auto file( ) const noexcept -> const std::filesystem::path& {
@@ -79,7 +74,6 @@ namespace mcode::perm {
 		std::string resource;
 	};
 
-	// a file under the workspace root is the project's: drop every allow it carries.
 	[[nodiscard]] auto load_store_into( remember_store* store, const mcode::workspace& space,
 		store_layer& into, std::vector< std::string >& warnings ) -> status;
 

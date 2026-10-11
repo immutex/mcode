@@ -18,7 +18,6 @@ namespace mcode::ext {
 		inline constexpr auto NET_TIMEOUT_SECONDS = std::int64_t{ 30 };
 		inline constexpr auto NET_MAX_RESPONSE_BYTES = std::uint64_t{ 4 * 1024 * 1024 };
 
-		// the one policy check: both entry points go through it.
 		[[nodiscard]] auto host_allowed( const api_surface& self,
 			const std::string_view url, std::string& reason ) -> bool {
 			if ( !manifest_allows( self, "net" ) ) {

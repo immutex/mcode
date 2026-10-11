@@ -12,9 +12,7 @@
 
 namespace mcode::cli::detail {
 
-	// Only the models the compiled-in table prices. A model outside it needs
-	// a `[models."id"]` block, which the wizard names rather than silently
-	// writing a config that would refuse to run.
+	// Only the models the compiled-in table prices; others need a `[models."id"]` block.
 	[[nodiscard]] auto suggested_models( const std::size_t provider_index )
 		-> std::vector< std::string > {
 		switch ( provider_index ) {
@@ -22,14 +20,6 @@ namespace mcode::cli::detail {
 			default: return { };
 		}
 	}
-
-	// -------------------------------------------------------------------
-	// Config writing. The file is edited as text: the `[model]` section is
-	// replaced or appended and everything else, including the
-	// `[models."..."]` pricing blocks and their comments, is preserved byte
-	// for byte. Parsing and re-serialising would need a TOML writer that
-	// does not exist, and would drop the rationale those comments carry.
-	// -------------------------------------------------------------------
 
 	[[nodiscard]] auto escape_toml( const std::string_view text ) -> std::string {
 		auto out = std::string{ };
@@ -74,17 +64,11 @@ namespace mcode::cli::detail {
 		return out;
 	}
 
-	// Replaces the `[model]` section in place, or appends one.
-	//
-	// Line-based rather than offset-based, because a config edited on Windows
-	// carries CRLF endings and a check for a bare `\n` after the header would
-	// miss it and append a SECOND `[model]` section. Two sections with the
-	// same name are a duplicate-key error at load, so that failure would land
-	// on the user's next start rather than here.
+	// Line-based, because a CRLF config would miss a bare `\n` check and gain a
+	// second `[model]`, which the loader then rejects as a duplicate key.
 	[[nodiscard]] auto splice_section( const std::string_view existing,
 		const std::string& section ) -> std::string {
-		// Split preserving nothing; the ending is reapplied from the original
-		// dominant style so the file is not half-converted.
+		// The ending is reapplied from the file's dominant style, so it is not half-converted.
 		auto lines = std::vector< std::string >{ };
 		auto endings = std::string{ };
 		auto cursor = std::size_t{ 0 };
@@ -120,7 +104,6 @@ namespace mcode::cli::detail {
 			endings = "\n";
 		}
 
-		// The replacement, split the same way so it joins the same file.
 		auto replacement = std::vector< std::string >{ };
 		auto section_cursor = std::size_t{ 0 };
 
@@ -135,11 +118,8 @@ namespace mcode::cli::detail {
 			section_cursor = next + 1;
 		}
 
-		// A TOML table header, ignoring the indentation, trailing space and
-		// trailing comment that TOML allows. Exact equality missed
-		// `[model] # my provider`, so the append branch ran and wrote a
-		// SECOND `[model]` -- which the loader then rejects as a duplicate
-		// key, leaving the user's config unreadable until they hand-edit it.
+		// A TOML header, ignoring the indentation, trailing space and comment TOML
+		// allows: exact equality missed `[model] # my provider` and appended a second.
 		const auto header_name = []( const std::string& text )
 			-> std::optional< std::string > {
 			auto header_start = std::size_t{ 0 };
@@ -185,14 +165,12 @@ namespace mcode::cli::detail {
 		}( );
 
 		if ( start == lines.size( ) ) {
-			// Not present: append, with a blank separator when the file is not empty.
 			if ( !lines.empty( ) && !lines.back( ).empty( ) ) {
 				lines.emplace_back( std::string{ } );
 			}
 
 			lines.insert( lines.end( ), replacement.begin( ), replacement.end( ) );
 		} else {
-			// The section runs to the next header, or to the end of the file.
 			auto end = start + 1;
 
 			while ( end < lines.size( ) && !is_header( lines[ end ] ) ) {
@@ -240,8 +218,8 @@ namespace mcode::cli::detail {
 		return out;
 	}
 
-	// Writes beside the target and renames, so an interrupted run cannot
-	// leave a half-written config that the next start would refuse.
+	// Writes beside the target and renames, so an interrupted run leaves no
+	// half-written config that the next start would refuse.
 	[[nodiscard]] auto write_text_file( const std::filesystem::path& path,
 		const std::string_view content ) -> bool {
 		auto error = std::error_code{ };
@@ -276,8 +254,7 @@ namespace mcode::cli::detail {
 			return true;
 		}
 
-		// A rename onto a file that is open fails on Windows; a copy still
-		// completes the write rather than losing the user's settings.
+		// Rename onto an open file fails on Windows; the copy still completes the write.
 		std::filesystem::copy_file( temporary, path,
 			std::filesystem::copy_options::overwrite_existing, error );
 		std::remove( temporary.c_str( ) );
@@ -295,14 +272,6 @@ namespace mcode::cli::detail {
 
 		return *directory / CONFIG_FILE_NAME;
 	}
-
-	// -------------------------------------------------------------------
-	// Verification. The strongest check available is the one the user is
-	// about to run: write the config, then run a real turn with it. That
-	// exercises the descriptor, the endpoint, the credential and the
-	// streaming parser, so a success here is the whole path working rather
-	// than a hand-rolled request that might not match it.
-	// -------------------------------------------------------------------
 
 	[[nodiscard]] auto self_path( ) -> std::filesystem::path {
 		const auto directory = mcode::platform::executable_directory( );

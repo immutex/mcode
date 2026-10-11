@@ -58,15 +58,9 @@ namespace mcode::model {
 
 	auto delta_applier::resolve_pending( const std::optional< std::int64_t > wire_index,
 		const std::string_view id_fragment, const std::string_view name_fragment ) -> pending_call& {
-		// The index is optional on the wire and unreliable when present: absent on some
-		// gateways, pinned at zero on others, so it cannot identify a call on its own. A
-		// fragment that contradicts what the candidate already holds belongs to the next call
-		// instead - which is exactly what a constant index looks like across two calls.
-		//
-		// The id is decisive because it is unique per call and arrives whole. Names repeat
-		// across calls, so a differing name only starts a new call when neither value is a
-		// prefix of the other, which distinguishes a genuine second call from a name split
-		// across fragments.
+		// The id is decisive because it is unique per call and arrives whole; a differing name
+		// starts a new call only when neither value is a prefix of the other, which separates a
+		// genuine second call from a name split across fragments.
 		const auto is_extension = []( const std::string_view stored, const std::string_view value ) {
 			return stored.starts_with( value ) || value.starts_with( stored );
 		};
@@ -95,7 +89,6 @@ namespace mcode::model {
 				return nullptr;
 			}
 
-			// Without an index the newest call is the only candidate.
 			return pending_.empty( ) ? nullptr : &pending_.back( );
 		};
 
@@ -198,9 +191,6 @@ namespace mcode::model {
 			}
 		}
 
-		// The index is optional on the wire and is unreliable when present: absent on some
-		// gateways, pinned at zero on others. It selects the call a fragment extends; when it
-		// disagrees with what has already accumulated, the fragment starts a new call instead.
 		const auto wire_index = optional_int( *parsed, descriptor_.stream.tool_call_index );
 
 		if ( wire_index && ( *wire_index < 0 || *wire_index >= MAX_PARALLEL_CALLS ) ) {
@@ -225,7 +215,7 @@ namespace mcode::model {
 				name_fragment.value_or( std::string{ } ) );
 
 			// A fragment that extends what is accumulated is that same value re-sent, so it
-			// replaces rather than duplicates; a genuine continuation is appended.
+			// replaces rather than duplicates.
 			const auto absorb = []( std::string& target, const std::string& fragment ) {
 				if ( fragment.empty( ) ) {
 					return;
@@ -242,7 +232,6 @@ namespace mcode::model {
 			absorb( call.name, name_fragment.value_or( std::string{ } ) );
 			absorb( call.args_fragments, args_fragment.value_or( std::string{ } ) );
 
-			// emitted on any fragment, not only once a name is known.
 			auto event = chat_event{ };
 			event.type = chat_event::kind::tool_call_delta;
 			event.index = call.ordinal;

@@ -19,8 +19,7 @@ namespace {
 
 		harness( ) : parser{ [this]( sse_event&& event ) { events.push_back( std::move( event ) ); } } { }
 
-		// `[[nodiscard]]`, and the tests that care about a refusal call the
-		// parser directly; this helper is for the ones that do not.
+		// the tests that care about a refusal call the parser directly.
 		auto feed( const std::string_view chunk ) -> void { std::ignore = parser.feed( chunk ); }
 	};
 
@@ -194,9 +193,8 @@ TEST_CASE( "malformed JSON in a data payload is an error", "[sse]" ) {
 }
 
 TEST_CASE( "an over-long event is refused, not grown without bound", "[sse]" ) {
-	// An event is only dispatched on a blank line, so a stream that never sends
-	// one grew `current_.data` for as long as the server kept writing. The class
-	// declared MAX_EVENT_BYTES for exactly this and never enforced it.
+	// An event is only dispatched on a blank line, so a stream that never sends one
+	// grows the buffer for as long as the server keeps writing.
 	auto events = std::vector< sse_event >{ };
 	auto parser = sse_parser{ [ & ]( sse_event&& value ) { events.push_back( std::move( value ) ); } };
 
@@ -211,9 +209,6 @@ TEST_CASE( "an over-long event is refused, not grown without bound", "[sse]" ) {
 }
 
 TEST_CASE( "a line with no terminator is refused past the line cap", "[sse]" ) {
-	// The old code cleared the buffer and carried on, which left the parser
-	// mid-stream: the rest of that line was re-read as a fresh field and the event
-	// was assembled from the wrong bytes.
 	auto events = std::vector< sse_event >{ };
 	auto parser = sse_parser{ [ & ]( sse_event&& value ) { events.push_back( std::move( value ) ); } };
 

@@ -30,7 +30,7 @@ namespace mcode::ext {
 		// A project extension with no grant. It is read and hashed, never executed.
 		ungranted,
 		denied,
-		// Granted, but the bytes no longer match the grant. Never auto-regranted.
+		// Granted, but the bytes do not match the grant. Never auto-regranted.
 		changed,
 	};
 
@@ -41,9 +41,7 @@ namespace mcode::ext {
 		std::filesystem::path directory;
 		std::vector< std::string > tools;
 
-		// Carried on the report so a reader can describe what is loaded without
-		// reaching back into the live surfaces, which the report deliberately
-		// does not expose. `/extensions` reports from here.
+		// copied out of the surface: the report does not expose live surfaces.
 		std::string version;
 		std::string description;
 
@@ -59,8 +57,7 @@ namespace mcode::ext {
 		std::string reason;
 	};
 
-	// A candidate that was not executed. Not a failure: the session continues and
-	// the reason is reported, because "a repo extension did nothing" must be visible.
+	// not a failure: an extension that did nothing must still be visible in the report.
 	struct load_inert {
 		std::string name;
 		std::filesystem::path directory;
@@ -103,7 +100,7 @@ namespace mcode::ext {
 	};
 
 
-	// the surface is owned by the caller and must outlive the VM it was installed into.
+	// the surface is owned by the caller and must outlive its VM.
 	struct registration {
 		lua_host& host;
 		api_surface& surface;
@@ -120,10 +117,9 @@ namespace mcode::ext {
 		std::uint64_t memory_limit_bytes = 0;
 		std::chrono::milliseconds time_limit = DEFAULT_TIME_LIMIT;
 
-		// The workspace's own extension root. A candidate beneath it is a project
-		// extension and is inert until a grant matches its tree digest; everything
-		// outside it (the user root, the bundled root) is trusted by location, as
-		// `19` specifies. Empty means no project scope is in play.
+		// The workspace's own extension root. A candidate beneath it is a project extension
+		// and is inert until a grant matches its tree digest; everything outside it (the
+		// user and bundled roots) is trusted by location; empty means no project scope.
 		std::filesystem::path project_root;
 
 		// Defaults to the machine trust store when null.
@@ -137,9 +133,7 @@ namespace mcode::ext {
 		model::provider_registry& providers, hook_registry& hooks,
 		const loader_options& options = { } ) -> load_result;
 
-	// Loads the machine trust store and gates the workspace's project root with it.
-	// One implementation, so session, exec and the smoke test cannot disagree about
-	// which directory needs a grant.
+	// loads the machine trust store and gates the workspace's project root with it.
 	[[nodiscard]] auto load_workspace_extensions( const std::filesystem::path& workspace,
 		const std::vector< std::filesystem::path >& roots,
 		model::provider_registry& providers, hook_registry& hooks,
@@ -163,9 +157,7 @@ namespace mcode::ext {
 	[[nodiscard]] auto default_roots( const std::filesystem::path& workspace )
 		-> std::vector< std::filesystem::path >;
 
-	// The one root whose contents arrived with the repository, and so the only one
-	// that needs a grant. One spelling, because the loader's gate and the CLI's
-	// grant command must agree on exactly which directory that is.
+	// the only root whose contents arrived with the repository, so the only one needing a grant.
 	[[nodiscard]] auto project_extension_root( const std::filesystem::path& workspace )
 		-> std::filesystem::path;
 

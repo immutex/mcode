@@ -13,12 +13,6 @@ namespace mcode::net {
 		std::string event;
 		std::string data;
 		std::string id;
-
-		// The server's reconnect hint. Parsed because a field the parser does not
-		// recognise would be read as event data, and nothing consumes it: mcode
-		// streams one response rather than holding an EventSource open, so there is
-		// no reconnect to schedule. `Retry-After` on a 429 is a different mechanism
-		// and is handled in the model client.
 		std::string retry;
 	};
 
@@ -31,13 +25,8 @@ namespace mcode::net {
 
 		explicit sse_parser( event_callback on_event ) : on_event_( std::move( on_event ) ) { }
 
-		// Fallible, because both bounds below are real: a line longer than
-		// `MAX_LINE_BYTES` and an event whose data exceeds `MAX_EVENT_BYTES` are
-		// both refusals, not truncations. Discarding the over-long line and
-		// carrying on left the parser mid-stream, re-reading the remainder as a
-		// fresh field, and an event that never terminated grew `current_.data`
-		// without bound. Neither is recoverable by guessing, so the stream fails
-		// and the caller reports it rather than parsing garbage.
+		// Fallible, because both bounds below are refusals rather than truncations, and
+		// neither is recoverable by guessing.
 		[[nodiscard]] auto feed( std::string_view chunk ) -> status;
 		auto finish( ) -> void;
 

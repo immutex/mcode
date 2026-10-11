@@ -30,13 +30,12 @@ namespace mcode::ext {
 		std::filesystem::path root;
 	};
 
-	// Line-oriented and tab-separated rather than TOML: this file is written and
-	// read on a security path, and an exact field count fails closed on
-	// corruption where a TOML parse would invite a defaulted field.
+	// Tab-separated with an exact field count rather than TOML: this file is read on a
+	// security path, where a TOML parse would invite a defaulted field on corruption.
 	class trust_store {
 	public:
-		// An absent store reads as empty, which means every project extension is
-		// inert. That is the correct first-run default, not an error.
+		// an absent store reads as empty, which is the first-run default for every project
+		// extension, not an error.
 		trust_store( ) = default;
 
 		[[nodiscard]] static auto default_path( ) -> result< std::filesystem::path >;
@@ -57,7 +56,6 @@ namespace mcode::ext {
 
 		// Temp file plus rename: a crash cannot truncate the store into an empty allow-list.
 		auto grant( const trust_record& record ) -> status;
-		auto revoke( const trust_scope scope, std::string_view name ) -> status;
 
 		// Writes a record set to a path without going through an instance, so the
 		// caller's copy is only replaced once the bytes are safely on disk.

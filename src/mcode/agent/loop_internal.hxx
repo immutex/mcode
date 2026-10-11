@@ -13,9 +13,8 @@ namespace mcode::loop_internal {
 	inline constexpr std::string_view NEAR_BUDGET_NOTE =
 		"budget nearly exhausted - wrap up or report blockers";
 
-	// A response cut off by the output limit is a distinct failure from a malformed one: the
-	// arguments are a valid prefix of a call that was never finished, so no repair can recover
-	// them. Matched case-insensitively against the provider's own finish reason.
+	// Arguments cut off by the output limit are a valid prefix of a call that was
+	// never finished, so no repair can recover them.
 	inline constexpr std::string_view TRUNCATION_STOP_REASONS[] = {
 		"length",
 		"max_tokens",
@@ -53,7 +52,6 @@ namespace mcode::loop_internal {
 		return false;
 	}
 
-	// the finish reason the provider reported for the turn, empty when it reported none.
 	[[nodiscard]] inline auto turn_stop_reason( const std::vector< model::chat_event >& events )
 		-> std::string {
 		for ( auto index = events.rbegin( ); index != events.rend( ); ++index ) {
@@ -129,9 +127,9 @@ namespace mcode::loop_internal {
 		for ( const auto& event : events ) {
 			switch ( event.type ) {
 				case model::chat_event::kind::tool_call_delta: {
-					// The applier emits the accumulated name and id on every fragment, so the
-					// last write for an index is the complete value; registering the index even
-					// when it is still empty keeps an incomplete call visible to the loop.
+					// The applier repeats the accumulated name and id on every fragment, so
+					// the last write for an index is the complete value; registering the
+					// index while it is still empty keeps an incomplete call visible.
 					names[ event.index ] = event.tool_name;
 					ids[ event.index ] = event.tool_call_id;
 

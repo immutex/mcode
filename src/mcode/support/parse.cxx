@@ -76,7 +76,7 @@ namespace mcode::support {
 			auto explicit_exponent = 0;
 
 			while ( index < text.size( ) && is_digit( text[ index ] ) ) {
-				// bounded before the multiply: an overflowing exponent is UB.
+				// an unbounded exponent would overflow the multiply, which is UB.
 				if ( explicit_exponent > MAX_DECIMAL_EXPONENT ) {
 					return false;
 				}
@@ -122,7 +122,6 @@ namespace mcode::support {
 				std::pow( 10.0, static_cast< double >( -exponent - MAX_POW10_EXPONENT ) );
 		}
 
-		// overflow became infinity and underflow became zero.
 		if ( !std::isfinite( value ) ) {
 			return false;
 		}

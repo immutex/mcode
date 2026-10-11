@@ -12,11 +12,9 @@ namespace mcode::cli {
 
 	namespace {
 
-		// The mention picker's rows are paths, so they carry no prefix.
 		inline constexpr std::string_view COMMAND_PREFIX = "/";
 
-		// One comparison, so the three history tiers cannot drift apart on
-		// what "case-insensitive" means.
+		// One comparison, so the three history tiers cannot drift apart on "case-insensitive".
 		[[nodiscard]] auto folded_equal( const char left, const char right ) -> bool {
 			const auto fold = []( const char value ) {
 				return std::tolower( static_cast< unsigned char >( value ) );
@@ -139,9 +137,7 @@ namespace mcode::cli {
 			return out;
 		}
 
-		// Newest first: the entry the user most likely wants is the one they
-		// just submitted, so the search runs backwards and the result keeps
-		// that order.
+		// Newest first, so the result keeps the order the search walks.
 		const auto collect = [ & ]( const auto& accepted ) {
 			for ( auto index = entries.size( ); index > 0; --index ) {
 				if ( out.size( ) >= limit ) {
@@ -198,10 +194,6 @@ namespace mcode::cli {
 		}
 	}
 
-	// What the `/resume` picker filters on: the input with the command word and
-	// its separator removed, so typing after `/resume ` narrows the rows. The
-	// command palette keeps its own sigil handling; this is the same idea for a
-	// command whose argument is the selection.
 	[[nodiscard]] auto session_query( const std::string_view input ) -> std::string_view {
 		auto query = input;
 
@@ -230,8 +222,6 @@ namespace mcode::cli {
 			case palette_source::history:
 				return row.name;
 			case palette_source::sessions:
-				// Tab on a session row puts the command in the prompt rather than
-				// running it, so it can be edited -- the same form Enter submits.
 				return std::string{ "/" } + row.name;
 			case palette_source::commands:
 				break;
@@ -250,8 +240,7 @@ namespace mcode::cli {
 		if ( source_ == palette_source::mentions ) {
 			refresh_mention_palette( palette, *sources_.files, input );
 
-			// The mention closed, so the same keystroke is re-read as a
-			// command query rather than costing a second keystroke.
+			// The mention closed, so the same keystroke is re-read as a command query.
 			if ( !palette.open ) {
 				source_ = palette_source::commands;
 			}
@@ -291,9 +280,7 @@ namespace mcode::cli {
 
 			description += mcode::text::human_bytes( session.size_bytes );
 
-			// The opening request is what actually identifies a session to a
-			// person: an id and a timestamp do not. Empty for a log written before
-			// transcript recording, which is itself worth seeing in the row.
+			// The opening request identifies a session to a person; an id and a timestamp do not.
 			if ( auto opening = mcode::cli::session_opening_line( session.path );
 				!opening.empty( ) ) {
 				description += "  ";
@@ -302,8 +289,6 @@ namespace mcode::cli {
 				description += "  (no recorded prompt)";
 			}
 
-			// The row's name is the command's own argument, so submitting the row
-			// runs `/resume <id>` -- the same line typing it would produce.
 			rows.push_back( mcode::tui::slash_command{
 				"resume " + session.id, std::move( description ) } );
 		}
@@ -318,9 +303,7 @@ namespace mcode::cli {
 		palette.prefix.clear( );
 		palette.matches.clear( );
 
-		// A substring over the whole row, not the ranked match the command palette
-		// uses: a session is identified by a word inside its opening request, which
-		// is not a prefix of anything.
+		// A substring over the whole row, not the ranked match the command palette uses.
 		auto folded_query = std::string{ query };
 		std::transform( folded_query.begin( ), folded_query.end( ), folded_query.begin( ),
 			[]( const unsigned char character ) {
@@ -354,8 +337,7 @@ namespace mcode::cli {
 		const std::string_view query ) -> palette_source {
 		source_ = palette_source::sessions;
 
-		// A picker with no source wired stays on the commands rather than opening
-		// an empty list, which would look like a workspace with no sessions.
+		// No source wired stays on the commands rather than opening an empty list.
 		if ( sources_.sessions == nullptr ) {
 			source_ = palette_source::commands;
 

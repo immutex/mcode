@@ -231,6 +231,7 @@ add_executable(mcode main.cxx
     mcode/cli/repl_events.cxx
     mcode/cli/repl_plain.cxx
     mcode/cli/repl_tui.cxx
+    mcode/cli/repl_turn.cxx
     mcode/cli/repl_view.cxx
     mcode/cli/session.cxx
     mcode/smoke/cli_extensions.cxx

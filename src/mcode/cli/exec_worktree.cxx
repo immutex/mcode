@@ -10,9 +10,7 @@
 
 namespace mcode::cli {
 
-	// Creates a git worktree beside the checkout and returns its path. The worktree is the
-	// blast-radius limit: an unattended run cannot touch the user's working tree, and the
-	// rollback is `git worktree remove` rather than a snapshot store.
+	// The blast-radius limit: an unattended run cannot touch the user's working tree.
 	auto create_worktree( const std::filesystem::path& workspace_root,
 		const std::string_view name ) -> result< std::filesystem::path > {
 		auto git = mcode::find_executable( "git" );
@@ -22,10 +20,8 @@ namespace mcode::cli {
 				"--worktree needs git on PATH: " + git.error( ).msg ) );
 		}
 
-		// The workspace root must be the repository root itself. `git worktree add` walks up
-		// to an enclosing repository, so a directory that merely sits inside one would
-		// silently check out the WRONG project - and in a plain directory under a repository
-		// it would appear to succeed. Asking for the top level and comparing refuses both.
+		// `git worktree add` walks up to an enclosing repository, so a directory that
+		// merely sits inside one would silently check out the wrong project.
 		auto top = mcode::process_options{ };
 		top.executable = *git;
 		top.args = { "rev-parse", "--show-toplevel" };
@@ -57,8 +53,7 @@ namespace mcode::cli {
 				"project" ) );
 		}
 
-		// A short unique suffix keeps two runs from colliding without requiring the caller
-		// to name each one.
+		// A short unique suffix keeps two runs from colliding without the caller naming each one.
 		auto label = std::string{ name };
 
 		if ( label.empty( ) ) {
@@ -84,8 +79,8 @@ namespace mcode::cli {
 				"could not create a worktree: " + ran.error( ).msg ) );
 		}
 
-		// A non-zero exit means git refused, and its stderr says why. Surfacing it verbatim
-		// is the only way the caller learns the directory is not a repository.
+		// git's own stderr says why it refused, and surfacing it verbatim is the only way
+		// the caller learns the directory is not a repository.
 		if ( ran->exit_code != 0 ) {
 			auto detail = ran->stderr_text;
 

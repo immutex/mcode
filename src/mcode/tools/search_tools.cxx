@@ -44,12 +44,8 @@ namespace mcode::tools {
 						std::to_string( DEFAULT_GLOB_LIMIT ) + " paths", false );
 			}
 
-			// Clamped before the cast and the multiply below. The value is the
-			// model's own, and an unbounded one overflows `max_results *
-			// search_walk::GLOB_BUDGET_PER_RESULT` to a small number -- which would shrink the
-			// walk budget rather than grow it, and the caller asked for MORE
-			// results. The ceiling is what the walk can actually afford to
-			// enumerate, not a limit on what may be returned.
+			// An unbounded value overflows `max_results * GLOB_BUDGET_PER_RESULT` to a small
+			// number, shrinking the walk budget rather than growing it, so it is clamped here.
 			const auto bounded = std::min< std::int64_t >( *requested, search_walk::MAX_GLOB_LIMIT );
 			max_results = static_cast< std::size_t >( bounded );
 		}
@@ -130,13 +126,9 @@ namespace mcode::tools {
 				MAX_GREP_MATCHES ) );
 		}
 
-		// `std::regex` cannot be interrupted mid-match, so a wall-clock budget
-		// between lines does not help: the measured cost was 13 s inside ONE
-		// `regex_search` on a 26-character line, and the line cap does not bound
-		// that. The only bound available at this seam is to refuse the pattern
-		// shapes whose cost is exponential -- a quantifier applied to a group
-		// that itself contains a quantifier, which is the classic `(a+)+$`.
-		// Refusing is honest: a silent 13-second stall reads as a hang.
+		// `std::regex` cannot be interrupted mid-match, so a wall-clock budget does not
+		// bound the exponential shapes -- `(a+)+$` measured at seconds for a 26-character
+		// line. The only bound available here is to refuse those shapes rather than stall.
 		if ( search_walk::has_nested_quantifier( *pattern ) ) {
 			return error_result( "regex rejected: nested quantifiers backtrack "
 				"exponentially and cannot be time-bounded here",
@@ -289,11 +281,8 @@ namespace mcode::tools {
 			auto start = std::size_t{ 0 };
 
 			while ( start < safe.size( ) && count < max_matches ) {
-				// `std::regex` backtracks, and the line cap does not bound that:
-				// a pattern like `(a+)+$` against 8 KiB of `a` is exponential in
-				// the line length, measured at seconds for a 26-character line.
-				// The budget is wall clock rather than a step count because the
-				// matcher gives no way to interrupt it mid-call.
+				// The budget is wall clock rather than a step count because the matcher
+				// gives no way to interrupt it mid-call.
 				if ( std::chrono::steady_clock::now( ) >= deadline ) {
 					timed_out = true;
 

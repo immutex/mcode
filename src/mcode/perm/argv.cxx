@@ -109,16 +109,6 @@ namespace mcode::perm {
 					auto closed = false;
 
 					while ( index < command.size( ) ) {
-						// Inside double quotes a backslash escapes the next character,
-						// so `\"` is a literal quote rather than the end of the string.
-						// Without this the quote closed early and the text after it was
-						// scanned as unquoted: `node -e "...||..."` was refused because
-						// a `|` the model had escaped into the program's argument was
-						// read as a pipe.
-						//
-						// Only the characters sh treats as escapable here, and the
-						// backslash survives before anything else. Dropping it always
-						// would turn a `"C:\Users\x"` path into `C:Usersx`.
 						if ( quote == '"' && command[ index ] == '\\' &&
 							index + 1 < command.size( ) &&
 							is_escaped_in_double_quotes( command[ index + 1 ] ) ) {
@@ -146,12 +136,8 @@ namespace mcode::perm {
 					continue;
 				}
 
-				// Only an UNQUOTED metacharacter means the model expected a shell.
-				// Nothing runs a shell -- the tokens below become argv directly --
-				// so a quoted `;` or `<` is literal data the program receives.
-				// Refusing it rejected legitimate commands: a `grep -A 34 '<header>'`
-				// and every `python3 -c '...; ...'` one-liner were all refused, which
-				// cost the model five wasted turns in one measured run.
+				// Only an unquoted metacharacter means the model expected a shell; a
+				// quoted one is literal data the program receives.
 				if ( is_metachar( character ) || character == '$' || character == '%' ) {
 					return std::nullopt;
 				}
@@ -192,7 +178,6 @@ namespace mcode::perm {
 
 			++index;
 
-			// `NAME=VALUE`, `--` and the wrapper's own flags, in whatever order they appear.
 			while ( index < argv.size( ) ) {
 				const auto& token = argv[ index ];
 
@@ -209,7 +194,7 @@ namespace mcode::perm {
 				index += 1 + flag_operand_count( program, token );
 			}
 
-			// `timeout` takes exactly one duration operand before the program it runs.
+			// `timeout` takes exactly one duration operand ahead of the program it runs.
 			if ( is_timeout( program ) && index < argv.size( ) ) {
 				++index;
 			}

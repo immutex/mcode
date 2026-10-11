@@ -6,11 +6,9 @@ using namespace mcode;
 
 TEST_CASE( "a property name with a slash is not a pointer into another property",
 	"[tools][schema]" ) {
-	// The key is the model's own argument name, and a JSON Pointer gives `/` and
-	// `~` meaning. Unescaped, a key of `a/b` resolved to the nested node
-	// `properties.a.b`, so the argument was validated against a DIFFERENT
-	// property's type -- a bypass of both `additionalProperties: false` and enum
-	// membership.
+	// A JSON Pointer gives `/` and `~` meaning, so an unescaped key of `a/b` resolved
+	// into `properties.a` and validated the argument against a different property's
+	// type.
 	const auto schema = R"({
 		"type": "object",
 		"properties": {
@@ -19,8 +17,6 @@ TEST_CASE( "a property name with a slash is not a pointer into another property"
 		"additionalProperties": false
 	})";
 
-	// `a/b` is not a declared parameter: only `a` is. With an unescaped pointer
-	// the lookup walked into `properties.a`, found `string`, and accepted 123.
 	const auto faults = tools::check_arguments( schema, R"({ "a/b": 123 })" );
 
 	REQUIRE( static_cast< bool >( faults ) );
@@ -30,8 +26,7 @@ TEST_CASE( "a property name with a slash is not a pointer into another property"
 }
 
 TEST_CASE( "a tilde in a property name is not a pointer escape", "[tools][schema]" ) {
-	// `~1` is how a pointer spells `/`, so an unescaped `~` lets one property name
-	// address another. `a~1b` must be looked up as a literal name, not decoded.
+	// `~1` spells `/`, so an unescaped `~` lets one property name address another.
 	const auto schema = R"({
 		"type": "object",
 		"properties": {

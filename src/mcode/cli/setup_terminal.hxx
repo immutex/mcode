@@ -13,21 +13,16 @@
 #include "mcode/tui/theme.hxx"
 #include "mcode/tui/tty.hxx"
 
-// The wizard's terminal surface: the colour painter, the line and menu
-// reader, and the two output helpers. Split from the flow, which does not
-// need to know how a row is coloured.
 namespace mcode::cli::detail {
 
 	using tui::token;
 
-	// A verification turn that never returns is worse than a failed one.
 	inline constexpr std::uint32_t SETUP_READ_TIMEOUT_MS = 300'000;
 
 	inline constexpr std::size_t RULE_WIDTH = 62;
 	inline constexpr std::size_t MAX_DIGIT_CHOICE = 9;
 
-	// One SGR wrapper for both the painter and the reader. They each had their
-	// own copy, so a change to the escape sequence reached one and not the other.
+	// Shared by the painter and the reader, so an escape-sequence change reaches both.
 	[[nodiscard]] inline auto paint_text( const tui::capabilities& caps, const token colour,
 		const std::string_view text, const bool bold ) -> std::string {
 		const auto code = tui::token_color( colour, caps.depth );
@@ -99,11 +94,6 @@ namespace mcode::cli::detail {
 		std::fflush( stdout );
 	}
 
-	// -------------------------------------------------------------------
-	// Input. One reader, so the interactive and scripted paths behave the
-	// same and a closed stdin is reported rather than read as empty.
-	// -------------------------------------------------------------------
-
 	class reader {
 	public:
 		explicit reader( tui::tty_session& terminal ) : terminal_( terminal ) { }
@@ -121,8 +111,6 @@ namespace mcode::cli::detail {
 			return value;
 		}
 
-		// An arrow-key menu. The highlight starts on `preselected`, so Enter
-		// takes the recommended answer, and a digit jumps straight to a row.
 		[[nodiscard]] auto choose( const std::string& title,
 			const std::vector< std::string >& options,
 			const std::vector< std::string >& notes, const std::size_t preselected )
@@ -202,8 +190,7 @@ namespace mcode::cli::detail {
 					continue;
 				}
 
-				// Move back over the menu and repaint it, rather than clearing
-				// the screen, so the banner stays visible.
+				// Repaints over the menu rather than clearing, so the banner stays visible.
 				std::fprintf( stdout, "\x1b[%zuA", drawn );
 				std::fflush( stdout );
 
@@ -211,7 +198,6 @@ namespace mcode::cli::detail {
 			}
 		}
 
-		// A secret is read the same way and simply never echoed back.
 		[[nodiscard]] auto secret( const std::string& prompt )
 			-> std::optional< std::string > {
 			return line( prompt );

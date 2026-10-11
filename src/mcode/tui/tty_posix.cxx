@@ -21,8 +21,7 @@ namespace mcode::tui {
 
 	namespace {
 
-		// Raw mode disables echo, so erasing a character is the session's job:
-		// backspace, blank over the cell, backspace again.
+		// Raw mode disables echo, so erasing a character is the session's job.
 		inline constexpr std::string_view ERASE_SEQUENCE = "\b \b";
 
 		// Wheel only: 1000 is the report mode, 1006 the SGR encoding.
@@ -31,10 +30,9 @@ namespace mcode::tui {
 		inline constexpr std::string_view MOUSE_DISABLE_SEQUENCE =
 			"\x1b[?1006l\x1b[?1000l";
 
-		// How long `poll_resize` waits between checks of the flag.
 		inline constexpr int RESIZE_POLL_SLICE_MS = 10;
 
-		// the handler runs on the interrupted stack: one atomic flag only
+		// Runs on the interrupted stack: one atomic flag only.
 		volatile std::sig_atomic_t g_sigwinch_flag = 0;
 		struct sigaction g_saved_sigwinch = { };
 		bool g_sigwinch_installed = false;
@@ -72,8 +70,7 @@ namespace mcode::tui {
 
 		auto raw = session.saved_termios_;
 
-		// cfmakeraw's effect, spelled out: no echo, no canonical line
-		// editing, no signals from the keyboard.
+		// cfmakeraw's effect, spelled out.
 		raw.c_lflag &= static_cast< unsigned int >( ~( ECHO | ICANON | ISIG | IEXTEN ) );
 		raw.c_iflag &= static_cast< unsigned int >( ~( IXON | ICRNL | BRKINT | INPCK | ISTRIP ) );
 		raw.c_oflag &= static_cast< unsigned int >( ~OPOST );
@@ -86,7 +83,6 @@ namespace mcode::tui {
 		}
 
 		session.saved_ = true;
-		session.raw_active_ = true;
 		session.attached_ = true;
 
 		// SA_RESTART; select is exempt, its EINTR is handled below
@@ -106,8 +102,6 @@ namespace mcode::tui {
 			tty_environment( "TERM" ), tty_environment( "NO_COLOR" ) == "1", has_tty,
 			tty_environment( "MCODE_AMBIGUOUS_WIDTH" ) );
 
-		// Wrapped here and unwrapped in `restore`, the same place the mouse
-		// mode is handled, so the pair cannot drift apart.
 		if ( session.caps_.bracketed_paste ) {
 			session.write( BRACKETED_PASTE_ENABLE );
 		}
@@ -116,13 +110,12 @@ namespace mcode::tui {
 	}
 
 	tty_session::tty_session( tty_session&& other ) noexcept
-		: caps_( other.caps_ ), raw_active_( other.raw_active_ ),
+		: caps_( other.caps_ ),
 		attached_( other.attached_ ), mouse_reporting_( other.mouse_reporting_ ),
 		resize_pending_( other.resize_pending_ ), saved_( other.saved_ ),
 		saved_termios_( other.saved_termios_ ) {
 		other.attached_ = false;
 		other.saved_ = false;
-		other.raw_active_ = false;
 		other.mouse_reporting_ = false;
 		other.resize_pending_ = false;
 	}
@@ -132,7 +125,6 @@ namespace mcode::tui {
 			restore( );
 
 			caps_ = other.caps_;
-			raw_active_ = other.raw_active_;
 			attached_ = other.attached_;
 			mouse_reporting_ = other.mouse_reporting_;
 			resize_pending_ = other.resize_pending_;
@@ -141,7 +133,6 @@ namespace mcode::tui {
 
 			other.attached_ = false;
 			other.saved_ = false;
-			other.raw_active_ = false;
 			other.mouse_reporting_ = false;
 			other.resize_pending_ = false;
 		}
@@ -155,7 +146,6 @@ namespace mcode::tui {
 		}
 
 		saved_ = false;
-		raw_active_ = false;
 		resize_pending_ = false;
 
 		if ( mouse_reporting_ ) {
@@ -163,9 +153,7 @@ namespace mcode::tui {
 			write( MOUSE_DISABLE_SEQUENCE );
 		}
 
-		// Paired with the enable in `create`, on every path that saved the
-		// console: the shell that runs next must not inherit a terminal that
-		// keeps wrapping its pastes in markers.
+		// The shell that runs next must not inherit a paste-wrapping terminal.
 		if ( caps_.bracketed_paste ) {
 			write( BRACKETED_PASTE_DISABLE );
 		}
@@ -213,8 +201,7 @@ namespace mcode::tui {
 		auto got_enter = false;
 		auto got_eof = false;
 
-		// One deadline for the whole line: re-arming per byte meant a slow
-		// typist could never time out.
+		// One deadline for the whole line, not per byte.
 		const auto deadline = monotonic_ms( ) + wait_ms;
 
 		while ( !got_enter && !got_eof ) {
@@ -244,26 +231,19 @@ namespace mcode::tui {
 				break;
 			}
 
-			// The same decoder the prompt uses, so a bracketed paste is
-			// content here too and its markers never land in the answer.
 			decode_key_bytes( std::string_view{ bytes.data( ),
 				static_cast< std::size_t >( count ) }, state, events, false );
 
 			for ( const auto& event : events ) {
 				if ( event.type == key_event::kind::interrupt
 					|| event.type == key_event::kind::exit ) {
-					// Ctrl-C abandons the read. Returning the partial line would
-					// hand the caller an empty answer, which a prompt that treats
-					// empty as "skip" would act on -- so an interrupt must be
-					// distinguishable from an empty line, and `nullopt` is that.
+					// An interrupt must be distinguishable from an empty line.
 					write( "\r\n" );
 
 					return std::nullopt;
 				}
 
 				if ( event.type == key_event::kind::enter ) {
-					// The caller advances its own row, so the key itself only
-					// returns the cursor to column zero.
 					write( "\r\n" );
 
 					got_enter = true;
@@ -282,8 +262,6 @@ namespace mcode::tui {
 				}
 
 				if ( event.type == key_event::kind::paste ) {
-					// A pasted answer: its first line is the whole answer, the
-					// way typing that line would have been.
 					const auto stop = event.text.find( '\n' );
 					const auto text = stop == std::string::npos ? event.text
 						: event.text.substr( 0, stop );
@@ -421,17 +399,13 @@ namespace mcode::tui {
 				return event;
 			}
 
-			// The wait elapsed, or a signal cut it short. Idle is not exit:
-			// the caller polls, and a decoded key still wins.
 			if ( !pending_.empty( ) ) {
 				continue;
 			}
 
 			if ( monotonic_ms( ) >= deadline ) {
 				// A marker prefix that never completed is ordinary input, so a
-				// lone Escape is still the escape key. The bytes go back
-				// through the keystroke decoder, which holds an incomplete
-				// escape sequence in its own carry.
+				// lone Escape is still the escape key.
 				if ( decode_.paste.holding( ) ) {
 					decode_plain_key_bytes( decode_.paste.flush( ), decode_, pending_,
 						mouse_reporting_ );
@@ -441,7 +415,6 @@ namespace mcode::tui {
 					}
 				}
 
-				// an ESC held back for a sequence that never arrived is the key
 				if ( decode_.carry == "\x1b" ) {
 					decode_.carry.clear( );
 					event.type = key_event::kind::escape;

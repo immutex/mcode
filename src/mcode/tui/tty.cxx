@@ -1,6 +1,3 @@
-// The platform-neutral half of the terminal layer: the capability probe and
-// the environment helper. The console itself is per-platform, in tty_windows.cxx
-// and tty_posix.cxx; the key decoder both of them feed is in tty_decode.cxx.
 #include "mcode/tui/tty.hxx"
 
 #include <cstdlib>
@@ -20,8 +17,6 @@ namespace mcode::tui {
 		auto out = capabilities{ };
 		out.is_tty = has_tty;
 
-		// Clamped to exactly {1, 2}: an unknown value is not an error, it is
-		// the one-column default, and nothing is logged.
 		out.ambiguous_width = ambiguous_width_env == "2" ? 2 : 1;
 
 		// NO_COLOR wins: attributes only, no foreground or background changes.
@@ -44,8 +39,6 @@ namespace mcode::tui {
 			out.depth = capabilities::color_depth::none;
 		}
 
-		// The synchronized-output and Kitty probes write to the terminal, so
-		// they are gated on a real tty. DECRQM is the gate, never TERM text.
 		out.synchronized_output = has_tty;
 		out.bracketed_paste = has_tty;
 		out.kitty_keyboard = has_tty;

@@ -308,6 +308,15 @@ with its limits stated: it raises the cost of exfiltration and does not stop it
 through an allowlisted destination, and Windows network enforcement reports
 `best-effort` because WFP requires admin.
 
+**Shipped in 0.0.4:** a code-quality pass over the whole tree, not a feature
+batch. Dead code and history-narrating comments are gone, every file is under 600
+lines, and the comment rule is a CI gate (`tools/comment_lint.py`) rather than a
+convention. Three defects were fixed on the way, all found by running the code:
+the egress proxy sent a SOCKS5 reply with an invalid address type, `mcode ext
+deny` wrote a trust record its own parser rejected (losing every grant beside
+it), and five file-scope symbols in `mcode::platform` had external linkage
+despite no header declaring them.
+
 ## Architecture
 
 ```

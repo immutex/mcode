@@ -11,8 +11,6 @@
 
 namespace mcode::toml {
 
-	// a TOML subset; unsupported forms (dates, inline tables) are refused, not dropped.
-
 	enum class value_kind {
 		string,
 		integer,
@@ -69,6 +67,7 @@ namespace mcode::toml {
 		std::map< std::string, value, std::less<> > values_;
 	};
 
+	// a TOML subset; unsupported forms (dates, inline tables) are refused, not dropped.
 	[[nodiscard]] auto parse( std::string_view text ) -> result< table >;
 
 }

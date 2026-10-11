@@ -22,19 +22,6 @@ namespace mcode {
 
 	}
 
-	auto parse_log_level( const std::string_view name ) -> std::optional< log_level > {
-		if ( name == "trace" ) return log_level::trace;
-		if ( name == "debug" ) return log_level::debug;
-		if ( name == "info" ) return log_level::info;
-		if ( name == "warn" || name == "warning" ) return log_level::warn;
-		if ( name == "error" ) return log_level::error;
-		if ( name == "critical" ) return log_level::critical;
-		if ( name == "off" ) return log_level::off;
-
-		// absent, not "info": defaulting a typo would tell the user their setting took effect.
-		return std::nullopt;
-	}
-
 	auto to_string( const log_level level ) noexcept -> std::string_view {
 		switch ( level ) {
 			case log_level::trace: return "trace";

@@ -162,11 +162,6 @@ TEST_CASE( "reopening a log continues its sequence numbering", "[eventlog]" ) {
 
 TEST_CASE( "opening a second log replaces the first, it does not merge",
 	"[eventlog]" ) {
-	// Switching sessions reuses one `event_log` object and repoints it at another
-	// file, because the loop holds a pointer to it. `open` cleared its state only
-	// when the target file was empty, so opening a non-empty second file kept the
-	// first file's events in memory: `restore_transcript` then rebuilt a
-	// conversation from two different sessions concatenated.
 	const auto directory = scratch_dir( );
 
 	const auto first_path = directory / "first.jsonl";
@@ -189,13 +184,10 @@ TEST_CASE( "opening a second log replaces the first, it does not merge",
 	REQUIRE( reopened.size( ) == 1 );
 	REQUIRE( reopened.events( ).front( ).kind == "second.event" );
 
-	// The sequence restarts with the new file, because the two logs are
-	// independent sessions rather than one continuing record.
+	// the sequence restarts with the new file: the two logs are independent sessions.
 	REQUIRE( reopened.next_sequence( ) == 1 );
 
-	// Closed before the directory goes: Windows will not remove a file a handle
-	// is still open on, and the failure reads as a broken test rather than a
-	// held handle.
+	// Windows will not remove a file a handle is still open on.
 	reopened.close( );
 
 	std::filesystem::remove_all( directory );
@@ -235,9 +227,6 @@ TEST_CASE( "an unwritable path fails at open, not at append", "[eventlog]" ) {
 }
 
 TEST_CASE( "a long session does not retain every payload in memory", "[eventlog]" ) {
-	// `events_` held every payload for the life of the process -- a session that
-	// reads a few hundred files kept all of them. The file is the record and the
-	// vector is a cache, so the cache is now bounded and the oldest go first.
 	const auto path = scratch_dir( ) / "bounded.jsonl";
 	std::filesystem::remove( path );
 
@@ -245,7 +234,6 @@ TEST_CASE( "a long session does not retain every payload in memory", "[eventlog]
 
 	REQUIRE( static_cast< bool >( log.open( path ) ) );
 
-	// One event larger than the whole cap, then many small ones.
 	const auto big = std::string( MAX_RETAINED_LOG_BYTES + 1024, 'x' );
 	log.append( "tool.output", big );
 

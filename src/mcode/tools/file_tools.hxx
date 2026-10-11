@@ -16,7 +16,7 @@ namespace mcode::tools {
 	[[nodiscard]] auto handle_write( const tool_args& args, tool_context& context )
 		-> result< std::string >;
 
-	// zero and multiple matches are distinct errors; compares on a normalised copy
+	// zero and multiple matches are distinct errors
 	[[nodiscard]] auto handle_edit( const tool_args& args, tool_context& context )
 		-> result< std::string >;
 

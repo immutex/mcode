@@ -13,7 +13,7 @@
 
 namespace mcode::config {
 
-	// lowest precedence first; project scope may only add restrictions, never widen.
+	// lowest precedence first.
 	enum class scope {
 		managed,
 		user,
@@ -32,13 +32,12 @@ namespace mcode::config {
 		return "user";
 	}
 
-	// everything else in a project file is rejected at load rather than ignored.
+	// the only keys a project file may set; everything else is rejected at load.
 	inline constexpr auto PROJECT_WRITABLE_PREFIXES = std::array{
 		std::string_view{ "permissions.deny" },
 		std::string_view{ "permissions.ask" },
 	};
 
-	// A key outside these sections is a typo, and storing it silently looks like it applied.
 	inline constexpr auto CONFIG_SECTIONS = std::array{
 		std::string_view{ "model" },
 		std::string_view{ "agent" },
@@ -73,7 +72,6 @@ namespace mcode::config {
 		[[nodiscard]] auto get_string_array( std::string_view key ) const
 			-> result< std::vector< std::string > >;
 
-		// which layer supplied a key, for `mcode config show`.
 		[[nodiscard]] auto source_of( std::string_view key ) const -> std::optional< scope >;
 
 		[[nodiscard]] auto keys( ) const noexcept
@@ -81,24 +79,16 @@ namespace mcode::config {
 			return values_;
 		}
 
-		[[nodiscard]] auto loaded_scopes( ) const noexcept -> const std::vector< scope >& {
-			return loaded_;
-		}
-
 	private:
 		std::map< std::string, toml::value, std::less<> > values_;
 		std::map< std::string, scope, std::less<> > origins_;
-		std::vector< scope > loaded_;
 	};
 
 	[[nodiscard]] auto default_layer_paths( )
 		-> std::vector< std::pair< scope, std::filesystem::path > >;
 
-	// The message for a run that has no usable config: it names the file to edit
-	// and the command that writes it. Measured on a clean machine, mcode's entire
-	// output was `mcode: no provider configured; set [model] provider in
-	// config.toml`, exit 2, no terminal -- which names neither the file's location
-	// nor `mcode setup`. A reader with no config has no way to act on it.
+	// names the file to edit and the command that writes it, because the obvious
+	// message names neither.
 	[[nodiscard]] auto unconfigured_message( const std::string_view missing_key ) -> std::string;
 
 	// A missing file is skipped; an unreadable or malformed one is an error.

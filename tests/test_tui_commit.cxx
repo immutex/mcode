@@ -37,7 +37,6 @@ namespace {
 		return false;
 	}
 
-	// a committed row carries its own SGR, so its text is read with the escapes removed
 	[[nodiscard]] auto visible_text( const std::string_view bytes ) -> std::string {
 		auto out = std::string{ };
 
@@ -87,8 +86,7 @@ TEST_CASE( "a committed answer is erased from the region and printed",
 }
 
 TEST_CASE( "a chain of thought commits as a block, not one line", "[tui][render]" ) {
-	// the collapsed block shows the reasoning, bounded: the first line alone
-	// hid everything the model actually thought.
+	// the collapsed block shows the reasoning, bounded.
 	auto coordinator = render_coordinator{ };
 
 	auto caps = capabilities{ };
@@ -138,12 +136,10 @@ TEST_CASE( "a chain of thought longer than its budget commits its newest rows",
 	end.type = event_queue::kind::turn_end;
 	coordinator.apply( end );
 
-	// one committed row per rendered row, bounded to the budget.
 	REQUIRE( coordinator.state( ).pending_commit.size( ) == THOUGHT_COMMIT_MAX_ROWS );
 
 	const auto bytes = coordinator.flush( );
 
-	// the block keeps its newest rows, so the head of the chain is dropped.
 	CHECK( bytes.find( "✻ thought 3" ) != std::string::npos );
 	CHECK( bytes.find( "last thought" ) != std::string::npos );
 	CHECK( bytes.find( "thought 0" ) == std::string::npos );
@@ -180,7 +176,6 @@ TEST_CASE( "the commit path wraps rows to the coordinator's own width",
 	caps.depth = capabilities::color_depth::none;
 	coordinator.set_capabilities( caps );
 
-	// one column stays reserved, so the commit wraps to 39 columns.
 	coordinator.resize( 24, 40 );
 
 	auto text = std::string{ };
@@ -198,7 +193,6 @@ TEST_CASE( "the commit path wraps rows to the coordinator's own width",
 	REQUIRE( start != std::string::npos );
 	start += 4;
 
-	// the committed rows run between the erase and the region's scroll, each ending in a CRLF
 	auto rows = std::vector< std::string >{ };
 
 	while ( start < bytes.size( ) ) {
@@ -220,9 +214,8 @@ TEST_CASE( "the commit path wraps rows to the coordinator's own width",
 }
 
 TEST_CASE( "a turn end commits the buffer, not the row cache", "[tui][render]" ) {
-	// the deltas left the rows stale and no paint ran between them and the
-	// end of the turn, so the commit is the only thing that materialises the
-	// block. Committing the stale cache would print nothing at all.
+	// the deltas left the rows stale and no paint ran until the turn ended, so the
+	// commit is the only thing that materialises the block.
 	auto coordinator = render_coordinator{ };
 
 	auto caps = capabilities{ };
@@ -239,7 +232,6 @@ TEST_CASE( "a turn end commits the buffer, not the row cache", "[tui][render]" )
 	end.type = event_queue::kind::turn_end;
 	coordinator.apply( end );
 
-	// two rows, formatted, and no markdown markers in the committed block.
 	REQUIRE( coordinator.state( ).pending_commit.size( ) == 2 );
 	CHECK( row_text( coordinator.state( ).pending_commit[ 0 ] ) == "bold answer" );
 	CHECK( row_bold( coordinator.state( ).pending_commit[ 0 ] ) );
@@ -254,11 +246,9 @@ TEST_CASE( "a turn end commits the buffer, not the row cache", "[tui][render]" )
 	CHECK( bytes.find( ";1m" ) != std::string::npos );
 }
 
-// A commit shrinks the region: the streamed answer moves into the commit and the
-// rows it occupied are released. The commit scrolls by the region's height, so it
-// must be given the height the flush will END with, not the taller one it had
-// before -- otherwise the block lands above the new region's top and the space
-// between them is a blank gap that grows with the old height.
+// A commit shrinks the region and scrolls by the region's height, so it must be
+// given the height the flush will END with -- otherwise the block lands above the
+// new region's top.
 TEST_CASE( "a commit that shrinks the region leaves no blank gap above it",
 	"[tui][render][screen]" ) {
 	constexpr auto ROWS = std::size_t{ 30 };
@@ -274,7 +264,6 @@ TEST_CASE( "a commit that shrinks the region leaves no blank gap above it",
 	auto screen = tui_test::screen_model{ ROWS, COLUMNS };
 	screen.feed( coordinator.flush( ) );
 
-	// A tall streamed answer, so the region is at its ceiling.
 	auto delta = event_queue::item{ };
 	delta.type = event_queue::kind::assistant_delta;
 	delta.text = "one\ntwo\nthree\nfour\nfive\nsix";
@@ -293,8 +282,7 @@ TEST_CASE( "a commit that shrinks the region leaves no blank gap above it",
 	REQUIRE( answer < ROWS );
 	REQUIRE( meter < ROWS );
 
-	// Every row between the committed answer and the meter is part of the layout,
-	// never a residue of the height the region used to have.
+	// Every row between the committed answer and the meter is part of the layout.
 	auto blank = std::size_t{ 0 };
 
 	for ( auto index = answer + 1; index < meter; ++index ) {

@@ -134,7 +134,7 @@ TEST_CASE( "a version that is not MAJOR.MINOR.PATCH is refused", "[loader]" ) {
 		}
 	}
 
-	// the version bound is checked before the multiply, so overflow is a clean rejection, not UB
+	// the version bound is checked ahead of the multiply, so overflow is a clean rejection, not UB
 	write( root / "versions" / "ext.toml",
 		"name = \"versions\"\nversion = \"99999999999999999999.0.0\"\napi_version = 1\n" );
 	CHECK_FALSE( static_cast< bool >( ext::load_manifest( root / "versions" ) ) );

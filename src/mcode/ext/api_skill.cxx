@@ -20,7 +20,7 @@ namespace mcode::ext {
 				? self.installed_skills( )->entries : none;
 		}
 
-	} // namespace
+	}
 
 	auto api_surface::handle_skill_read( lua_State* state ) -> int {
 		auto* self = surface_from( state );

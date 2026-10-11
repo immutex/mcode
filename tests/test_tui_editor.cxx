@@ -224,8 +224,7 @@ TEST_CASE( "the history accessor exposes what was submitted, oldest first",
 TEST_CASE( "the backslash gesture follows the caret, not the line end", "[tui][editor]" ) {
 	auto editor = input_editor{ };
 
-	// the caret sits between the two backslashes of `a\\b`, so the run before it
-	// is one long: enter continues the line there rather than submitting it
+	// the caret sits between the two backslashes of `a\\b`, so enter continues the line.
 	std::ignore = editor.handle( character( "a\\\\b" ) );
 	std::ignore = editor.handle( key( input_editor::key::left ) );
 	std::ignore = editor.handle( key( input_editor::key::left ) );
@@ -250,7 +249,6 @@ TEST_CASE( "caret movement and erasing follow whole glyphs", "[tui][editor]" ) {
 
 	CHECK( editor.text( ) == "\u00e9" );
 
-	// the second backspace removes the whole glyph, not one of its bytes.
 	std::ignore = editor.handle( key( input_editor::key::backspace ) );
 
 	CHECK( editor.text( ).empty( ) );
@@ -265,7 +263,6 @@ TEST_CASE( "caret movement and erasing follow whole glyphs", "[tui][editor]" ) {
 
 	CHECK( editor.flattened_cursor( ) == 2 );
 
-	// forward delete removes the whole glyph too.
 	std::ignore = editor.handle( key( input_editor::key::home ) );
 	std::ignore = editor.handle( key( input_editor::key::delete_key ) );
 

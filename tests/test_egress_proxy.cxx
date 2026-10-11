@@ -20,9 +20,7 @@ namespace {
 	namespace asio = boost::asio;
 	using tcp = asio::ip::tcp;
 
-	// Sends one raw HTTP request to the proxy and returns what comes back. The
-	// proxy answers a refused host with a status line before any relay, so this
-	// needs no upstream server.
+	// a refused host is answered with a status line before any relay, so no upstream is needed.
 	auto request_through_proxy( const std::uint16_t port, const std::string& request )
 		-> std::string {
 		auto context = asio::io_context{ };
@@ -57,7 +55,7 @@ TEST_CASE( "the proxy refuses a host that is not on the allowlist", "[egress][pr
 
 	started->serve( );
 
-	// Port 80 so the CONNECT port check does not decide this before the host does.
+	// Port 80 so the CONNECT port check cannot decide this ahead of the host.
 	const auto response = request_through_proxy( started->http_port( ),
 		"GET http://denied.example:80/x HTTP/1.1\r\nHost: denied.example\r\n\r\n" );
 

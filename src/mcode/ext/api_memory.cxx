@@ -15,8 +15,7 @@ namespace mcode::ext {
 
 	namespace {
 
-		// The same cap the search tools use: enough to answer, not enough to flood
-		// the window. The caller pages rather than receiving everything.
+		// the same cap the search tools use: enough to answer, not enough to flood the window.
 		constexpr std::size_t MAX_MATCHES = 50;
 		constexpr std::size_t MAX_MATCH_LINES = 200;
 

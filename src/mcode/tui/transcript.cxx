@@ -12,7 +12,6 @@ namespace mcode::tui {
 
 	namespace {
 
-		// The block pass emits one of these for every blank source line.
 		[[nodiscard]] auto blank_row( const styled_line& row ) -> bool {
 			for ( const auto& span : row ) {
 				if ( !span.text.empty( ) ) {
@@ -23,25 +22,17 @@ namespace mcode::tui {
 			return true;
 		}
 
-		// Glyphs that can make up a row's own indent: the list bullet, the
-		// quote and output gutters, the thought and done gutters, and a
-		// heading hash.
 		constexpr auto INDENT_GLYPHS = std::array< std::string_view, 6 >{
 			"•", "│", "❯", "✻", "✓", "#",
 		};
 
-		// An ordered marker's number. It only reads as an indent when a whole
-		// span is the marker, so a paragraph that starts with a digit keeps
-		// its first word as content.
+		// A number reads as an indent only when a whole span is the marker.
 		constexpr auto ORDER_GLYPHS = std::array< std::string_view, 12 >{
 			"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ".", ")",
 		};
 
-		// The one indent glyph a continuation row repeats: a quote and an
-		// output block keep their vertical line.
 		inline constexpr std::string_view QUOTE_GLYPH = "│";
 
-		// One grapheme cluster of one source span, measured once.
 		struct cluster_ref {
 			std::string_view text;
 			std::size_t width = 0;
@@ -52,7 +43,6 @@ namespace mcode::tui {
 			return cluster == " " || cluster == "\t";
 		}
 
-		// a cluster is compared against each glyph, never matched as a substring
 		template< std::size_t GlyphCount >
 		[[nodiscard]] auto is_glyph( const std::string_view cluster,
 			const std::array< std::string_view, GlyphCount >& glyphs ) noexcept -> bool {
@@ -73,8 +63,6 @@ namespace mcode::tui {
 			return is_glyph( cluster, INDENT_GLYPHS ) || is_glyph( cluster, ORDER_GLYPHS );
 		}
 
-		// A span is part of the indent when every cluster in it is whitespace
-		// or a marker glyph.
 		[[nodiscard]] auto is_indent_span( const styled_span& span,
 			const std::size_t ambiguous_width ) -> bool {
 			auto rest = std::string_view{ span.text };
@@ -92,10 +80,6 @@ namespace mcode::tui {
 			return true;
 		}
 
-		// The row's own leading indent: the whole leading spans that are
-		// nothing but whitespace and markers. It is read off the row rather
-		// than guessed from the source text. A row that is all indent has no
-		// content to hang, so it counts as having none.
 		[[nodiscard]] auto indent_spans( const styled_line& row,
 			const std::size_t ambiguous_width ) -> std::size_t {
 			auto count = std::size_t{ 0 };
@@ -118,10 +102,7 @@ namespace mcode::tui {
 			return total;
 		}
 
-		// What a continuation row carries: a gutter keeps its glyph, so a
-		// wrapped quote stays one visual column; every other marker becomes
-		// blanks of the same width, so the text hangs under the item body
-		// instead of under the bullet.
+		// A gutter keeps its glyph; every other marker becomes blanks of the same width.
 		[[nodiscard]] auto continuation_indent( const styled_line& row,
 			const std::size_t count, const std::size_t ambiguous_width ) -> styled_line {
 			auto out = styled_line{ };
@@ -169,9 +150,6 @@ namespace mcode::tui {
 			return clusters;
 		}
 
-		// The blank run that opens the first content span, as text and width.
-		// A quote renders its body with a leading space, and that space is
-		// part of where the content starts, so the hang has to cover it.
 		struct lead_run {
 			std::string text;
 			std::size_t width = 0;
@@ -201,9 +179,6 @@ namespace mcode::tui {
 			return run;
 		}
 
-		// Appends clusters [begin, end) as spans, merging neighbours that came
-		// from one source span, so a span cut by the wrap stays one span per
-		// row with its colour, weight and background intact.
 		auto append_clusters( styled_line& line, const std::vector< cluster_ref >& clusters,
 			const std::size_t begin, const std::size_t end ) -> void {
 			const styled_span* open = nullptr;
@@ -224,9 +199,7 @@ namespace mcode::tui {
 			}
 		}
 
-		// True when a row has to be split. Fenced code is verbatim by
-		// contract, and the code background token is the only signal the block
-		// pass leaves on such a row, so that token keys the skip.
+		// Fenced code is verbatim: `token::code_bg` keys the skip.
 		[[nodiscard]] auto needs_wrap( const styled_line& row, const std::size_t columns,
 			const std::size_t ambiguous_width ) -> bool {
 			for ( const auto& span : row ) {
@@ -238,17 +211,11 @@ namespace mcode::tui {
 			return spans_width( row, row.size( ), ambiguous_width ) > columns;
 		}
 
-		// Splits one row that does not fit. Every row carries the indent width
-		// of the first, so the text of a bullet or an ordered item hangs under
-		// its body rather than falling back to column 0.
 		[[nodiscard]] auto split_row( const styled_line& row, const std::size_t columns,
 			const std::size_t ambiguous_width ) -> std::vector< styled_line > {
 			const auto indent = indent_spans( row, ambiguous_width );
 			const auto indent_width = spans_width( row, indent, ambiguous_width );
 
-			// A row narrower than its own indent has no room to hang
-			// anything: it wraps at the full width instead of looping on no
-			// budget.
 			const auto hangs = indent_width < columns;
 			const auto hang = hangs ? indent_width : std::size_t{ 0 };
 
@@ -285,7 +252,6 @@ namespace mcode::tui {
 
 			auto rows = std::vector< styled_line >{ };
 
-			// an indent at least as wide as the row still keeps its marker, on its own row
 			if ( !hangs ) {
 				rows.push_back( styled_line{ row.begin( ),
 					row.begin( ) + static_cast< std::ptrdiff_t >( indent ) } );
@@ -319,11 +285,8 @@ namespace mcode::tui {
 				auto stop = cursor;
 
 				if ( cursor == start ) {
-					// one cluster wider than the whole budget still takes a
-					// row, or the scan would never advance.
 					stop = start + 1;
 				} else if ( cursor < clusters.size( ) && break_at > start ) {
-					// the last space that fits: the word moves down whole.
 					stop = break_at;
 				}
 
@@ -334,8 +297,6 @@ namespace mcode::tui {
 					break;
 				}
 
-				// the break space is consumed, and a run of them never opens
-				// a row with blanks.
 				start = stop;
 
 				while ( start < clusters.size( ) && is_space_cluster( clusters[ start ].text ) ) {
@@ -360,8 +321,6 @@ namespace mcode::tui {
 
 			auto rows = render_markdown( text, base );
 
-			// Text ending in a newline renders a trailing blank row, which the
-			// commit would print as a stray gap.
 			while ( !rows.empty( ) && blank_row( rows.back( ) ) ) {
 				rows.pop_back( );
 			}
@@ -437,8 +396,6 @@ namespace mcode::tui {
 	}
 
 	auto render_coordinator::queue_text( const std::string_view text, const token color ) -> void {
-		// A run of trailing newlines ends the block rather than opening blank
-		// rows.
 		auto body = text;
 
 		while ( !body.empty( ) && ( body.back( ) == '\n' || body.back( ) == '\r' ) ) {
@@ -493,29 +450,18 @@ namespace mcode::tui {
 	auto render_coordinator::commit( std::vector< styled_line > lines ) -> std::string {
 		state_.pending_commit.clear( );
 
-		// The screen's geometry lives here, so the wrap width is supplied
-		// here: `screen_columns_` already leaves the reserved last column
-		// free, so a wrapped row never trips the terminal's own wrap. The
-		// ambiguous width is the probed one, or the wrap would disagree with
-		// the frame builder that painted the same text.
 		lines = transcript::wrap_rows( std::move( lines ), screen_columns_,
 			caps_.ambiguous_width );
 
-		// The viewport keeps a bounded copy of what lands in scrollback. It is
-		// appended here, after the wrap, so the retained rows are the rows the
-		// terminal shows -- not the pre-wrap blocks.
 		retain( lines );
 
 		auto emitter = ansi_emitter{ caps_ };
 
-		// Park first: everything below is relative to the parked row.
 		auto out = park();
 		out += emitter.region_top( painted_rows_ );
 		out += "\x1b[0J";
 
 		for ( const auto& line : lines ) {
-			// A fresh emitter per line: the pen cache would skip the SGR of a
-			// line whose first span repeats the previous line's last style.
 			auto pen = ansi_emitter{ caps_ };
 
 			for ( const auto& span : line ) {
@@ -523,13 +469,11 @@ namespace mcode::tui {
 				out += span.text;
 			}
 
-			// The session runs in raw mode, where a newline moves down without
-			// returning the carriage: without the CR a multi-row block
-			// stair-steps across the screen.
+			// Raw mode's newline moves down without returning the carriage, so a
+			// multi-row block would stair-step across the screen.
 			out += "\x1b[0m\r\n";
 		}
 
-		// Scroll the committed text clear of the region, whatever its length.
 		for ( auto index = std::size_t{ 0 }; index < painted_rows_; ++index ) {
 			out += '\n';
 		}

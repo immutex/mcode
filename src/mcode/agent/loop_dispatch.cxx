@@ -14,9 +14,8 @@
 namespace mcode {
 
 	auto agent_loop::observe_result( const tool_call& call, const tool_outcome& outcome ) -> void {
-		// An MCP tool result is attacker-controlled input: the server is someone
-		// else's process and its output is not the harness's. Marking it here is
-		// what turns the taint gate from a policy into a fact about this session.
+		// An MCP result is attacker-controlled input, so marking it here makes the
+		// taint gate a fact about this session.
 		if ( permissions_ != nullptr ) {
 			if ( const auto* definition = registry_->find( call.name );
 				definition != nullptr && definition->source == tool_source::mcp ) {
@@ -35,9 +34,6 @@ namespace mcode {
 		payload += "\",\"ok\":";
 		payload += outcome.ok ? "true" : "false";
 
-		// A failure recorded as nothing but `ok:false` is undiagnosable after the
-		// fact: the reason lived only in the message the model saw. The record
-		// carries the reason, the stable class, and how long the call took.
 		if ( !outcome.ok ) {
 			payload += ",\"error\":\"";
 			json::append_escaped( payload, outcome.error_message );
@@ -78,17 +74,12 @@ namespace mcode {
 		auto stream_request = model::stream_request{ };
 		stream_request.request = assembled.request;
 
-		// Parallel calls are default-off for an unknown gateway: several do not implement the
-		// field, and the loop serializes calls anyway, so naming it buys nothing unless the
-		// descriptor says the gateway honours it.
+		// Default-off for an unknown gateway: several do not implement the field.
 		if ( provider_.features.parallel_tool_calls &&
 			!provider_.request.parallel_tool_calls.empty( ) ) {
 			stream_request.request.parallel_tool_calls = false;
 		}
 
-		// Prefill suppresses the prose preamble some models emit before a tool call. The text
-		// is the gateway's convention, so it is declared in the descriptor and never guessed;
-		// a gateway that rejects it is caught by the 400 downgrade path.
 		if ( !provider_.features.prefill_text.empty( ) &&
 			!stream_request.request.tools.empty( ) ) {
 			stream_request.request.prefill = provider_.features.prefill_text;
@@ -138,13 +129,10 @@ namespace mcode {
 			}
 		}
 
-		// Accumulated across the run, not just this request, so the summary can report the
-		// cache hit rate a consumer needs to tell a cheap turn from an expensive one.
 		run_usage_ += folded;
 
-		// Window occupancy is the LAST request's prompt, not the run's spend. Keeping
-		// them apart is what makes the meter a fraction of the window rather than a
-		// number that grows without bound.
+		// The last request's prompt, not the run's spend, so the meter stays a
+		// fraction of the window.
 		occupancy_.prompt_tokens = folded.input + folded.cached_read + folded.cache_write;
 		occupancy_.cached_read = folded.cached_read;
 		occupancy_.cache_write = folded.cache_write;
@@ -157,10 +145,7 @@ namespace mcode {
 		cost = compute_cost( caps_, folded );
 		budget_.charge( static_cast< std::uint64_t >( total_tokens( caps_, folded ) ), cost );
 
-		// Per request, not just per run. A run total cannot show a cache that only
-		// starts hitting after the first call, and it cannot show a request whose
-		// prefix changed. Both are the failures a cache optimization is aimed at,
-		// and neither is visible in an aggregate.
+		// Per request: an aggregate cannot show a cache that only starts hitting later.
 		if ( log_ != nullptr ) {
 			auto recorded = std::string{ "{\"input\":" };
 			recorded += std::to_string( folded.input );
@@ -186,9 +171,6 @@ namespace mcode {
 		auto assistant = model::message{ };
 		assistant.speaker = model::role::assistant;
 
-		// Kept before the local is moved out: the repetition guard reads the
-		// prose of this response, and the whole message is discarded if it turns
-		// out to be a loop.
 		last_response_text_ = text;
 
 		if ( !text.empty( ) ) {
@@ -200,9 +182,8 @@ namespace mcode {
 
 		pending_calls_ = loop_internal::collect_calls( events );
 
-		// A response cut off by the output limit is a distinct failure from a malformed one: the
-		// arguments are a valid prefix of a call that was never finished, and no repair can
-		// recover them. Recorded here so dispatch reports it as truncation, not as a parse error.
+		// A cut-off response is a valid prefix of a call that was never finished, so no
+		// repair can recover it; recorded so dispatch reports truncation, not malformed.
 		const auto stop_reason = loop_internal::turn_stop_reason( events );
 
 		turn_truncated_ = loop_internal::is_truncation_stop_reason( stop_reason );
@@ -228,8 +209,6 @@ namespace mcode {
 		history_.push_back( std::move( assistant ) );
 
 		if ( log_ != nullptr ) {
-			// The reasoning is recorded before the message, so a reader sees what
-			// the model was thinking when it chose the call that follows.
 			if ( !reasoning.empty( ) ) {
 				auto recorded = std::string{ "{\"text\":\"" };
 				json::append_escaped( recorded, reasoning );
@@ -245,14 +224,7 @@ namespace mcode {
 		return !calls.empty( );
 	}
 
-	// A response that repeated itself is discarded and re-asked with a corrective
-	// steer, rather than finishing the run. Stopping on a thinking loop throws
-	// away a task the model was usually one step from completing; the loop is a
-	// symptom, and a short action-oriented nudge breaks it far more cheaply than
-	// a restart.
-	//
-	// The steer budget is hard. Once it is spent this returns false and the
-	// caller takes its normal path, so the guard cannot itself become a loop.
+	// Returns false once the steer budget is spent, so the guard cannot itself loop.
 	auto agent_loop::steer_repetition( const agent::repetition_verdict& verdict ) -> bool {
 		if ( repetition_steers_ >= agent::MAX_REPETITION_STEERS ) {
 			return false;
@@ -260,19 +232,13 @@ namespace mcode {
 
 		++repetition_steers_;
 
-		// The looping assistant message is dropped, not kept: it is the exact
-		// context that caused the loop, and re-sending it invites the same
-		// output. This is the one place the harness removes history it produced.
+		// The exact context that caused the loop, so re-sending it invites the same output.
 		if ( !history_.empty( ) && history_.back( ).speaker == model::role::assistant ) {
 			history_.pop_back( );
 		}
 
-		// Its tool calls go with it. `request_and_fold` records both the message
-		// and the calls it carried, so dropping only the message leaves the calls
-		// pending -- and Act dispatches them on the next iteration, running tools
-		// the model asked for in the response the harness just discarded. Their
-		// results then land in the transcript as orphan blocks with no call to
-		// answer, which is a transcript no provider will accept.
+		// Dropping the message without its calls leaves Act to run tools from the
+		// discarded response.
 		pending_calls_.clear( );
 
 		auto steer = model::message{ };
@@ -304,11 +270,8 @@ namespace mcode {
 		hard_error_ = dispatch_calls( pending );
 	}
 
-	// A response whose tool arguments will not parse is, on most gateways, sampling noise
-	// rather than a model that cannot express the call. Blind resampling beats showing the
-	// model its own broken output, which anchors a small model to that output. Truncation is
-	// excluded: the same input reproduces it, so it takes the error path instead, where the
-	// message can say the response was cut off. Retries saturate by the third attempt.
+	// Blind resampling: showing a small model its own broken output anchors it to it.
+	// Truncation is excluded, since the same input reproduces it.
 	auto agent_loop::resample_pending_calls( ) -> bool {
 		if ( pending_calls_.empty( ) || tool_call_retries_ >= MAX_TOOL_CALL_RETRIES ) {
 			return false;
@@ -343,7 +306,6 @@ namespace mcode {
 
 		++tool_call_retries_;
 
-		// Blind: the failed attempt leaves the conversation, so the retry is a fresh sample.
 		if ( !history_.empty( ) ) {
 			history_.pop_back( );
 		}
@@ -357,7 +319,7 @@ namespace mcode {
 		auto hard_error = false;
 
 		for ( const auto& call : calls ) {
-			// recorded first, so the repeat count decides before the call runs.
+			// recorded first, so the repeat count decides ahead of the call.
 			const auto repeats = thrash_.record( call.name, call.args_json );
 
 			auto outcome = repeats >= DOOM_LOOP_THRESHOLD
@@ -370,10 +332,7 @@ namespace mcode {
 				hard_error = true;
 				last_failure_ = outcome.error_message;
 
-				// The reflect ladder groups failures by class so it does not reflect twice on
-				// the same problem. The message is written for the model and may embed a value
-				// that changes each attempt (a repeat count), which would make every failure
-				// its own class and defeat the cap; a stable class keeps the grouping honest.
+				// The class is stable; the message may embed a value that changes each attempt.
 				last_failure_class_ = outcome.failure_class;
 			}
 		}

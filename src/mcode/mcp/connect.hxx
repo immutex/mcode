@@ -44,7 +44,7 @@ namespace mcode::mcp {
 
 	auto connect_servers( const connect_input& input ) -> result< connect_report >;
 
-	// declare before the loop and destroy after it: the loop's handlers dispatch into these
+	// outlive the loop: its handlers dispatch into these supervisors
 	class server_set {
 	public:
 		auto add( std::unique_ptr< supervisor > board ) -> void;
@@ -54,7 +54,6 @@ namespace mcode::mcp {
 			return boards_;
 		}
 
-		// reverse start order, before the destructor would
 		auto shutdown_all( ) -> void;
 
 	private:

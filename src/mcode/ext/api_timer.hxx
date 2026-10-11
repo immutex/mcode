@@ -1,6 +1,6 @@
 #pragma once
 
-// bounded, and fired by the host on the loop's thread; the registry dies with its surface's VM.
+// fired by the host on the loop's thread; the registry dies with its surface's VM.
 
 #include <chrono>
 #include <cstdint>
@@ -53,8 +53,6 @@ namespace mcode::ext {
 
 		// releases every pending reference; safe only while the owning VM is alive.
 		auto clear( ) -> void;
-
-		[[nodiscard]] auto active_count( ) const noexcept -> std::size_t;
 
 	private:
 		auto reap( ) -> void;

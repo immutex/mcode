@@ -16,9 +16,6 @@ namespace {
 	constexpr std::size_t ROWS = 4;
 	constexpr std::size_t COLUMNS = 40;
 
-	// One buffer row as text, blanks written as spaces so a substring search
-	// over the row keeps its columns aligned. The continuation slot of a wide
-	// cluster is skipped, since the cluster already drew both columns.
 	[[nodiscard]] auto buffer_row_text( const cell_buffer& buffer, const std::size_t row )
 		-> std::string {
 		auto text = std::string{ };
@@ -47,8 +44,6 @@ namespace {
 		return false;
 	}
 
-	// The column where `needle` starts in one row, or the row's width when it
-	// is absent.
 	[[nodiscard]] auto buffer_cell_column( const cell_buffer& buffer, const std::size_t row,
 		const std::string_view needle ) -> std::size_t {
 		const auto text = buffer_row_text( buffer, row );
@@ -79,13 +74,10 @@ TEST_CASE( "the status line shows the context percentage at its thresholds",
 		return frame.at( status_row, column ).cell_style;
 	};
 
-	// below the warn threshold: normal colour.
 	CHECK( percent_style( 50, 100, "50%" ).foreground == token::text );
 
-	// at the threshold: warn.
 	CHECK( percent_style( 80, 100, "80%" ).foreground == token::warn );
 
-	// near the cap: error.
 	CHECK( percent_style( 95, 100, "95%" ).foreground == token::error );
 
 	// an over-full window reads as 100%, not as a value past the cap.
@@ -119,8 +111,7 @@ TEST_CASE( "the activity verb appears on the status line and clears",
 	caps.depth = capabilities::color_depth::none;
 	coordinator.set_capabilities( caps );
 
-	// wide enough that the verb and its hint are not clipped: this test is
-	// about presence, not about truncation.
+	// wide enough that the verb and its hint are not clipped.
 	coordinator.resize( 24, 80 );
 
 	coordinator.set_meter( "m", 100, 0.0, 0 );
@@ -132,7 +123,6 @@ TEST_CASE( "the activity verb appears on the status line and clears",
 	CHECK( busy.find( "Working..." ) != std::string::npos );
 	CHECK( busy.find( "esc to interrupt" ) != std::string::npos );
 
-	// clearing it removes both the verb and its hint.
 	coordinator.set_activity( "" );
 	const auto idle = coordinator.flush( );
 
@@ -142,8 +132,6 @@ TEST_CASE( "the activity verb appears on the status line and clears",
 
 TEST_CASE( "the activity verb rides the status row without moving the layout",
 	"[tui][render]" ) {
-	// wide enough that the whole status line fits: a clipped verb would make
-	// this a truncation test rather than a layout one.
 	constexpr std::size_t WIDE_COLUMNS = 80;
 	const auto status_row = ROWS - 2;
 
@@ -158,24 +146,20 @@ TEST_CASE( "the activity verb rides the status row without moving the layout",
 	const auto busy_frame = build_frame( busy, ROWS, WIDE_COLUMNS, 1 );
 	const auto idle_frame = build_frame( idle, ROWS, WIDE_COLUMNS, 1 );
 
-	// the verb is on the status row, and the prompt row is untouched: showing
-	// and clearing it never moves the layout.
+	// the verb is on the status row, and the prompt row is untouched.
 	REQUIRE( buffer_contains( busy_frame, "Running bash..." ) );
 
 	const auto verb_column = buffer_cell_column( busy_frame, status_row, "Running bash..." );
 
 	CHECK( busy_frame.at( status_row, verb_column ).cell_style.foreground == token::accent );
 
-	// the interrupt hint trails it, dimmed, on the same row.
 	const auto hint_column = buffer_cell_column( busy_frame, status_row, "esc to interrupt" );
 
 	REQUIRE( hint_column < WIDE_COLUMNS );
 	CHECK( busy_frame.at( status_row, hint_column ).cell_style.dim );
 
-	// the prompt row is identical with and without the verb.
 	CHECK( buffer_row_text( busy_frame, ROWS - 1 ) ==
 		buffer_row_text( idle_frame, ROWS - 1 ) );
 
-	// the region height is the same with and without the verb.
 	CHECK( region_rows_for( busy, 30 ) == region_rows_for( idle, 30 ) );
 }

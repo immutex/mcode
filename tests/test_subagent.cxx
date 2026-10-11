@@ -42,16 +42,15 @@ TEST_CASE( "the read-only registry drops every mutating tool", "[subagent]" ) {
 	REQUIRE( child->find( "glob" ) != nullptr );
 	REQUIRE( child->find( "grep" ) != nullptr );
 
-	// Absent from the child's registry entirely, not merely refused at dispatch:
-	// the model never sees a schema for a tool it must not call.
+	// Absent from the child's registry entirely, not merely refused at dispatch.
 	REQUIRE( child->find( "write" ) == nullptr );
 	REQUIRE( child->find( "edit" ) == nullptr );
 	REQUIRE( child->find( "bash" ) == nullptr );
 }
 
 TEST_CASE( "no shell reaches a read-only subagent", "[subagent]" ) {
-	// Cline's Plan mode is the cautionary case: it refuses file-editing tools but
-	// still runs a shell, and `python -c` writes files.
+	// Cline's Plan mode refuses file-editing tools but still runs a shell, and
+	// `python -c` writes files.
 	for ( const auto name : subagent_tool_names( ) ) {
 		REQUIRE( name != "bash" );
 		REQUIRE( name != "exec" );

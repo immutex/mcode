@@ -45,9 +45,7 @@ namespace mcode::ext {
 		std::string description;
 		std::string owner;
 
-		// The handle the extension holds. Never reused and never a position:
-		// a positional handle shifted after any unregister, so a handle taken
-		// before one erase named a DIFFERENT tool afterwards.
+		// never reused and never positional: a handle must keep naming the same tool.
 		std::int64_t identifier = 0;
 
 		int function_reference = 0;
@@ -63,7 +61,7 @@ namespace mcode::ext {
 		api_surface( const api_surface& ) = delete;
 		auto operator=( const api_surface& ) -> api_surface& = delete;
 
-		// installs before the host is sealed; sealing is a one-way door.
+		// install must run before sealing: sealing is a one-way door.
 		struct install_request {
 			lua_host& host;
 			tool_registry& registry;
@@ -105,10 +103,6 @@ namespace mcode::ext {
 
 		auto install( const install_request& request ) -> status;
 
-		[[nodiscard]] auto providers( ) const noexcept -> const model::provider_registry& {
-			return providers_ != nullptr ? *providers_ : empty_providers_;
-		}
-
 		// a raised error is a contract violation and becomes an error here, not an empty result.
 		[[nodiscard]] auto invoke( std::string_view tool_name, std::string_view arguments_json )
 			-> result< std::string >;
@@ -138,10 +132,6 @@ namespace mcode::ext {
 		}
 
 		auto handle_mcp_register( lua_State* state ) -> int;
-
-		[[nodiscard]] auto installed_servers( ) const noexcept -> mcp_server_store* {
-			return servers_;
-		}
 
 		[[nodiscard]] auto config( ) const noexcept -> const mcode::config::merged_config* {
 			return config_;
@@ -250,8 +240,6 @@ namespace mcode::ext {
 
 		// a copy, not a pointer: the loader destroys the manifest it built per candidate.
 		mcode::ext::manifest manifest_;
-
-		static const model::provider_registry empty_providers_;
 
 		std::vector< registered_tool > tools_;
 		std::int64_t next_tool_identifier_ = 1;

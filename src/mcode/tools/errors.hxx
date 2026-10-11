@@ -22,25 +22,18 @@ namespace mcode::tools {
 	[[nodiscard]] auto error_result( const std::string_view message, const std::string_view hint,
 		const bool retryable ) -> std::string;
 
-	// `detail` names the parameter, what was observed, and the admissible values where the
-	// schema bounds them; `hint` is the recovery instruction. Both are model-facing.
+	// model-facing: name the parameter, what was observed, and the admissible values
 	[[nodiscard]] auto argument_error( const std::string_view detail,
 		const std::string_view hint ) -> std::string;
 
-	// A call whose arguments were cut off by the output-token limit. Distinct from a malformed
-	// call: nothing about the arguments is wrong, there is simply not enough of them, and the
-	// recovery is to emit a smaller response rather than to correct a parameter.
+	// not a malformed call: the arguments are incomplete, so the recovery is a smaller response
 	[[nodiscard]] auto truncation_error( const std::string_view tool_name ) -> std::string;
 
-	// The loop's own failure envelopes: `{ "ok": false, "tool": name, "error": code }`.
-	// Built by hand in eleven places, two of which were byte-identical, so a field
-	// added to the shape reached some call sites and not others.
+	// `{ "ok": false, "tool": name, "error": code }`
 	[[nodiscard]] auto loop_failure( const std::string_view tool_name, const std::string_view error_code )
 		-> std::string;
 
-	// A denied call carries the flag the approval layer set, plus the optional veto.
-	// The two paths name the refusing rule under different keys, and the record is
-	// public, so the key is a parameter rather than a rename.
+	// the two call paths name the refusing rule under different keys, so the key is a parameter
 	struct denial_payload {
 		std::string_view tool_name;
 		bool veto = false;

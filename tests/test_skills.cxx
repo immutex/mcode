@@ -84,8 +84,6 @@ TEST_CASE( "frontmatter parses scalars and bools", "[skills]" ) {
 	CHECK( parsed->disable_model_invocation );
 	CHECK( skills::frontmatter_span( text ).value( ) == text.size( ) - 6 );
 
-	// The offset discovery reads to strip the block. It used to recompute this with
-	// a second `frontmatter_span` call and dereference the result unchecked.
 	CHECK( parsed->body_offset == text.size( ) - 6 );
 }
 

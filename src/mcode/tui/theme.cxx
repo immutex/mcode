@@ -24,8 +24,6 @@ namespace mcode::tui {
 			{ token::diff_del_emph, "#4a3247", "48;5;240", "" },
 		} );
 
-		// Every token needs an entry: a missing one falls back to index 0 and
-		// silently renders as the wrong colour.
 		static_assert( ENTRIES.size( ) == TOKEN_COUNT );
 
 		[[nodiscard]] constexpr auto hex_digit( const char value ) -> unsigned {
@@ -36,8 +34,6 @@ namespace mcode::tui {
 			return static_cast< unsigned >( value - 'a' ) + 10u;
 		}
 
-		// "#rrggbb" -> "38;2;r;g;b". Derived from the table, so a colour is
-		// written down exactly once.
 		[[nodiscard]] auto truecolor_sgr( const char* hex ) -> std::string {
 			const auto channel = [ & ]( const std::size_t offset ) {
 				return ( hex_digit( hex[ offset ] ) << 4 ) | hex_digit( hex[ offset + 1 ] );
@@ -71,10 +67,8 @@ namespace mcode::tui {
 			return 0;
 		}
 
-		// A foreground-family SGR rewritten as its background form: "38;2;" and
-		// "38;5;" become "48;2;" and "48;5;". The table stores one value per
-		// token, written for the foreground, so a background read straight from
-		// it would emit a SECOND foreground after the real one and win.
+		// A background read straight from the table would emit a second foreground
+		// after the real one and win.
 		[[nodiscard]] auto as_background( const std::string_view sgr ) -> std::string {
 			auto out = std::string{ sgr };
 
@@ -85,8 +79,6 @@ namespace mcode::tui {
 			return out;
 		}
 
-		// Built once per depth: converting per call would allocate on every
-		// frame for every background span.
 		[[nodiscard]] auto background_table( const capabilities::color_depth depth )
 			-> const std::array< std::string, ENTRIES.size( ) >& {
 			static const auto from_truecolor = [ ] {
@@ -141,10 +133,8 @@ namespace mcode::tui {
 	}
 
 	auto token_color( const token value, const capabilities::color_depth depth ) -> std::string_view {
-		// `none` is the absent sentinel, not a colour: it is the default
-		// background of every span. Resolving it to a value would emit a
-		// second foreground after the real one, and the terminal applies the
-		// last, so every span would render in the sentinel's colour.
+		// `none` is the absent sentinel, not a colour: resolving it would emit a
+		// second foreground, and the terminal applies the last.
 		if ( value == token::none || depth == capabilities::color_depth::none ) {
 			return { };
 		}
@@ -167,8 +157,6 @@ namespace mcode::tui {
 
 	auto token_background( const token value, const capabilities::color_depth depth )
 		-> std::string_view {
-		// Same sentinel rule as the foreground: `none` means "no colour", not
-		// the colour named by entry zero.
 		if ( value == token::none || depth == capabilities::color_depth::none ) {
 			return { };
 		}

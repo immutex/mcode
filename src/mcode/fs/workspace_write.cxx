@@ -23,14 +23,14 @@ namespace mcode {
 			return false;
 		}
 
-		// `path_is_within` proved the root is a component prefix, so the first
-		// component below it is exactly `canonical_root_`'s component count in.
+		// `path_is_within` proved the root is a component prefix, so advancing by its
+		// component count lands on the first component below it.
 		auto path_entry = canonical.begin( );
 
 		std::advance( path_entry, static_cast< std::ptrdiff_t >(
 			std::distance( canonical_root_.begin( ), canonical_root_.end( ) ) ) );
 
-		// The first component below the root: `notes.mcode` is not protected, `.mcode/` is.
+		// `notes.mcode` is not protected; `.mcode/` is.
 		if ( path_entry == canonical.end( ) ) {
 			return false;
 		}

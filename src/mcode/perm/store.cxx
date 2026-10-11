@@ -144,31 +144,6 @@ namespace mcode::perm {
 		return out;
 	}
 
-	auto canonical_path_key( const std::filesystem::path& path )
-		-> std::optional< std::string > {
-		auto canonical = platform::canonicalize( path );
-
-		if ( !canonical ) {
-			return std::nullopt;
-		}
-
-		auto text = canonical->generic_string( );
-
-		if ( platform::case_insensitive_paths( ) ) {
-			auto lowered = std::string{ };
-
-			for ( const auto character : text ) {
-				lowered += character >= 'A' && character <= 'Z'
-					? static_cast< char >( character - 'A' + 'a' )
-					: character;
-			}
-
-			text = std::move( lowered );
-		}
-
-		return text;
-	}
-
 	remember_store::remember_store( std::filesystem::path file ) : file_( std::move( file ) ) { }
 
 	auto remember_store::load( ) -> result< std::optional< store_layer > > {
@@ -269,12 +244,12 @@ namespace mcode::perm {
 			}
 		}
 
-		// a sibling temp file, so the rename is same-filesystem and atomic.
 		static auto counter = std::atomic< std::uint64_t >{ 0 };
 
 		const auto stamp = std::to_string( support::epoch_milliseconds( ) ) + "-" +
 			std::to_string( counter.fetch_add( 1, std::memory_order_relaxed ) );
 
+		// a sibling temp file, so the rename is same-filesystem and atomic.
 		auto temporary = file_;
 		temporary += ".mcode-tmp-" + stamp;
 

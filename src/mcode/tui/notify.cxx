@@ -15,17 +15,14 @@ namespace mcode::tui {
 
 	namespace {
 
-		// OSC 9 is the sequence; BEL both terminates it and is the fallback
-		// on a terminal that has no OSC handler.
+		// OSC 9 is the sequence; BEL both terminates it and is the fallback.
 		inline constexpr std::string_view OSC9_PREFIX = "\x1b]9;";
 		inline constexpr std::string_view BELL = "\x07";
 
-		// The title is carried into the body, because a terminal titles its
-		// own notifications and would otherwise swallow the message.
+		// The title rides in the body, which a terminal would otherwise swallow.
 		inline constexpr std::string_view TITLE_SEPARATOR = ": ";
 
-		// A C0 byte inside the payload would either end the sequence early or
-		// reach the terminal as a stray control code.
+		// A C0 byte would end the sequence early or reach the terminal as a stray control code.
 		[[nodiscard]] auto printable( const std::string_view text ) -> std::string {
 			auto out = std::string{ };
 			out.reserve( text.size( ) );
@@ -47,9 +44,8 @@ namespace mcode::tui {
 		#endif
 		}
 
-		// OSC 9 needs a terminal that parses escapes at all. `TERM=dumb` says
-		// it does not; an unset `TERM` is no claim either way, and on Windows
-		// it is unset in every console.
+		// OSC 9 needs a terminal that parses escapes. `TERM=dumb` says it does
+		// not; an unset `TERM` is no claim either way, and Windows has none.
 		[[nodiscard]] auto osc9_supported( ) -> bool {
 			if ( tty_environment( "TERM" ) == "dumb" ) {
 				return false;
@@ -70,8 +66,7 @@ namespace mcode::tui {
 
 	auto notification_bytes( const std::string_view title, const std::string_view body,
 		const notification_context& context ) -> std::string {
-		// Suppressed entirely: not a terminal, or the user asked for no
-		// escapes. Even a bell would be bytes a consumer has to skip.
+		// Suppressed: not a terminal, or the user asked for no escapes.
 		if ( !context.stdout_is_terminal || context.no_color ) {
 			return { };
 		}

@@ -49,8 +49,6 @@ TEST_CASE( "fill_fraction is the window ratio, not cumulative spend", "[context]
 
 	REQUIRE( half.fill_fraction( ) == 0.5 );
 
-	// The bug this replaced: `context_used()` returned the budget's cumulative
-	// counter and was divided by the window, so a long session read over 100%.
 	const auto over = occupancy( 40000, 10000 );
 
 	REQUIRE( over.fill_fraction( ) == 4.0 );
@@ -115,8 +113,7 @@ TEST_CASE( "clearing keeps the newest results and the call records", "[context]"
 
 	REQUIRE( reclaimed > 0 );
 
-	// The assistant messages survive: dropping them would remove the model's only
-	// record of what it asked for, and with it the path back to the payload.
+	// dropping the assistant messages would remove the model's path back to the payload.
 	auto assistant_count = std::size_t{ 0 };
 	auto cleared = std::size_t{ 0 };
 	auto intact = std::size_t{ 0 };

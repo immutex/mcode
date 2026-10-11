@@ -2,40 +2,10 @@
 
 #include <string_view>
 
-// The prompt `/init` submits. The command writes nothing itself: the file is
-// generated from what is actually in the repository, which is the whole
-// difference between this and a scaffold with empty sections.
-//
-// Separate from `slash.cxx` because it is data, not logic -- 139 lines of it --
-// and every rule in it is a measured finding rather than taste, so it is read
-// and revised on its own. The sources are in `docs/42-agents-md-research.md`.
+// The prompt `/init` submits: the file is generated from what is actually in the repository.
 namespace mcode::cli::detail {
 
-	// Every rule below is a measured finding, not taste. The sources:
-	//
-	//  - Size dominates. Anthropic's target is under 200 lines per instruction
-	//    file because "longer files consume more context and reduce adherence";
-	//    IFScale measured the best frontier models at 68% adherence at 500
-	//    instructions, degrading all of them uniformly rather than just the
-	//    newest. A study of 100 popular repositories found Context Bloat in 42
-	//    and a worst case of 1,477 lines across 27 sections.
-	//  - Negative constraints beat positive directives. A 5,000-run study
-	//    found every individually beneficial rule was a negative constraint
-	//    and every individually harmful one a positive directive.
-	//  - Lint Leakage is the most common smell (62% of files): restating what
-	//    a formatter already enforces. Skill Leakage is 35%: rare procedures
-	//    that belong in an on-demand skill.
-	//  - Repository overviews are the one content class measured as *not*
-	//    helpful, while adding over 20% inference cost.
-	//  - The payoff is efficiency, not correctness: a paired 124-PR study
-	//    measured median runtime -28.6% and output tokens -16.6%, with no
-	//    significant correctness change.
-	//  - Generated files fossilize. 24 of 100 sampled files had never been
-	//    edited after generation, which is why the prompt demands evidence and
-	//    why `/init` refuses to overwrite an existing file.
-	//
-	// A raw string with a custom delimiter, because the prompt quotes phrases
-	// containing `)"`.
+	// A raw string with a custom delimiter, because the prompt quotes phrases containing `)"`.
 	inline constexpr std::string_view INIT_PROMPT = R"AGENTS(Write an AGENTS.md for this repository.
 
 AGENTS.md is the instruction file a coding agent loads on EVERY request. It is

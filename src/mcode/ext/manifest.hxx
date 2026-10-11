@@ -35,6 +35,4 @@ namespace mcode::ext {
 	[[nodiscard]] auto parse_manifest( std::string_view text, std::string_view origin,
 		std::string_view directory_name ) -> result< manifest >;
 
-	[[nodiscard]] auto known_permissions( ) -> const std::vector< std::string_view >&;
-
 }

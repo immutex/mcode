@@ -9,21 +9,14 @@
 
 namespace mcode::memory {
 
-	// A hard cap, enforced at write time. Past it the write is refused and the
-	// oldest entries are named, because the human is the writer and is the only
-	// actor who can judge what is still true.
+	// A hard cap: past it the write is refused, and the error names the ledger to prune.
 	inline constexpr std::size_t MAX_NOTES_LINES = 200;
 
-	// One file, no index, no database. At the scale the evidence supports --
-	// tens of entries, one developer, one repo -- a single file is greppable,
-	// diffable and auditable by reading it, and an index buys nothing that `grep`
-	// does not while costing a dependency slot.
+	// Never inside the workspace: a ledger the repository ships would be untrusted text.
 	[[nodiscard]] auto ledger_path( const std::filesystem::path& workspace )
 		-> result< std::filesystem::path >;
 
-	// Appends the user's text verbatim under a dated heading. No model is in this
-	// path: an LLM write pass costs 24-94% more tokens for no measurable quality
-	// change, and its output is where the measured form degradation comes from.
+	// Appends the text verbatim: no model is in this path.
 	[[nodiscard]] auto append_note( const std::filesystem::path& workspace,
 		std::string_view text, std::string_view source ) -> status;
 

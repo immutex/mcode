@@ -37,10 +37,8 @@ namespace mcode {
 			return plan;
 		}
 
-		// Walk back from the newest message accumulating the tail that must stay
-		// verbatim, then count the tool results before it. Only results are
-		// candidates: the call record is what lets the model re-issue the read, so
-		// dropping it would remove the path back to the payload.
+		// Only results are candidates: the call record is what lets the model re-issue
+		// the read, so dropping it would remove the path back to the payload.
 		auto kept_tokens = std::int64_t{ 0 };
 		auto keep_results = std::size_t{ 0 };
 		auto index = history.size( );
@@ -102,8 +100,7 @@ namespace mcode {
 
 		auto reclaimed = std::int64_t{ 0 };
 
-		// Oldest first, keeping the newest `keep` results verbatim: recent output is
-		// what the current step is reasoning about.
+		// Recent output is what the current step is reasoning about.
 		for ( auto index = std::size_t{ 0 }; index < reclaimable.size( ) - keep; ++index ) {
 			auto* block = reclaimable[ index ].first;
 

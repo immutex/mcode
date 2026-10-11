@@ -31,7 +31,8 @@ a list, and a list is defeated by anything not on it.
 
 **In**
 
-- `apply_sandbox` implemented for all three platforms behind the existing seam
+- Platform sandbox implementations behind the existing seam: Landlock, Seatbelt
+  and the Windows token, applied on the spawn path rather than in-process
 - Windows: `CreateRestrictedToken` + `CreateJobObjectW` (kill-on-close, UI and
   memory limits) + an ACL write boundary
 - Linux: Landlock with **runtime ABI detection** + seccomp

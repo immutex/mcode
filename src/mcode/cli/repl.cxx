@@ -50,23 +50,14 @@ namespace mcode::cli {
 
 		auto turn = session{ *built };
 
-		// The plain path draws no prompt, so without this the session prints
-		// nothing until the first answer arrives and reads as a hang. The
-		// model is named because it is the one thing the user cannot see from
-		// the prompt: the plain path is the fallback for a terminal the TUI
-		// could not take over.
+		// The plain path draws no prompt, so the banner tells the user the session is live.
 		std::fprintf( stderr, "mcode: interactive session; one prompt per line, Ctrl+D to exit\n" );
 		std::fflush( stderr );
 
-		// The plain path has no renderer, so the answer is echoed here. Without
-		// this the fallback read input and discarded every response, which is a
-		// session that looks like it works and says nothing.
-		// The bus owns both subscriptions for as long as the loop lives, so the
-		// handles are kept only to make the ownership explicit.
+		// The plain path has no renderer, so the answer is echoed here.
+		// The bus owns both subscriptions for as long as the loop lives.
 		[[maybe_unused]] auto echo = built->bus( ).subscribe( events::kind::assistant_delta,
 			[]( const events::event& value ) {
-				// Named `payload` rather than `parsed`: the outer scope holds the
-				// parsed options, and shadowing it is a gate failure.
 				auto payload = json::document::parse( value.payload_json );
 
 				if ( !payload ) {
@@ -100,9 +91,6 @@ namespace mcode::cli {
 			}
 
 			last_code = turn.run_turn( *line );
-
-			// Ctrl+C mid-turn maps to `interrupted` and returns to the
-			// prompt; the session continues.
 		}
 
 		return to_int( last_code );

@@ -15,7 +15,6 @@ namespace mcode::perm {
 	[[nodiscard]] auto floor_recursive_delete( const std::vector< std::string >& argv,
 		const mcode::workspace& space ) -> std::optional< std::string >;
 
-	// the same word as an argument is not escalation.
 	[[nodiscard]] auto floor_privilege_escalation( const std::vector< std::string >& argv )
 		-> std::optional< std::string >;
 
@@ -29,7 +28,6 @@ namespace mcode::perm {
 	[[nodiscard]] auto floor_raw_device_write( const std::vector< std::string >& argv )
 		-> std::optional< std::string >;
 
-	// takes the identity, not permission_request: permission.hxx includes this header.
 	[[nodiscard]] auto floor_reason( const request_identity& request,
 		const mcode::workspace& space ) -> std::optional< std::string >;
 

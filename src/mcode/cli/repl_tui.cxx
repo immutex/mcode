@@ -4,6 +4,7 @@
 #include "mcode/cli/slash.hxx"
 #include "mcode/cli/repl_events.hxx"
 #include "mcode/cli/repl_plain.hxx"
+#include "mcode/cli/repl_turn.hxx"
 #include "mcode/cli/repl_view.hxx"
 #include "mcode/cli/session.hxx"
 #include "mcode/cli/repl.hxx"
@@ -29,11 +30,9 @@
 #include "mcode/support/time.hxx"
 #include "mcode/tools/context.hxx"
 #include "mcode/tools/register.hxx"
-#include "mcode/tui/approval_tui.hxx"
 #include "mcode/tui/editor.hxx"
 #include "mcode/tui/frame.hxx"
 #include "mcode/tui/mention.hxx"
-#include "mcode/tui/notify.hxx"
 #include "mcode/tui/render.hxx"
 #include "mcode/tui/tty.hxx"
 #include <algorithm>
@@ -50,13 +49,8 @@
 
 namespace {
 
-	inline constexpr auto PUMP_TICK_MS = 50;
-
-	// Short, not a long block: typing echoes between keys, and the resize
-	// check rides the timeout.
+	// Short: typing must echo between keys, and the resize check rides the timeout.
 	inline constexpr std::uint32_t KEY_WAIT_MS = 250;
-
-	inline constexpr std::string_view INTERRUPTED_NOTICE = "interrupted";
 
 }
 
@@ -77,8 +71,6 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 
 	auto parsed = mcode::cli::parse_exec_options( arguments );
 
-	// The reason, not a bare usage dump: this printed the usage text alone, so a
-	// TUI user who mistyped a flag got no idea which one. The plain path named it.
 	if ( !parsed || !parsed->unknown_arguments.empty( ) ) {
 		std::fprintf( stderr, "mcode: %s\n\n",
 			mcode::cli::argument_error_text( arguments )->c_str( ) );
@@ -90,11 +82,8 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 	auto queue = mcode::tui::event_queue{ };
 	auto coordinator = mcode::tui::render_coordinator{ };
 
-	// Serializes every `render_coordinator` access. The pump repaints on the
-	// main thread while the approval presenter draws on the worker thread, and
-	// both mutate the same live region; two interleaved flushes diffed against
-	// a buffer that no longer modelled the screen. Never held recursively:
-	// `refresh` and `repaint` below assume their caller holds it.
+	// Serializes every `render_coordinator` access: the pump repaints on the main
+	// thread while the approval presenter draws on the worker. Never held recursively.
 	auto render_gate = std::mutex{ };
 
 	{
@@ -123,10 +112,8 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 	auto& loop = *built;
 	auto turn = mcode::cli::session{ loop };
 
-	// Set by Esc or Ctrl+C while a turn runs, and read on two sides: the delta
-	// subscriber on the loop thread drops the rest of the response rather than
-	// appending to the answer the user chose to keep, and the loop itself reads
-	// it at its next step boundary and stops the turn.
+	// Esc or Ctrl+C: the delta subscriber drops the rest of the response, and the
+	// loop stops at its step boundary.
 	auto interrupted = std::atomic< bool >{ false };
 
 	loop.set_cancel_source( &interrupted );
@@ -138,23 +125,10 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 	// libc++ lacks `stop_token` at every macOS deployment target, so `std::jthread` is unusable.
 	auto worker = std::thread{ };
 
-	// Caller holds `render_gate`: the flush and the write that consumes its
-	// bytes must not be split, or the two writers interleave on the console.
-	auto repaint = [&coordinator, &session_tty]( ) {
-		const auto bytes = coordinator.flush( );
-
-		if ( !bytes.empty( ) ) {
-			session_tty->write( session_tty->caps( ).synchronized_output
-				? mcode::tui::ansi_emitter{ session_tty->caps( ) }.synchronized( bytes )
-				: bytes );
-		}
-	};
 
 	auto editor = mcode::tui::input_editor{ };
 
-	// The picker walks the workspace once and reuses the list for every
-	// keystroke. A root that will not open degrades to an empty picker rather
-	// than failing the session.
+	// A root that will not open degrades to an empty picker, not a failed session.
 	const auto mention_root = parsed->working_directory.empty( )
 		? std::filesystem::current_path( )
 		: std::filesystem::path{ parsed->working_directory };
@@ -166,20 +140,14 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 	const auto& commands = mcode::cli::builtin_commands( );
 	auto palette = mcode::tui::slash_palette{ };
 
-	// The `/resume` picker's rows, rebuilt each time the picker opens. Owned here
-	// rather than by the controller: `list_sessions` returns a fresh vector, so
-	// the controller's pointer has to outlive the call, and a local inside the
-	// opener would dangle before the picker is drawn.
+	// Owned here, not by the controller: `list_sessions` returns a fresh vector, so
+	// a pointer to a local in the opener would dangle by the time the picker is drawn.
 	auto session_picker_rows = std::vector< mcode::tui::slash_command >{ };
 
-	// One palette, four sources: slash commands, the file picker, the Ctrl+R
-	// history search, and the session picker. The rows, the filter and the
-	// renderer are shared.
 	auto palette_controller = mcode::cli::palette_controller{ { &commands, &files,
 		&editor.history( ), &session_picker_rows } };
 
-	// The input as it was before Ctrl+R took over the prompt, so Esc restores
-	// it rather than losing what the user had half-typed.
+	// Restored on Esc so Ctrl+R does not lose a half-typed prompt.
 	auto history_draft = std::string{ };
 
 	const auto sync_palette = [ & ]( ) {
@@ -194,152 +162,12 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 	auto turn_started = std::chrono::steady_clock::time_point{ };
 	auto last_turn_elapsed_ms = std::uint64_t{ 0 };
 
-	const auto show_prompt = [ & ]( ) {
-		const auto held = std::lock_guard< std::mutex >{ render_gate };
-
-		refresh( coordinator, loop, turn_started, last_turn_elapsed_ms );
-		coordinator.set_prompt( editor.text( ), editor.flattened_cursor( ) );
-		repaint( );
-	};
-
-	auto pump_until_done = [&]() {
-		auto was_running = false;
-		auto was_asking = false;
-
-		while ( !turn_done.load( ) ) {
-			// The approval prompt reads the same console on the worker thread,
-			// so the key read stands down while it owns the screen. The check
-			// and the read are not atomic with respect to each other; the
-			// window is microseconds wide and the prompt has not been shown to
-			// the user yet, so no answer can be lost in it.
-			auto pressed = mcode::tui::key_event{ };
-			const auto asking = approval_active.load( );
-
-			if ( !asking ) {
-				pressed = session_tty->read_key( PUMP_TICK_MS );
-			} else {
-				std::this_thread::sleep_for( std::chrono::milliseconds( PUMP_TICK_MS ) );
-			}
-
-			// The prompt appeared: a window that is not in front gets told,
-			// because the question blocks until it is answered.
-			if ( asking && !was_asking ) {
-				mcode::tui::notify_terminal( "mcode", "approval needed" );
-			}
-
-			was_asking = asking;
-
-			const auto drained = queue.drain( );
-			auto applied = false;
-			auto running = false;
-			auto keyed = false;
-
-			{
-				const auto held = std::lock_guard< std::mutex >{ render_gate };
-
-				if ( pressed.type != mcode::tui::key_event::kind::timeout ) {
-					keyed = handle_turn_key( coordinator, interrupted, *session_tty, pressed );
-				}
-
-				for ( const auto& item : drained ) {
-					coordinator.apply( item );
-					applied = true;
-				}
-
-				running = !coordinator.state( ).tools.empty( );
-
-				if ( applied || running || was_running || keyed ) {
-					// The approval prompt owns the console while it is up. The
-					// flag is read under the same lock the presenter sets it
-					// under, so a repaint cannot pass this check and then race
-					// the presenter's draw.
-					if ( !approval_active.load( ) ) {
-						coordinator.advance_tools( mcode::tui::monotonic_ms( ) );
-						refresh( coordinator, loop, turn_started, last_turn_elapsed_ms );
-						repaint( );
-					}
-				}
-			}
-
-			was_running = running;
-		}
-
-		const auto held = std::lock_guard< std::mutex >{ render_gate };
-
-		for ( const auto& item : queue.drain( ) ) {
-			coordinator.apply( item );
-		}
-
-		approval_active.store( false );
-		refresh( coordinator, loop, turn_started, last_turn_elapsed_ms );
-		repaint( );
-	};
-
-	// One turn, start to finish: echo what was submitted, run it on a worker so
-	// the UI keeps painting, pump until it reports done, then record what it cost
-	// and drain the keys typed during it. Extracted from the loop body, which did
-	// all of this inline and read as though the loop itself were the turn.
-	const auto run_one_turn = [ & ]( const std::string& submitted_text,
-		const std::string& prompt_text ) {
-			{
-				const auto held = std::lock_guard< std::mutex >{ render_gate };
-
-				coordinator.queue_text(
-					std::string{ mcode::tui::USER_GUTTER } + " " + submitted_text,
-					mcode::tui::token::accent );
-			}
-
-			show_prompt( );
-
-			turn_done.store( false );
-			interrupted.store( false );
-			turn_started = std::chrono::steady_clock::now( );
-
-			// The wheel is reported only while a turn runs: at the prompt the
-			// terminal's own scrollback is the better target, and taking the wheel
-			// there would freeze it.
-			session_tty->set_mouse_reporting( true );
-
-			worker = std::thread{ [ & ]( ) {
-				last_code = turn.run_turn( prompt_text );
-				turn_done.store( true );
-			} };
-
-			pump_until_done( );
-			worker.join( );
-
-			session_tty->set_mouse_reporting( false );
-
-			// The turn is over: a window that is not in front gets told, and one
-			// that is gets an invisible notification the terminal discards.
-			mcode::tui::notify_terminal( "mcode",
-				last_code == mcode::cli::exit_code::success ? "turn complete" : "turn failed" );
-
-			last_turn_elapsed_ms = static_cast< std::uint64_t >( std::chrono::duration_cast<
-				std::chrono::milliseconds >( std::chrono::steady_clock::now( )
-					- turn_started ).count( ) );
-			turn_started = std::chrono::steady_clock::time_point{ };
-
-			if ( interrupted.exchange( false ) ) {
-				last_code = mcode::cli::exit_code::interrupted;
-
-				const auto held = std::lock_guard< std::mutex >{ render_gate };
-
-				coordinator.queue_text( std::string{ INTERRUPTED_NOTICE },
-					mcode::tui::token::warn );
-			}
-
-			// Draining during the turn would race the approval prompt reading the same console.
-			while ( true ) {
-				const auto pressed = session_tty->read_key( 0 );
-
-				if ( pressed.type == mcode::tui::key_event::kind::timeout ) {
-					break;
-				}
-			}
-
-			show_prompt( );
-	};
+	const auto runtime = mcode::cli::detail::repl_runtime{ .tty = &*session_tty,
+		.coordinator = &coordinator, .editor = &editor, .queue = &queue, .loop = &loop,
+		.turn = &turn, .render_gate = &render_gate, .turn_done = &turn_done,
+		.approval_active = &approval_active, .interrupted = &interrupted,
+		.worker = &worker, .last_code = &last_code, .turn_started = &turn_started,
+		.last_turn_elapsed_ms = &last_turn_elapsed_ms };
 
 	{
 		const auto held = std::lock_guard< std::mutex >{ render_gate };
@@ -353,13 +181,12 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 		session_tty->write( mcode::tui::emit_opening( coordinator, opening ) );
 	}
 
-	show_prompt( );
+	show_prompt( runtime );
 
 	while ( true ) {
 		auto submitted = std::optional< std::string >{ };
 
 		while ( !submitted ) {
-			// A short poll, not a long block, so typing echoes between keys.
 			const auto key = session_tty->read_key( KEY_WAIT_MS );
 
 			if ( key.type == mcode::tui::key_event::kind::timeout ) {
@@ -377,10 +204,10 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 						session_tty->write( coordinator.park( ) );
 					}
 
-					show_prompt( );
+					show_prompt( runtime );
 				}
 
-				show_prompt( );
+				show_prompt( runtime );
 
 				continue;
 			}
@@ -391,32 +218,27 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 				break;
 			}
 
-			// A scroll key moves the viewport; any other key first returns to
-			// the live view, so the prompt is never unreachable.
 			if ( view_scrolled( coordinator, render_gate ) ) {
 				const auto rows = key_scroll_rows( *session_tty, key.type );
 
 				if ( rows.has_value( ) ) {
 					scroll_view( coordinator, render_gate, *rows );
-					show_prompt( );
+					show_prompt( runtime );
 
 					continue;
 				}
 
 				return_to_live( coordinator, render_gate );
-				show_prompt( );
+				show_prompt( runtime );
 			} else if ( const auto rows = key_scroll_rows( *session_tty, key.type );
 				rows.has_value( ) ) {
 				scroll_view( coordinator, render_gate, *rows );
-				show_prompt( );
+				show_prompt( runtime );
 
 				continue;
 			}
 
 			if ( key.type == mcode::tui::key_event::kind::ctrl_r ) {
-				// The reverse search takes over the prompt: what is already
-				// typed becomes its filter, and the pre-search input is kept
-				// so Esc restores it.
 				if ( palette_controller.source( ) != mcode::cli::palette_source::history ) {
 					history_draft = editor.text( );
 					palette_controller.open_history( palette, history_draft );
@@ -430,7 +252,7 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 					coordinator.set_palette( palette );
 				}
 
-				show_prompt( );
+				show_prompt( runtime );
 
 				continue;
 			}
@@ -443,15 +265,12 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 				palette_controller.reset( );
 				history_draft.clear( );
 				sync_palette( );
-				show_prompt( );
+				show_prompt( runtime );
 
 				continue;
 			}
 
 			if ( key.type == mcode::tui::key_event::kind::escape ) {
-				// Esc dismisses the picker without submitting; the typed text
-				// stays so the user can keep editing it. Leaving the history
-				// search also restores what was typed before Ctrl+R.
 				if ( palette.open ) {
 					const auto was_history =
 						palette_controller.source( ) == mcode::cli::palette_source::history;
@@ -473,7 +292,7 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 						coordinator.set_palette( palette );
 					}
 
-					show_prompt( );
+					show_prompt( runtime );
 
 					continue;
 				}
@@ -483,7 +302,7 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 				std::ignore = editor.handle( abandon );
 
 				sync_palette( );
-				show_prompt( );
+				show_prompt( runtime );
 
 				continue;
 			}
@@ -491,16 +310,13 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 			if ( key.type == mcode::tui::key_event::kind::enter ) {
 				const auto* row = palette.highlighted( );
 
-				// Only a slash command runs. A mention and a history entry are
-				// inserted into the prompt: the model reads the file itself,
-				// and a recalled command is usually edited before it is sent.
 				if ( row != nullptr && !mcode::cli::submits( palette_controller.source( ) ) ) {
 					editor.set_text( mcode::cli::inserted_line( palette_controller.source( ),
 						editor.text( ), *row ) );
 					palette_controller.reset( );
 					history_draft.clear( );
 					sync_palette( );
-					show_prompt( );
+					show_prompt( runtime );
 
 					continue;
 				}
@@ -519,13 +335,12 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 				continue;
 			}
 
-			// While up, the palette owns the arrow keys and Tab, not the caret.
 			if ( palette.open && !palette.empty( ) ) {
 				if ( key.type == mcode::tui::key_event::kind::up ) {
 					palette.selected = palette.selected == 0
 						? palette.matches.size( ) - 1 : palette.selected - 1;
 					sync_palette( );
-					show_prompt( );
+					show_prompt( runtime );
 
 					continue;
 				}
@@ -533,7 +348,7 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 				if ( key.type == mcode::tui::key_event::kind::down ) {
 					palette.selected = ( palette.selected + 1 ) % palette.matches.size( );
 					sync_palette( );
-					show_prompt( );
+					show_prompt( runtime );
 
 					continue;
 				}
@@ -547,20 +362,19 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 						palette_controller.reset( );
 						history_draft.clear( );
 						sync_palette( );
-						show_prompt( );
+						show_prompt( runtime );
 
 						continue;
 					}
 				}
 			}
 
-			// A paste is inserted, never submitted: its newlines are content,
-			// and a multi-line paste that submitted line by line was the bug.
+			// A paste is inserted, never submitted: its newlines are content.
 			if ( key.type == mcode::tui::key_event::kind::paste ) {
 				editor.insert_text( key.text );
 
 				sync_palette( );
-				show_prompt( );
+				show_prompt( runtime );
 
 				continue;
 			}
@@ -573,7 +387,7 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 
 			std::ignore = editor.handle( *forwarded );
 			sync_palette( );
-			show_prompt( );
+			show_prompt( runtime );
 		}
 
 		if ( !submitted || submitted->empty( ) ) {
@@ -586,8 +400,7 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 			continue;
 		}
 
-		// A palette submission never passed through the editor, so the buffer
-		// is cleared here; the editor's own Enter already did it.
+		// A palette submission bypassed the editor, so its buffer is cleared here.
 		editor.reset( );
 
 		palette.open = false;
@@ -603,10 +416,8 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 
 		const auto match = mcode::cli::match_command( *submitted, commands );
 
-		// What the turn runs. A plain submission runs what was typed; a command
-		// that returned a prompt runs that instead. The echo below still prints
-		// what the user typed, because a generated prompt is instructions rather
-		// than a transcript line.
+		// The echo still shows what the user typed: a returned prompt is instructions,
+		// not a transcript line.
 		auto prompt = *submitted;
 
 		if ( match.is_command ) {
@@ -623,7 +434,7 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 				editor.set_text( "@" );
 				palette_controller.reset( );
 				sync_palette( );
-				show_prompt( );
+				show_prompt( runtime );
 
 				continue;
 			}
@@ -638,7 +449,7 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 						coordinator.queue_text( sessions.error( ).msg, mcode::tui::token::warn );
 					}
 
-					show_prompt( );
+					show_prompt( runtime );
 
 					continue;
 				}
@@ -646,8 +457,7 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 				session_picker_rows = mcode::cli::session_rows( *sessions );
 
 				if ( session_picker_rows.empty( ) ) {
-					// Opening an empty list would look like a picker with no rows
-					// rather than a workspace with no sessions.
+					// An empty picker would look like a broken list, not an empty workspace.
 					{
 						const auto held = std::lock_guard< std::mutex >{ render_gate };
 
@@ -655,7 +465,7 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 							mcode::tui::token::warn );
 					}
 
-					show_prompt( );
+					show_prompt( runtime );
 
 					continue;
 				}
@@ -663,20 +473,15 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 				editor.set_text( "/resume " );
 				palette_controller.open_sessions( palette, editor.text( ) );
 
-				// `sync_palette`, not `show_prompt`: opening the picker changes the
-				// palette's contents, and only `sync_palette` pushes them to the
-				// coordinator. `show_prompt` alone repaints the stale closed palette
-				// it already had, which is what made `/resume` look like it did
-				// nothing.
+				// `sync_palette` before `show_prompt`: only it pushes the opened palette to
+				// the coordinator, so `show_prompt` alone repaints the stale closed one.
 				sync_palette( );
-				show_prompt( );
+				show_prompt( runtime );
 
 				continue;
 			}
 
-			// The session swap. Only between turns -- the log, the budget and the
-			// history are not safe to move under a running one, and this branch is
-			// reached before the worker starts.
+			// Only between turns: the log and history are not safe to move under a running one.
 			if ( result.start_new_session || result.adopt_session_id.has_value( ) ) {
 				auto swapped = result.start_new_session
 					? start_new_session( loop )
@@ -687,15 +492,12 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 					if ( !swapped ) {
 						coordinator.queue_text( swapped.error( ).msg, mcode::tui::token::warn );
 					} else {
-						// A boundary, so the transcript above is not read as this
-						// session's. The coordinator keeps the previous session's
-						// rows and has no clear, so a separator is what tells them
-						// apart.
+						// The coordinator has no clear, so a separator marks the session boundary.
 						coordinator.queue_text( *swapped, mcode::tui::token::accent );
 					}
 				}
 
-				show_prompt( );
+				show_prompt( runtime );
 
 				continue;
 			}
@@ -706,10 +508,8 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 				coordinator.queue_text( result.output );
 			}
 
-			// A command that only printed is done; one that asked for a turn
-			// falls through to the same path a typed prompt takes.
 			if ( !result.submit_prompt ) {
-				show_prompt( );
+				show_prompt( runtime );
 
 				continue;
 			}
@@ -717,15 +517,15 @@ auto run_repl( const std::vector< std::string >& arguments ) -> int {
 			prompt = *result.submit_prompt;
 		}
 
-		run_one_turn( *submitted, prompt );
+		run_one_turn( runtime, *submitted, prompt );
 	}
 
-	// The destructor restores the console, but the wheel must be handed back
-	// before anything else writes, or the terminal keeps eating it.
+	// Handed back before anything else writes, or the terminal keeps eating the wheel.
 	session_tty->set_mouse_reporting( false );
 
 	if ( exiting ) {
-		// Clear before the destructor restores the console, or the shell's prompt lands on it.
+		// Cleared first: the destructor restores the console, and the shell's prompt
+		// would land on it.
 		const auto cleared = mcode::tui::ansi_emitter{ session_tty->caps( ) }
 			.clear_region( coordinator.painted_height( ) );
 

@@ -55,8 +55,8 @@ Three testable properties, one per slice:
    register a command, schedule a timer, read config, read and write a file,
    and snapshot the session — without recompiling the harness.
 3. **The sandbox is not a claim.** `sandbox_capability_level()` reports what this
-   machine actually enforces, `apply_sandbox` restricts a spawned child on all
-   three platforms, and the help text, the README and the seam all agree.
+   machine actually enforces, the spawn path confines a child on all three
+   platforms, and the help text, the README and the seam all agree.
 
 ## The three workstreams
 
@@ -102,7 +102,7 @@ rather than indicative.
 | `extensions/mcode.d.luau` | B | the declaration file must match the surface exactly |
 | `tests/test_api_*.cxx` | B | |
 | `src/mcode/platform/sandbox_{windows,linux,macos}.cxx` | C | |
-| `src/mcode/platform/seams.{hxx,cxx}` | C | `apply_sandbox`, `sandbox_capability_level`, `sandbox_network_level`, `sandbox_mechanism` |
+| `src/mcode/platform/seams.{hxx,cxx}` | C | `sandbox_capability_level`, `sandbox_network_level`, `sandbox_mechanism` |
 | `src/mcode/proc/**` | C | spawn with a profile applied |
 | `src/mcode/tools/exec_tools.cxx` | C | the sandboxed exec path |
 | `tests/test_sandbox.cxx` | C | |

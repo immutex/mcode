@@ -70,17 +70,13 @@ namespace mcode::model {
 			return out;
 		}
 
-		// A strict schema admits no optional member: every property becomes required and
-		// additional properties are refused, so a member that was optional is expressed as a
-		// nullable type instead. Providers reject the request outright otherwise.
+		// A strict schema admits no optional member: an optional one becomes a nullable type,
+		// since providers reject the request outright otherwise.
 		[[nodiscard]] auto strictify_schema( const json::node& schema ) -> json::node {
 			auto out = schema;
 
-			// `member`, not `members[...]`: the subscript default-constructs the
-			// entry when the key is absent, so the guard below returned a schema it
-			// had just mutated. A no-argument tool's schema came back as
-			// `{"type":"object","properties":null}`, and providers reject a null
-			// properties object.
+			// `member`, not `members[...]`: the subscript default-constructs the entry, so the
+			// null guard would pass on a schema the subscript just created.
 			auto* existing = out.member( "properties" );
 
 			if ( existing == nullptr || existing->type != json::node::kind::object ) {
@@ -170,11 +166,9 @@ namespace mcode::model {
 		inline constexpr std::string_view CACHE_MARKER =
 			"\"cache_control\":{\"type\":\"ephemeral\"},";
 
-		// The marker is inserted at a member position, so the anchor must be the byte after the
-		// opening brace of the first message object - the system message, which is the last
-		// byte of the stable prefix. Offsets are into the rendered body, so only the renderer
-		// can locate one: the message key cannot occur inside an earlier value, and the tools
-		// array follows the messages, so the first match is the real one.
+		// The marker is inserted at a member position, so the anchor is the byte after the
+		// opening brace of the first message object; the first match is the real one because
+		// the message key cannot occur inside an earlier value.
 		[[nodiscard]] auto stable_prefix_offsets( const std::string_view body,
 			const request_spec& fields ) -> std::vector< std::size_t > {
 			const auto key = "\"" + fields.messages + "\":";
@@ -193,9 +187,7 @@ namespace mcode::model {
 			return { array_at + 2 };
 		}
 
-		// The byte offset just inside each element of the messages array, in order. The marker
-		// is inserted at a member position, so an element's opening brace is the anchor and the
-		// element's own key cannot occur before it.
+		// The byte offset just inside each element of the messages array, in order.
 		[[nodiscard]] auto message_offsets( const std::string_view body,
 			const request_spec& fields ) -> std::vector< std::size_t > {
 			const auto key = "\"" + fields.messages + "\":";
@@ -238,7 +230,6 @@ namespace mcode::model {
 				}
 
 				if ( character == '{' ) {
-					// depth 0 is an element of the messages array; deeper is inside one.
 					if ( depth == 0 ) {
 						offsets.push_back( index + 1 );
 					}
@@ -288,8 +279,7 @@ namespace mcode::model {
 
 	namespace {
 
-		// The unmarked body. Breakpoints are offsets into it, so both entry points below build
-		// from this one function and the offsets can never be located on a marker-shifted body.
+		// Breakpoints are offsets into this body, so both entry points build from here.
 		[[nodiscard]] auto render_body( const chat_request& request, const request_spec& fields )
 			-> result< std::string > {
 			auto body = json::node::make_object( );
@@ -309,8 +299,7 @@ namespace mcode::model {
 				messages.items.push_back( std::move( *rendered ) );
 			}
 
-			// A prefilled assistant turn the model continues, which starts the answer at the
-			// first tool call. It is the last message, so it cannot disturb the cache prefix.
+			// The last message, so the prefill cannot disturb the cache prefix.
 			if ( !request.prefill.empty( ) ) {
 				auto seeded = json::node::make_object( );
 				seeded.members[ "role" ] = json::node::make_string( fields.role_assistant );
@@ -373,9 +362,7 @@ namespace mcode::model {
 
 			if ( !request.response_schema_json.empty( ) ) {
 				// Tool-calling and a JSON response format together make some open-weight models
-				// stop calling tools entirely. Tool-calling is this harness's primary mode, so
-				// the response format is dropped rather than allowed to suppress it, unless the
-				// gateway is known to honour both.
+				// stop calling tools, so the format is dropped unless the gateway honours both.
 				if ( request.tools.empty( ) || request.response_format_with_tools ) {
 					body.members[ fields.response_schema ] =
 						json::node::make_string( request.response_schema_json );
@@ -425,8 +412,7 @@ namespace mcode::model {
 			return text;
 		}
 
-		// The markers are the caller's: the assembler fills them, because a byte offset into
-		// the rendered body is not something a caller can compute from the messages alone.
+		// The markers are the caller's: a byte offset is not computable from the messages alone.
 		if ( request.cache.mode == cache_mode::explicit_markers &&
 			!request.cache.breakpoints.empty( ) ) {
 			return apply_breakpoints( std::move( *text ), request.cache.breakpoints );
@@ -437,7 +423,6 @@ namespace mcode::model {
 
 	auto cache_breakpoints( const chat_request& request, const request_spec& fields )
 		-> std::vector< std::size_t > {
-		// An already-populated plan is the caller's decision; only an empty one is filled.
 		if ( !request.cache.breakpoints.empty( ) ) {
 			return request.cache.breakpoints;
 		}
@@ -454,10 +439,8 @@ namespace mcode::model {
 			return offsets;
 		}
 
-		// A second breakpoint on the newest message keeps the cache extending as the
-		// conversation grows: a read walks back only a bounded number of blocks from a
-		// breakpoint, so a single anchor on the stable prefix stops hitting once the history
-		// in front of it is longer than that window.
+		// A second breakpoint on the newest message keeps the cache extending: a read walks
+		// back only a bounded number of blocks from a breakpoint.
 		const auto elements = message_offsets( *text, fields );
 
 		if ( elements.size( ) > 1 ) {

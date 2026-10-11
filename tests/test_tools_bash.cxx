@@ -122,7 +122,6 @@ TEST_CASE( "bash executes the parsed argv, not the raw string", "[tools][bash]" 
 	// findstr resolves the relative path against the workspace root, which is the child's cwd
 	const auto command = std::string{ R"({"command":"findstr /c:\"a  b\" spacing.txt"})" };
 #else
-	// an absolute target: the POSIX child's cwd is not the workspace root
 	const auto target = ( setup.path / "spacing.txt" ).string( );
 	const auto command = R"({"command":"grep -x 'a  b' )" + target + R"("})";
 #endif
@@ -132,6 +131,5 @@ TEST_CASE( "bash executes the parsed argv, not the raw string", "[tools][bash]" 
 	CHECK( out.find( "\"exit_code\":0" ) != std::string::npos );
 	CHECK( out.find( "\"stdout\":\"a  b\\n\"" ) != std::string::npos );
 
-	// the output is in the failure message, so a miss names the command's own error
 	INFO( "output: " << out );
 }

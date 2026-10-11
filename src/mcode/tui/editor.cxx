@@ -33,7 +33,6 @@ namespace mcode::tui {
 			return start;
 		}
 
-		// the offset past the cluster starting at `offset`
 		[[nodiscard]] auto cluster_end( const std::string_view text, const std::size_t offset )
 			-> std::size_t {
 			const auto cluster = next_cluster( text.substr( offset ), ANY_AMBIGUOUS_WIDTH ).first;
@@ -41,7 +40,6 @@ namespace mcode::tui {
 			return offset + cluster.size( );
 		}
 
-		// the backslash run ending at `cursor`
 		[[nodiscard]] auto trailing_backslashes( const std::string& text, const std::size_t cursor )
 			-> std::size_t {
 			auto count = std::size_t{ 0 };
@@ -58,8 +56,7 @@ namespace mcode::tui {
 	auto input_editor::handle( const key_event& event ) -> std::optional< std::string > {
 		auto& line = lines_[ cursor_row_ ];
 
-		// One implementation of "open a row at the caret": the explicit
-		// `newline` key and the backslash continuation both go through it.
+		// The `newline` key and the backslash continuation share this.
 		const auto open_row = [ & ]( ) {
 			auto split = editor_line{ };
 			split.text = line.text.substr( line.cursor );
@@ -79,7 +76,7 @@ namespace mcode::tui {
 			}
 
 			case key::enter: {
-				// an odd backslash run before the caret continues the line; an even one is literal
+				// an odd run of backslashes ends in a continuation; an even one is literal
 				const auto trailing = trailing_backslashes( line.text, line.cursor );
 
 				if ( trailing % 2 == 1 ) {
@@ -291,9 +288,8 @@ namespace mcode::tui {
 				return;
 			}
 
-			// A pasted line break opens a row, exactly as the newline key
-			// does, and the caret follows into it. A trailing newline opens a
-			// final empty row, so the caret lands where the text ends.
+			// A pasted line break opens a row exactly as the newline key does;
+			// a trailing newline opens a final empty row for the caret.
 			auto split = editor_line{ };
 			split.text = line.text.substr( line.cursor );
 			line.text.resize( line.cursor );

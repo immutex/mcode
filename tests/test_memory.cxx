@@ -28,9 +28,7 @@ TEST_CASE( "the ledger lives outside the workspace", "[memory]" ) {
 
 	REQUIRE( path.has_value( ) );
 
-	// A ledger a repository could ship would be a file arriving from someone else
-	// that the prompt then reads as trusted, which is the whole problem the trust
-	// gate exists to solve.
+	// a ledger a repository could ship would arrive as trusted content in the prompt.
 	REQUIRE( !path_is_within( root, *path ) );
 }
 
@@ -60,8 +58,7 @@ TEST_CASE( "a note is appended verbatim under a dated heading", "[memory]" ) {
 
 	REQUIRE( ledger.has_value( ) );
 
-	// Verbatim: an extraction pass is where the measured form degradation comes
-	// from, so nothing rewrites the user's words on the way in.
+	// verbatim: an extraction pass is where the measured form degradation comes from.
 	REQUIRE( ledger->find( text ) != std::string::npos );
 	REQUIRE( ledger->find( "## " ) == 0 );
 	REQUIRE( ledger->find( "— user" ) != std::string::npos );

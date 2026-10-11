@@ -109,23 +109,18 @@ namespace mcode::model {
 
 		cache_plan cache;
 
-		// Emit the strict tool-calling shape: `strict: true` plus a schema every property of
-		// which is required with additional properties refused, so the provider constrains
-		// generation to the schema instead of the model having to follow it unaided.
+		// Emit `strict: true` plus a schema every property of which is required, so the
+		// provider constrains generation instead of the model following the schema unaided.
 		bool strict_tools = false;
 
-		// Default-off for an unknown gateway: several do not implement the field, and a
-		// request that names it can be rejected outright. Absent means the provider's default.
+		// Absent means the provider's default; a gateway that does not implement the field can
+		// reject a request that names it.
 		std::optional< bool > parallel_tool_calls = std::nullopt;
 
-		// Whether a JSON response format may accompany a tool list. Some open-weight models
-		// stop calling tools when both are present, so the format is dropped unless the
-		// gateway is known to honour both.
+		// Some open-weight models stop calling tools when both are present.
 		bool response_format_with_tools = false;
 
-		// A trailing assistant message whose content the model continues. A gateway that
-		// accepts it starts the answer mid-turn, which skips the preamble some models emit
-		// before a tool call. Empty means none is sent.
+		// A trailing assistant message the model continues; empty means none is sent.
 		std::string prefill;
 
 		std::int64_t max_output_tokens = 0;
@@ -175,7 +170,6 @@ namespace mcode::model {
 
 		auto add( const chat_event& event ) -> void;
 
-		// Sums another reading into this one, for a total across several requests.
 		auto operator+=( const usage& other ) noexcept -> usage& {
 			input += other.input;
 			output += other.output;
@@ -212,7 +206,6 @@ namespace mcode::model {
 		double price_cache_write = 0.0;
 		double price_output = 0.0;
 
-		// A model with no declared window still gets one, so the loop can budget against it.
 		[[nodiscard]] constexpr auto effective_context_window( ) const noexcept -> std::int64_t {
 			return context_window > 0 ? context_window : DEFAULT_CONTEXT_WINDOW;
 		}

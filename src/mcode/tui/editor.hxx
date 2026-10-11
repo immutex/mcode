@@ -16,8 +16,6 @@ namespace mcode::tui {
 		std::size_t cursor = 0;
 	};
 
-	// The multi-line input editor. It owns the buffer and the history and
-	// knows nothing about the terminal.
 	class input_editor {
 	public:
 		enum class key : std::uint8_t {
@@ -41,39 +39,25 @@ namespace mcode::tui {
 			std::string text;
 		};
 
-		// Applies one key. Returns the completed submission when Enter closed
-		// a non-empty buffer.
-		//
-		// enter continues the row on an odd backslash run before the caret, otherwise submits
+		// Returns the completed submission when Enter closed a non-empty buffer.
+		// An odd run of backslashes continues the row instead of submitting.
 		auto handle( const key_event& event ) -> std::optional< std::string >;
 
-		// Clears the buffer for the next submission.
 		auto reset( ) -> void;
 
-		// Replaces the buffer with one line and parks the caret at its end.
 		auto set_text( std::string text ) -> void;
 
-		// Inserts text at the caret, opening a row per newline. Never
-		// submits: a pasted block is content, and its line breaks are rows.
+		// Never submits: a pasted block is content, and its line breaks are rows.
 		auto insert_text( std::string_view text ) -> void;
 
-		// The pending input as one line, rows joined by a space. The prompt row
-		// is a single line, so this is what it echoes while typing.
 		[[nodiscard]] auto text( ) const -> std::string;
 
-		// The caret's byte offset across every row, which is what the one-line
-		// prompt echo needs.
 		[[nodiscard]] auto flattened_cursor( ) const noexcept -> std::size_t;
 
-		// How many rows the buffer holds. One is the ordinary single-line
-		// prompt; more means Enter continued the line.
 		[[nodiscard]] auto row_count( ) const noexcept -> std::size_t {
 			return lines_.size( );
 		}
 
-		// The submitted entries, oldest first. A read accessor only: the editor
-		// ranks nothing, so a caller that wants a filtered view does the
-		// ranking itself.
 		[[nodiscard]] auto history( ) const noexcept -> const std::vector< std::string >& {
 			return history_;
 		}

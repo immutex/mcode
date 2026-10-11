@@ -216,7 +216,6 @@ TEST_CASE( "message text concatenates only textual blocks", "[model]" ) {
 }
 
 TEST_CASE( "arguments split across events are not parsed per fragment", "[model]" ) {
-	// fragments are only valid JSON at finish().
 	auto descriptor = model::descriptor_from_json( R"({
 		"name": "splitter",
 		"endpoint": "https://example.invalid/v1/chat/completions",

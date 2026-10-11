@@ -16,7 +16,6 @@ namespace permission_test {
 		setup.approval.queue( perm::approval_outcome::allow_once );
 		CHECK( setup.exec( "git status" ) == perm::permission_decision::allow );
 
-		// allow_once is not remembered, so the same argv prompts again.
 		setup.approval.queue( perm::approval_outcome::allow_once );
 		CHECK( setup.exec( "git status" ) == perm::permission_decision::allow );
 		CHECK( setup.approval.asks( ) == 2 );

@@ -29,7 +29,6 @@ TEST_CASE( "a repeated tail is a loop, ordinary prose is not", "[agent][guard]" 
 	}
 
 	SECTION( "advancing prose does not fire" ) {
-		// The property that matters: legitimate long thinking must never trip it.
 		const auto thinking = ordinary_thinking( );
 
 		CHECK( periodic_tail_length( thinking, REPETITION_MIN_UNIT,
@@ -38,8 +37,6 @@ TEST_CASE( "a repeated tail is a loop, ordinary prose is not", "[agent][guard]" 
 	}
 
 	SECTION( "a tail shorter than the floor does not fire" ) {
-		// Below `REPETITION_MIN_UNIT * REPETITION_MIN_COPIES` there is not
-		// enough text to be periodic at the smallest allowed unit.
 		const auto short_tail = std::string{ "abcabcabcabcabcabcabcabcabcabcabcabcabcabc" };
 
 		CHECK( short_tail.size( ) < REPETITION_MIN_UNIT * REPETITION_MIN_COPIES );
@@ -48,9 +45,7 @@ TEST_CASE( "a repeated tail is a loop, ordinary prose is not", "[agent][guard]" 
 	}
 
 	SECTION( "a genuinely repetitive string fires even at a short period" ) {
-		// "abc" repeated is periodic with period 3, so it is also periodic with
-		// period 30 -- the scan starts at the floor, not at 3, and still finds
-		// it. That is correct: no real message is 120 characters of "abc".
+		// Period 3 is also periodic with period 30: the scan starts at the floor, not at 3.
 		auto short_period = std::string{ };
 
 		for ( auto index = 0; index < 40; ++index ) {
@@ -76,8 +71,7 @@ TEST_CASE( "the cross-turn signal catches a reworded restatement", "[agent][guar
 		"and swallows the error code, so the callers cannot distinguish the cases. I will "
 		"read the file and then look at the call sites before changing anything at all.";
 
-	// A near-duplicate: same content, minor rewording. Not exactly periodic, so
-	// only the cross-turn signal can catch it.
+	// Not exactly periodic, so only the cross-turn signal can catch it.
 	const auto second =
 		"Let me read the config loader to see how it reports a failure. It returns bool "
 		"and swallows the error code, so the callers cannot distinguish the cases. I will "
@@ -104,16 +98,14 @@ TEST_CASE( "the cross-turn signal ignores short and distinct turns", "[agent][gu
 	}
 }
 
-// The cross-turn signal compares two normalized strings. Comparing a normalized
-// one against a raw one made it dead: a verbatim repeat that differed only in
-// whitespace and case measured 0.885 against a 0.90 threshold and never fired.
+// Both sides are normalized before comparison, or a repeat differing only in
+// whitespace and case measures under the threshold and never fires.
 TEST_CASE( "a repeat that differs only in spacing and case still fires",
 	"[agent][guard]" ) {
 	const auto first = ordinary_thinking( );
 	auto second = std::string{ };
 
 	for ( const auto character : first ) {
-		// Same words, different whitespace and case.
 		second.push_back( character == ' ' ? '\n' : static_cast< char >( std::toupper(
 			static_cast< unsigned char >( character ) ) ) );
 	}

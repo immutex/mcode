@@ -8,9 +8,7 @@ namespace mcode::tui {
 
 	namespace {
 
-		// East-Asian Wide and Fullwidth ranges. The table is the Unicode 15
-		// EAW=W/F set, compressed to the ranges that matter for a terminal;
-		// pinned to Unicode 15 so every component agrees.
+		// The Unicode 15 EAW=W/F set, compressed to the ranges a terminal meets.
 		constexpr auto WIDE_RANGES = std::array< std::pair< char32_t, char32_t >, 48 >{ {
 			{ 0x1100, 0x115F }, { 0x231A, 0x231B }, { 0x2329, 0x232A },
 			{ 0x23E9, 0x23EC }, { 0x23F0, 0x23F0 }, { 0x23F3, 0x23F3 },
@@ -30,9 +28,7 @@ namespace mcode::tui {
 			{ 0xFF00, 0xFF60 }, { 0xFFE0, 0xFFE6 },
 		} };
 
-		// Ambiguous-width code points, the subset a transcript plausibly
-		// carries: box-drawing look-alikes, punctuation, Greek and Cyrillic
-		// letters. The policy is per session, not per cell.
+		// The ambiguous-width subset a transcript plausibly carries; per session.
 		constexpr auto AMBIGUOUS_RANGES = std::array< std::pair< char32_t, char32_t >, 30 >{ {
 			{ 0x00A1, 0x00A1 }, { 0x00A4, 0x00A4 }, { 0x00A7, 0x00A8 },
 			{ 0x00B0, 0x00B1 }, { 0x00B6, 0x00B6 }, { 0x00BB, 0x00BB },
@@ -76,8 +72,7 @@ namespace mcode::tui {
 		}
 
 		[[nodiscard]] auto is_emoji_presentation( const char32_t value ) noexcept -> bool {
-			// The Emoji_Presentation property, the ranges that force width 2
-			// even without VS16.
+			// Emoji_Presentation: these force width 2 without VS16.
 			return ( value >= 0x1F300 && value <= 0x1F64F ) ||
 				( value >= 0x1F680 && value <= 0x1F6FF ) ||
 				( value >= 0x1F900 && value <= 0x1F9FF ) ||
@@ -194,8 +189,7 @@ namespace mcode::tui {
 			return 0;
 		}
 
-		// Combining marks and zero-width joiners take no column. The mark
-		// ranges are General_Category = Mn/Mc/Me and the common diacritics.
+		// General_Category Mn/Mc/Me plus the common diacritics take no column.
 		if ( value < 0x20 || ( value >= 0x7F && value < 0xA0 ) ) {
 			return 0;
 		}
@@ -271,14 +265,12 @@ namespace mcode::tui {
 				continue;
 			}
 
-			// A ZWJ binds the next codepoint into this cluster: an emoji
-			// sequence continues through every joined base.
+			// A ZWJ binds the next codepoint into this cluster.
 			if ( last_codepoint == 0x200D ) {
 				after_joiner = true;
 			}
 
-			// Extending members of the cluster: combining marks, joiners,
-			// variation selectors, skin tones, keycap marks.
+			// Cluster extenders: zero-width marks, joiners, selectors, skin tones.
 			const auto extends = codepoint_width( value, ambiguous_width ) == 0 ||
 				is_skin_tone_modifier( value ) || is_keycap_mark( value ) ||
 				after_joiner;
@@ -346,35 +338,6 @@ namespace mcode::tui {
 		}
 
 		return std::string{ text.substr( 0, text.size( ) - rest.size( ) ) };
-	}
-
-	auto split_lines( const std::string_view text ) -> std::vector< std::string > {
-		auto out = std::vector< std::string >{ };
-		auto start = std::size_t{ 0 };
-
-		while ( start < text.size( ) ) {
-			auto newline = text.find( '\n', start );
-
-			if ( newline == std::string_view::npos ) {
-				newline = text.size( );
-			}
-
-			auto line = text.substr( start, newline - start );
-
-			if ( !line.empty( ) && line.back( ) == '\r' ) {
-				line.remove_suffix( 1 );
-			}
-
-			out.push_back( std::string{ line } );
-
-			if ( newline == text.size( ) ) {
-				break;
-			}
-
-			start = newline + 1;
-		}
-
-		return out;
 	}
 
 	cell_buffer::cell_buffer( const std::size_t row_count, const std::size_t column_count,

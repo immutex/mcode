@@ -11,13 +11,7 @@
 
 namespace mcode::cli {
 
-	// Rebuilds the conversation from a session log. Only the events that carry a
-	// message or a tool output contribute; the activity events (`tool.call`,
-	// `run.end`, `session.*`) are diagnostics and are not part of the transcript.
-	//
-	// A tool output is attached to the assistant message that requested it, which
-	// is where the model expects it: the loop records the assistant message
-	// before dispatch, so the outputs follow it in the log.
+	// The loop records the assistant message before dispatch, so tool outputs follow it in the log.
 	[[nodiscard]] auto restore_transcript( const event_log& log )
 		-> std::vector< model::message > {
 		auto history = std::vector< model::message >{ };
@@ -50,15 +44,8 @@ namespace mcode::cli {
 				continue;
 			}
 
-			// The result rides on the last assistant message, as a tool block
-			// carrying the id the call used. One message can carry several calls,
-			// so the id decides which one this answers -- matching the first call
-			// instead attached every result to it and left the others unanswered.
-			//
-			// A record with no id is from a session written before the id was
-			// recorded; there the first call still lacking a result is the best
-			// available guess, which is also what makes several results on one
-			// message land on their own calls in order.
+			// The call id picks which call this answers; a record without one takes the first
+			// unanswered.
 			if ( history.empty( ) ) {
 				continue;
 			}
@@ -114,9 +101,7 @@ namespace mcode::cli {
 	}
 
 
-	// The first user message in a log, flattened to one line and cut to `max_chars`.
-	// This is what makes a session picker usable: an id and a timestamp do not tell
-	// a reader which session they want, and the opening request does.
+	// What makes a picker usable: an id and a timestamp do not say which session a reader wants.
 	auto session_opening_line( const std::filesystem::path& path, const std::size_t max_chars )
 		-> std::string {
 		auto stream = std::ifstream{ path, std::ios::binary };
@@ -125,9 +110,7 @@ namespace mcode::cli {
 			return { };
 		}
 
-		// Line by line rather than a full replay: a picker lists many sessions and
-		// only the first user message is wanted, so this stops at the first hit
-		// instead of parsing every tool output in every log.
+		// Stops at the first user message, so a picker over many sessions stays cheap.
 		auto line = std::string{ };
 
 		while ( std::getline( stream, line ) ) {
@@ -178,8 +161,7 @@ namespace mcode::cli {
 				return text;
 			}
 
-			// Cut on a word boundary when there is one close to the limit, so the
-			// row does not end mid-word.
+			// Cut on a word boundary when one is close to the limit.
 			auto cut = text.rfind( ' ', max_chars );
 			text.resize( cut != std::string::npos && cut > max_chars / 2 ? cut : max_chars );
 			text += "...";

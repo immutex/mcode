@@ -26,7 +26,6 @@ namespace mcode::platform {
 	inline constexpr long SYSCALL_LANDLOCK_ADD_RULE = __NR_landlock_add_rule;
 	inline constexpr long SYSCALL_LANDLOCK_RESTRICT_SELF = __NR_landlock_restrict_self;
 
-	// granted read+execute, never write; a missing path (e.g. /lib64) is skipped.
 	inline constexpr std::string_view SYSTEM_READ_ROOTS[] = {
 		"/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/dev",
 	};
@@ -34,7 +33,15 @@ namespace mcode::platform {
 	// ABI 5's IOCTL_DEV right: an enum member, so #ifdef cannot detect a missing one.
 	inline constexpr std::uint64_t LANDLOCK_ACCESS_FS_IOCTL_DEV_RIGHT = 1ULL << 15;
 
-	// accumulated up the ladder; ABI 1 has no REFER, so cross-directory rename/link are denied.
+	// The ABI level each right appeared in. A right granted below its level is
+	// rejected by the kernel, and one withheld above it silently narrows the sandbox.
+	inline constexpr int LANDLOCK_ABI_MIN = 1;
+	inline constexpr int LANDLOCK_ABI_REFER = 2;
+	inline constexpr int LANDLOCK_ABI_TRUNCATE = 3;
+	inline constexpr int LANDLOCK_ABI_NETWORK = 4;
+	inline constexpr int LANDLOCK_ABI_IOCTL_DEV = 5;
+
+	// REFER appeared in ABI 2, so below that level rename and link are denied.
 	[[nodiscard]] auto landlock_fs_rights( const int abi ) -> std::uint64_t {
 		auto rights = std::uint64_t{ 0 };
 
@@ -52,15 +59,15 @@ namespace mcode::platform {
 		rights |= LANDLOCK_ACCESS_FS_MAKE_BLOCK;
 		rights |= LANDLOCK_ACCESS_FS_MAKE_SYM;
 
-		if ( abi >= 2 ) {
+		if ( abi >= LANDLOCK_ABI_REFER ) {
 			rights |= LANDLOCK_ACCESS_FS_REFER;
 		}
 
-		if ( abi >= 3 ) {
+		if ( abi >= LANDLOCK_ABI_TRUNCATE ) {
 			rights |= LANDLOCK_ACCESS_FS_TRUNCATE;
 		}
 
-		if ( abi >= 5 ) {
+		if ( abi >= LANDLOCK_ABI_IOCTL_DEV ) {
 			rights |= LANDLOCK_ACCESS_FS_IOCTL_DEV_RIGHT;
 		}
 
@@ -68,7 +75,7 @@ namespace mcode::platform {
 	}
 
 	[[nodiscard]] auto landlock_net_rights( const int abi ) -> std::uint64_t {
-		if ( abi < 4 ) {
+		if ( abi < LANDLOCK_ABI_NETWORK ) {
 			return 0;
 		}
 
@@ -104,7 +111,7 @@ namespace mcode::platform {
 #endif
 
 #if defined( __linux__ )
-		if ( abi < 1 ) {
+		if ( abi < LANDLOCK_ABI_MIN ) {
 			return std::unexpected( mcode::fail( mcode::errc::unsupported,
 				"no Landlock ABI on this kernel" ) );
 		}
@@ -141,8 +148,7 @@ namespace mcode::platform {
 
 			const auto added = ::syscall( SYSCALL_LANDLOCK_ADD_RULE, ruleset.get( ),
 				LANDLOCK_RULE_PATH_BENEATH, &beneath, 0U );
-			// Read before `close`, which may clobber it. Named for the syscall that set
-			// it: `open_error` named the wrong call and sent a reader to the `open` above.
+			// Read before `close`, which may clobber it.
 			const auto rule_error = errno;
 
 			::close( fd );
@@ -191,8 +197,7 @@ namespace mcode::platform {
 
 			const auto added = ::syscall( SYSCALL_LANDLOCK_ADD_RULE, ruleset.get( ),
 				LANDLOCK_RULE_PATH_BENEATH, &beneath, 0U );
-			// Read before `close`, which may clobber it. Named for the syscall that set
-			// it: `open_error` named the wrong call and sent a reader to the `open` above.
+			// Read before `close`, which may clobber it.
 			const auto rule_error = errno;
 
 			::close( fd );
@@ -232,7 +237,7 @@ namespace mcode::platform {
 				std::string{ "landlock_restrict_self failed: " } + std::strerror( errno ) ) );
 		}
 
-		if ( !profile.allow_network && abi < 4 ) {
+		if ( !profile.allow_network && abi < LANDLOCK_ABI_NETWORK ) {
 			return sandbox_linux_seccomp_deny_network( );
 		}
 

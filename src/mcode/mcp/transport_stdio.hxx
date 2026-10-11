@@ -46,10 +46,7 @@ namespace mcode::mcp {
 
 		auto fail_oversized( ) -> void;
 
-		// What one read did to the loop. `run` and `pump` were the same loop
-		// written twice, and they had already drifted: `pump` dropped the
-		// OS-level reason an EOF carried, so a transport that died during a
-		// `pump` reported nothing.
+		// One read's outcome, shared so `run` and `pump` cannot drift apart.
 		enum class read_effect {
 			proceed,
 			stop,

@@ -92,8 +92,7 @@ TEST_CASE( "a wrapped bullet hangs its continuation rows under the text",
 
 	REQUIRE( wrapped.size( ) > 1 );
 
-	// the marker is two columns wide, and each continuation repeats them as
-	// spaces, so the text hangs under the bullet's body and not at column 0.
+	// the marker is two columns wide, and each continuation repeats them as spaces.
 	for ( auto index = std::size_t{ 1 }; index < wrapped.size( ); ++index ) {
 		REQUIRE_FALSE( wrapped[ index ].empty( ) );
 		CHECK( wrapped[ index ].front( ).text == "  " );
@@ -157,7 +156,6 @@ TEST_CASE( "a single word longer than the row splits on cluster boundaries",
 		joined += row_text( line );
 	}
 
-	// nothing is dropped and nothing overflows.
 	CHECK( joined == word );
 }
 

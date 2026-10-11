@@ -1,6 +1,6 @@
 #pragma once
 
-// always available: presentation, not capability; attribution is unforgeable.
+// presentation, not capability: always available, and the attribution is unforgeable.
 
 #include <string>
 

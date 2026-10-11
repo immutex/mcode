@@ -24,7 +24,6 @@ namespace tui_test {
 		return text;
 	}
 
-	// the text a frame writes, with the escape sequences removed
 	[[nodiscard]] inline auto visible_text( const std::string& bytes ) -> std::string {
 		auto out = std::string{ };
 
@@ -46,9 +45,8 @@ namespace tui_test {
 		return out;
 	}
 
-	// A state's rendered rows against a fresh render of the same buffer: a
-	// cache that lags shows up as a text difference, which is what this
-	// compares.
+	// A state's rendered rows against a fresh render of the same buffer: a cache that
+	// lags shows up as a text difference.
 	[[nodiscard]] inline auto same_rows( const std::vector< styled_line >& left,
 		const std::vector< styled_line >& right ) -> bool {
 		if ( left.size( ) != right.size( ) ) {
@@ -64,18 +62,10 @@ namespace tui_test {
 		return true;
 	}
 
-	// A terminal, in miniature: it consumes the coordinator's byte stream and
-	// tracks the screen that would actually result, scrolls included.
-	//
-	// `visible_text` cannot stand in for this. It strips the positioning, so a
-	// screen that scrolled its header off the top and a screen that kept it
-	// yield the same string -- which is exactly how a header that never
-	// appeared survived 118 tui assertions. Anything that depends on WHERE the
-	// bytes land needs a model that has a cursor.
-	//
-	// Only the sequences the emitter emits are implemented: cursor motion
-	// (`A`/`B`/`H`/`G`), erase (`K`/`J`), SGR and private modes (ignored). A
-	// sequence it does not know is ignored rather than mistyped as text.
+	// A terminal in miniature: it consumes the coordinator's byte stream and tracks
+	// the screen that would result, scrolls included. `visible_text` cannot stand in,
+	// because it strips the positioning: a scrolled-away header and a kept one yield
+	// the same string. Only the sequences the emitter emits are implemented.
 	class screen_model {
 	public:
 		screen_model( const std::size_t rows, const std::size_t columns )
@@ -112,8 +102,7 @@ namespace tui_test {
 			}
 		}
 
-		// Trailing blanks are stripped: every row is space-filled to its width,
-		// so a comparison that kept them would fail on padding alone.
+		// Trailing blanks are stripped, so a comparison does not fail on padding.
 		[[nodiscard]] auto row( const std::size_t index ) const -> std::string {
 			if ( index >= rows_ ) {
 				return { };
@@ -132,7 +121,6 @@ namespace tui_test {
 			return text;
 		}
 
-		// The rows, with every trailing blank row dropped.
 		[[nodiscard]] auto rows( ) const -> std::vector< std::string > {
 			auto out = std::vector< std::string >{ };
 
@@ -147,9 +135,8 @@ namespace tui_test {
 			return out;
 		}
 
-		// How many times the screen scrolled. A scroll is not a defect by
-		// itself -- `commit` scrolls on purpose -- but a scroll at a point
-		// where the caller believed the screen was static is.
+		// How many times the screen scrolled: a scroll is not a defect by itself, but
+		// one where the caller believed the screen was static is.
 		[[nodiscard]] auto scroll_count( ) const noexcept -> std::size_t {
 			return scrolls_;
 		}
@@ -158,7 +145,6 @@ namespace tui_test {
 			return cursor_row_;
 		}
 
-		// The first row holding `needle`, or nothing.
 		[[nodiscard]] auto find_row( const std::string_view needle ) const
 			-> std::size_t {
 			for ( auto index = std::size_t{ 0 }; index < rows_; ++index ) {
@@ -171,7 +157,6 @@ namespace tui_test {
 		}
 
 	private:
-		// Returns the index just past the escape sequence starting at `start`.
 		auto escape( const std::string& bytes, const std::size_t start ) -> std::size_t {
 			if ( start + 1 >= bytes.size( ) ) {
 				return start + 1;
@@ -208,8 +193,8 @@ namespace tui_test {
 			return index + 1;
 		}
 
-		// The first parameter, or `fallback` when the sequence omits it -- a
-		// bare `\x1b[A` means one row, not zero.
+		// The first parameter, or `fallback` when the sequence omits it -- a bare
+		// `\x1b[A` means one row.
 		[[nodiscard]] auto parameter( const std::string& parameters,
 			const std::size_t position, const std::size_t fallback ) const -> std::size_t {
 			auto value = std::size_t{ 0 };
@@ -319,8 +304,6 @@ namespace tui_test {
 				}
 
 				default:
-					// SGR (`m`), private modes (`h`/`l`) and the rest carry no
-					// cursor or cell change.
 					break;
 			}
 		}
@@ -332,8 +315,7 @@ namespace tui_test {
 				return;
 			}
 
-			// At the bottom row: a real terminal scrolls, and so does this. The
-			// top row is lost, which is the whole point of modelling it.
+			// At the bottom row a real terminal scrolls, and so does this: the top row is lost.
 			for ( auto index = std::size_t{ 0 }; index + 1 < rows_; ++index ) {
 				for ( auto column = std::size_t{ 0 }; column < columns_; ++column ) {
 					cells_[ index * columns_ + column ] =
@@ -356,9 +338,7 @@ namespace tui_test {
 			cells_[ cursor_row_ * columns_ + cursor_column_ ] = value;
 			++cursor_column_;
 
-			// DECAWM is on by default: a write past the last column wraps. The
-			// emitter reserves one column to avoid relying on this, but a model
-			// that ignored the wrap would disagree with a real terminal.
+			// DECAWM is on by default: a write past the last column wraps.
 			if ( cursor_column_ >= columns_ ) {
 				cursor_column_ = 0;
 				line_feed( );

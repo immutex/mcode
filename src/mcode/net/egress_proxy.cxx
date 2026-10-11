@@ -30,14 +30,16 @@ namespace mcode::net {
 		constexpr int SOCKS_CONNECT = 1;
 		constexpr int SOCKS_SUCCEEDED = 0;
 		constexpr int SOCKS_NOT_ALLOWED = 2;
+		constexpr unsigned char SOCKS_ATYP_IPV4 = 1;
+		constexpr std::uint16_t PLAIN_HTTP_PORT = 80;
 
 		struct target {
 			std::string host;
 			std::uint16_t port = 0;
 		};
 
-		// `CONNECT host:port HTTP/1.1`. Absolute-form `GET http://host/path` is
-		// also accepted, because a plain-HTTP client sends that shape.
+		// `CONNECT host:port`, or absolute-form `GET http://host/path`, which a plain-HTTP
+		// client sends.
 		auto parse_http_request( const std::string& request, target& out ) -> bool {
 			const auto space = request.find( ' ' );
 
@@ -55,9 +57,8 @@ namespace mcode::net {
 			auto authority = request.substr( space + 1, rest - space - 1 );
 
 			if ( method == "CONNECT" ) {
-				// authority is host:port
+				// `authority` is already host:port.
 			} else {
-				// absolute-form: strip scheme, then path.
 				const auto scheme = authority.find( "://" );
 
 				if ( scheme == std::string::npos ) {
@@ -80,8 +81,8 @@ namespace mcode::net {
 			const auto colon = authority.rfind( ':' );
 
 			if ( colon == std::string::npos || colon == 0 ) {
-				// No port means the scheme default, which for both accepted methods
-				// is 80 or 443 and neither is stated; refuse rather than guess.
+				// A missing port is a scheme default that is not stated, so refuse rather
+				// than guess.
 				return false;
 			}
 
@@ -115,9 +116,8 @@ namespace mcode::net {
 		std::atomic< std::uint64_t > denied{ 0 };
 		std::atomic< std::uint64_t > allowed{ 0 };
 
-		// Resolves once, drops denied addresses, and dials the survivor. The single
-		// resolution is what makes a DNS rebind unable to swap the address between
-		// the check and the connect.
+		// Resolves once and dials the first address the policy allows, so a DNS rebind cannot
+		// swap the address between the check and the connect.
 		auto connect_upstream( const target& destination, tcp::socket& upstream ) -> bool {
 			auto error = boost::system::error_code{ };
 			auto resolver = tcp::resolver{ context };
@@ -144,10 +144,8 @@ namespace mcode::net {
 			return false;
 		}
 
-		// One thread per direction. A single sequential pump would deadlock on any
-		// protocol where the server speaks first -- SSE, long-poll, an SSH banner --
-		// because the client half would sit waiting to read while nothing had been
-		// forwarded upstream yet.
+		// One thread per direction: a single sequential pump would deadlock on any protocol
+		// where the server speaks first, because nothing has been forwarded upstream yet.
 		static auto pump( tcp::socket& from, tcp::socket& to ) -> void {
 			auto buffer = std::vector< char >( RELAY_CHUNK );
 			auto error = boost::system::error_code{ };
@@ -176,15 +174,10 @@ namespace mcode::net {
 			}
 		}
 
-		// Reads until the end of the request headers, under a deadline. A single
-		// `read_some` may return a partial request -- on Linux the whole `CONNECT`
-		// line is not guaranteed in one segment, and parsing a truncated line would
-		// answer 400 to a request that was merely split.
-		//
-		// The deadline matters because `stop` joins this thread: a client that
-		// connects and says nothing would otherwise block the worker forever and
-		// hang shutdown. Non-blocking plus a poll step keeps that bounded without
-		// platform-specific socket options.
+		// Reads until the end of the request headers: one `read_some` may return a partial
+		// request, and a truncated `CONNECT` line would answer 400 to a request that was
+		// merely split. The deadline matters because `stop` joins this thread, so a client
+		// that connects and says nothing must not block the worker forever.
 		auto read_request_head( tcp::socket& client, std::string& out ) -> bool {
 			constexpr std::string_view TERMINATOR = "\r\n\r\n";
 			constexpr auto DEADLINE = std::chrono::seconds{ 10 };
@@ -249,14 +242,11 @@ namespace mcode::net {
 				return;
 			}
 
-			// The decision is made before any byte is relayed and before the tunnel
-			// is acknowledged: a refused host sees a 403 and nothing else.
-			//
-			// RFC 9110 §9.3.6 warns explicitly about tunnels to well-known or
-			// reserved ports, so the target port is restricted as well as the host.
+			// The decision is made before any byte is relayed, so a refused host sees a 403
+			// and nothing else. The port is restricted as well as the host.
 			if ( policy.decide( destination.host, destination.port )
 					== egress_decision::deny
-				|| ( destination.port != 80
+				|| ( destination.port != PLAIN_HTTP_PORT
 					&& !connect_port_allowed( destination.port ) ) ) {
 				++denied;
 
@@ -357,8 +347,11 @@ namespace mcode::net {
 			destination.port = static_cast< std::uint16_t >(
 				( static_cast< std::uint16_t >( port[ 0 ] ) << 8 ) | port[ 1 ] );
 
-			auto reply = std::array< unsigned char, 10 >{ };
-			reply[ 0 ] = SOCKS_VERSION;
+			// VER, REP, RSV, ATYP; BND.ADDR and BND.PORT stay zero. RFC 1928 defines no
+			// ATYP 0, so a reply that leaves it unset is malformed and a strict client
+			// rejects it.
+			auto reply = std::array< unsigned char, 10 >{
+				SOCKS_VERSION, 0, 0, SOCKS_ATYP_IPV4 };
 
 			if ( policy.decide( destination.host, destination.port )
 				== egress_decision::deny ) {
@@ -389,10 +382,8 @@ namespace mcode::net {
 			relay( client, upstream );
 		}
 
-		// Non-blocking accept with a poll step, not a blocking accept woken by
-		// closing the acceptor. Closing a socket another thread is blocked in
-		// `accept()` on wakes it on Windows and does NOT reliably wake it on Linux,
-		// so the blocking form hung every Linux run while passing on Windows.
+		// Non-blocking accept with a poll step: closing a socket another thread is blocked in
+		// `accept()` on does not reliably wake it on Linux.
 		auto accept_loop( tcp::acceptor& acceptor, const bool is_http ) -> void {
 			while ( !stopping.load( ) ) {
 				auto error = boost::system::error_code{ };
@@ -457,8 +448,6 @@ namespace mcode::net {
 				"cannot bind the SOCKS listener: " + error.message( ) ) );
 		}
 
-		// Non-blocking: the accept loop polls the stop flag, because closing a socket
-		// another thread is blocked in `accept()` on is not a reliable wakeup on Linux.
 		proxy.self_->http_acceptor->non_blocking( true, error );
 		proxy.self_->socks_acceptor->non_blocking( true, error );
 
@@ -470,8 +459,7 @@ namespace mcode::net {
 			return;
 		}
 
-		// Two blocking accept loops need two threads. Returns immediately: the
-		// proxy is a background service, not something the caller drives.
+		// Two blocking accept loops need two threads; returns immediately.
 		self_->http_worker = std::thread{ [ this ] {
 			self_->accept_loop( *self_->http_acceptor, true );
 		} };
@@ -488,8 +476,7 @@ namespace mcode::net {
 
 		self_->stopping.store( true );
 
-		// Closing the acceptor is what wakes a blocked `accept`; without it the
-		// join below waits for a connection that will never arrive.
+		// Closing the acceptor is what wakes a blocked `accept`.
 		auto error = boost::system::error_code{ };
 		self_->http_acceptor->close( error );
 		self_->socks_acceptor->close( error );

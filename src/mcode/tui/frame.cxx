@@ -52,11 +52,8 @@ namespace mcode::tui {
 			return { };
 		}
 
-		// "\x1b[0" and not "\x1b[0m": the trailing `m` closes the sequence, and
-		// every parameter appended below must land INSIDE the bracket. With the
-		// `m` already present the parameters were emitted after a complete
-		// sequence, so the terminal executed the reset and then printed the
-		// text ";90;37m" on screen.
+		// "\x1b[0" and not "\x1b[0m": `m` closes the sequence, and every
+		// parameter appended below must land inside the bracket.
 		auto out = std::string{ "\x1b[0" };
 
 		if ( value.bold ) {
@@ -151,18 +148,15 @@ namespace mcode::tui {
 			for ( auto index = std::size_t{ 0 }; index < run.count; ++index ) {
 				const auto& cell_value = current.at( run.row, run.column + index );
 
-				// The continuation slot of a wide cluster: the previous cell
-				// already drew both columns.
+				// The continuation slot of a wide cluster: the previous cell drew both.
 				if ( cell_value.width == 0 ) {
 					continue;
 				}
 
 				out += sgr( cell_value.cell_style );
 
-				// A blank cell has no text, and appending nothing leaves the
-				// previous frame's glyph on screen. Every erase -- a backspace,
-				// a line that got shorter, the spinner finishing -- would then
-				// ghost. One space repaints the column, so the diff is honest.
+				// An empty cell would leave the previous frame's glyph on
+				// screen, so every erase repaints the column with a space.
 				if ( cell_value.text.empty( ) ) {
 					out += ' ';
 				} else {
@@ -200,8 +194,7 @@ namespace mcode::tui {
 		auto out = region_top( row_count );
 
 		for ( auto index = std::size_t{ 0 }; index < row_count; ++index ) {
-			// EL erases the whole line without moving the cursor, which is what
-			// makes this safe to repeat per row.
+			// EL erases the line without moving the cursor, so this repeats per row.
 			out += "\x1b[2K";
 
 			if ( index + 1 < row_count ) {

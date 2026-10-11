@@ -44,10 +44,8 @@ namespace mcode::cli {
 				return to_int( exit_code::success );
 			}
 
-			// Through `index_lines`, the same rows the prompt is built from, so
-			// what the user sees here is what the model sees. The origin comes
-			// from the report: the index line does not carry it, because the
-			// prompt has no use for it.
+			// Through `index_lines`, so what the user sees here is what the model sees;
+			// the origin comes from the report because the index line does not carry it.
 			auto origins = std::map< std::string, std::string >{ };
 
 			for ( const auto& entry : report.entries ) {
@@ -59,10 +57,8 @@ namespace mcode::cli {
 				const auto found = origins.find( line.name );
 				const auto origin = found != origins.end( ) ? found->second : std::string{ };
 
-				// A hidden skill is listed, not omitted: `disable-model-invocation`
-				// keeps it out of the prompt, not out of the repository. Marking it
-				// is how a user sees that the skill exists and why the model has
-				// not heard of it.
+				// A hidden skill is listed, not omitted: `disable-model-invocation` keeps it out
+				// of the prompt, not out of the repository.
 				std::printf( "%-24s %-9s %s%s\n", line.name.c_str( ),
 					origin.c_str( ), line.description.c_str( ),
 					line.hidden ? "  [hidden from the model]" : "" );

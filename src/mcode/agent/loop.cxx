@@ -110,9 +110,8 @@ namespace mcode {
 				? budget_.max_steps - budget_.steps_used.load( )
 				: 0 );
 
-		// No leading quote: the previous field is a number, so a `"` here closes
-		// a string that was never open and makes the whole summary unparseable.
-		// Every `run.end` record was invalid JSON because of it.
+		// No leading quote: the previous field is a number, so a `"` here would close
+		// a string that was never open.
 		summary += ",\"remaining_usd\":";
 		summary += std::to_string( budget_.max_usd > budget_.usd_used.load( )
 				? budget_.max_usd - budget_.usd_used.load( )
@@ -140,8 +139,6 @@ namespace mcode {
 		summary += "\",\"reason\":\"";
 		json::append_escaped( summary, reason );
 
-		// Closes the `reason` string before the object. Without the quote the
-		// reason runs into the closing brace and the summary does not parse.
 		summary += "\"}";
 
 		return summary;
@@ -162,9 +159,6 @@ namespace mcode {
 		}
 	}
 
-	// A restored transcript replaces the history outright. It is not appended to:
-	// a resumed session continues one conversation, and merging two would send
-	// the model a transcript it never produced.
 	auto agent_loop::seed_history( std::vector< model::message > restored ) -> void {
 		history_ = std::move( restored );
 	}
@@ -172,14 +166,10 @@ namespace mcode {
 	auto agent_loop::reset_session( std::vector< model::message > restored ) -> void {
 		history_ = std::move( restored );
 
-		// Zero the counters, not the limits: `max_steps` and friends come from the
-		// command line and describe this process.
 		budget_.steps_used.store( 0 );
 		budget_.tokens_used.store( 0 );
 		budget_.usd_used.store( 0.0 );
 
-		// A fresh capture group, so `/undo` before the next turn finds nothing
-		// rather than reverting the previous session's last run.
 		mint_run_id( );
 
 		state_ = loop_state::idle;
@@ -233,9 +223,7 @@ namespace mcode {
 
 		history_.push_back( std::move( task_message ) );
 
-		// The conversation is what makes a session resumable, so it is recorded.
-		// Without this the log says a tool ran but never what was asked or
-		// answered, and `--continue` restores a sequence number, not a session.
+		// Recorded so `--continue` restores the conversation.
 		if ( log_ != nullptr && !history_.empty( ) ) {
 			log_->append( std::string{ agent::MESSAGE_USER_EVENT }, agent::message_to_json( history_.back( ) ) );
 		}
@@ -250,10 +238,7 @@ namespace mcode {
 
 		publish( events::kind::turn_start, "{}" );
 
-		// `turn_end` must fire on EVERY exit, including the early returns below, and
-		// the step count must be reported on every one of them. It was set only on
-		// the done/handoff branch, so an interrupted or provider-failed run told the
-		// caller it had taken zero steps.
+		// `turn_end` and the step count must fire on every exit, early returns included.
 		struct turn_end_guard {
 			agent_loop* self;
 			turn_outcome* outcome;
@@ -265,8 +250,6 @@ namespace mcode {
 		} const guard{ this, &outcome };
 
 		while ( true ) {
-			// Checked at the step boundary, which is the honest bound: a request
-			// already in flight is not abandoned mid-stream.
 			if ( cancel_ != nullptr && cancel_->load( ) ) {
 				finish_run( loop_state::handoff, "interrupted" );
 				outcome.final_state = loop_state::handoff;
@@ -277,7 +260,6 @@ namespace mcode {
 				return outcome;
 			}
 
-			// Every event from here until the next boundary is this step's.
 			if ( log_ != nullptr ) {
 				log_->set_position( snapshot_run_id_, turn_index_,
 					budget_.steps_used.load( ) + 1 );
@@ -286,7 +268,6 @@ namespace mcode {
 			publish( events::kind::step_start, std::string{ "{\"state\":\"" }
 				+ std::string{ to_string( state_ ) } + "\"}" );
 
-			// timers fire on this thread, once per step, never inside a hook's dispatch.
 			if ( pump_timers_ ) {
 				pump_timers_( );
 			}
@@ -313,7 +294,6 @@ namespace mcode {
 						return outcome;
 					}
 
-					// no tool call means this response is the answer, so Act must not re-request it.
 					plan_answered_ = !*planned;
 					state_ = loop_state::act;
 
@@ -321,7 +301,7 @@ namespace mcode {
 				}
 
 				case loop_state::act: {
-					// dispatch before the budget check, so a spent step still answers its calls.
+					// Dispatched ahead of the budget check, so a spent step still answers its calls.
 					if ( !pending_calls_.empty( ) ) {
 						dispatch_pending( );
 						state_ = loop_state::observe;
@@ -354,11 +334,6 @@ namespace mcode {
 						break;
 					}
 
-					// A thinking loop is checked before the response is used. The
-					// guard discards the looping message and re-asks with a short
-					// steer, so the run continues instead of ending on a symptom.
-					// When the steer budget is spent the verdict is ignored and the
-					// response is processed normally.
 					if ( const auto verdict = agent::detect_repetition( last_response_text_,
 						previous_texts_ ); verdict.looped ) {
 						if ( steer_repetition( verdict ) ) {
@@ -371,9 +346,6 @@ namespace mcode {
 					}
 
 					if ( *acted ) {
-						// A response whose arguments cannot be repaired is resampled blind:
-						// the attempt is dropped and the request repeated, because showing a
-						// small model its own broken output anchors it to that output.
 						if ( resample_pending_calls( ) ) {
 							break;
 						}
@@ -399,11 +371,7 @@ namespace mcode {
 						break;
 					}
 
-					// The repeated-call ladder is consulted before the failure branch. A call the
-					// dispatch guard refused is both a repeat and a failure, and the repeat is
-					// the informative reading: the ladder reflects once, then demands a new
-					// plan, where the failure branch alone would spend the whole reflection
-					// budget on a loop only replanning can break.
+					// Consulted ahead of the failure branch: the repeat is the informative reading.
 					const auto repeats = thrash_.repeat_count( );
 
 					if ( repeats >= THRASH_ESCALATION_FACTOR * THRASH_REPEAT_LIMIT ) {
@@ -455,15 +423,11 @@ namespace mcode {
 						break;
 					}
 
-					// the command is a JSON string member, so it must be quoted and escaped;
-					// an unquoted value is not JSON and the call would be rejected.
 					auto arguments = std::string{ "{\"command\":\"" };
 					json::append_escaped( arguments, verification_command_ );
 					arguments += "\"}";
 
-					// Harness-owned: the command comes from configuration, so the
-					// agent's approval policy does not apply to it. Without this the
-					// gate denied its own check in every headless run.
+					// Harness-owned, so the agent's approval policy does not apply to it.
 					harness_call_ = true;
 					auto checked = execute( tool_call{ std::string{ }, "bash", arguments } );
 					harness_call_ = false;
@@ -481,9 +445,7 @@ namespace mcode {
 							passed = code.has_value( ) && *code == 0 &&
 								( !timed_out.has_value( ) || !*timed_out );
 
-							// A gate that reports only "failed" leaves the reader with
-							// nothing: the exit code is the one fact that separates a
-							// real failure from a broken check.
+							// The exit code separates a real failure from a broken check.
 							if ( !passed ) {
 								verification_detail_ = code.has_value( )
 									? "the command exited " + std::to_string( *code )
@@ -588,16 +550,9 @@ namespace mcode {
 
 				case loop_state::handoff:
 				case loop_state::done: {
-					// The log needs a run.end even when the turn completed without a prior
-					// finish_run, but `summary_json` is the run-level "gave up" signal the
-					// exit-code mapping reads: setting it here would turn a completed run into
-					// a provider error. The event is appended directly, and the outcome keeps
-					// the empty summary that means "completed".
+					// `summary_json` is the run-level "gave up" signal the exit-code mapping
+					// reads, so the completed path leaves it empty.
 					if ( end_reason_.empty( ) ) {
-						// The same builder the gave-up path uses, so a completed run
-						// carries the token totals, the cost and the step count too.
-						// It used to append only `reason` and `state`, which left a
-						// successful run's log without any of them.
 						log_->append( "run.end", run_end_payload( state_ == loop_state::done
 								? "turn complete" : "handed off" ) );
 					}

@@ -10,7 +10,7 @@ namespace mcode::tools {
 
 	namespace {
 
-		// the run-id directory separates runs; this only separates calls within one
+		// separates calls within one run
 		auto spill_sequence = std::atomic< std::uint64_t >{ 0 };
 
 		auto artifact_path( std::string_view run_id, std::string_view tool_name ) -> std::string {
@@ -29,10 +29,6 @@ namespace mcode::tools {
 			return text::truncate_offset( text, max_bytes );
 		}
 
-	}
-
-	auto needs_truncation( std::string_view text ) noexcept -> bool {
-		return text.size( ) > INLINE_RESULT_CHARS;
 	}
 
 	auto truncate_result( const std::string_view text, const std::string_view run_id,

@@ -97,7 +97,7 @@ namespace mcode::ext {
 				continue;
 			}
 
-			// counted before the call: a throwing repeating timer must still consume its fire.
+			// counted first: a throwing repeating timer must still consume its fire.
 			++entry.fires_done;
 			++fired;
 
@@ -106,7 +106,7 @@ namespace mcode::ext {
 					+ std::chrono::milliseconds{ entry.interval_ms };
 			}
 
-			// read before the call: the handler may stop this timer and erase the entry.
+			// read first: the handler may stop this timer and erase the entry.
 			const auto reference = entry.function_reference;
 
 			if ( actions_.fire ) {
@@ -127,10 +127,6 @@ namespace mcode::ext {
 		}
 
 		timers_.clear( );
-	}
-
-	auto timer_registry::active_count( ) const noexcept -> std::size_t {
-		return timers_.size( );
 	}
 
 	auto timer_registry::reap( ) -> void {

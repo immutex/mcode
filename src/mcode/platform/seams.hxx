@@ -38,8 +38,7 @@ namespace mcode::platform {
 		full,
 	};
 
-	// Where the loopback proxy listens. The OS rule is the boundary; the
-	// `HTTP(S)_PROXY` variables are only how a compliant tool finds it.
+	// The OS rule is the boundary; `HTTP(S)_PROXY` is only how a compliant tool finds it.
 	struct egress_endpoint {
 		std::string host = "127.0.0.1";
 		std::uint16_t http_port = 0;
@@ -69,8 +68,7 @@ namespace mcode::platform {
 
 		bool allow_network = false;
 
-		// When set and `allow_network` is true, the OS rule permits only this
-		// endpoint instead of the whole network.
+		// With `allow_network`, the OS rule permits only this endpoint.
 		egress_endpoint egress;
 	};
 
@@ -102,34 +100,23 @@ namespace mcode::platform {
 		return "unavailable";
 	}
 
-	[[nodiscard]] auto apply_sandbox( const sandbox_profile& profile ) -> status;
-
-	// This process. A run-scoped path needs a suffix no concurrent run shares.
 	[[nodiscard]] auto current_process_id( ) noexcept -> std::uint64_t;
 
-	[[nodiscard]] auto terminate_process( std::uint64_t process_id, bool force ) -> status;
-	[[nodiscard]] auto terminate_process_tree( std::uint64_t process_id, bool force ) -> status;
 	[[nodiscard]] auto process_is_alive( std::uint64_t process_id ) -> bool;
 
 	[[nodiscard]] auto canonicalize( const std::filesystem::path& path )
 		-> result< std::filesystem::path>;
 	[[nodiscard]] auto temp_directory( ) -> result< std::filesystem::path >;
 
-	// A writable temp directory of our own, under the system one.
-	//
-	// The sandbox grants the child a writable temp, and on Windows a grant is an
-	// integrity label, which propagates to everything beneath the path. Granting
-	// the user's %TEMP% therefore walked and relabelled their entire temp tree on
-	// every command: 20.7 s of a 21.0 s spawn, and a lasting change to files that
-	// have nothing to do with the run. Narrow, and created once per process.
-	// Names the directory `sandbox_temp_directory` creates. The process id keeps
-	// two concurrent runs from sharing one.
+	// A writable temp directory of our own, under the system one: on Windows a write
+	// grant is an integrity label that propagates, so granting %TEMP% would relabel
+	// the user's whole temp tree on every command.
 	inline constexpr std::string_view SANDBOX_TEMP_PREFIX = "mcode-run-";
 
 	[[nodiscard]] auto sandbox_temp_directory( ) -> result< std::filesystem::path >;
 	[[nodiscard]] auto case_insensitive_paths( ) noexcept -> bool;
 
-	// Windows has MAX_PATH; long paths need the \\?\ prefix. A no-op elsewhere.
+	// Windows needs the \\?\ prefix for long paths; a no-op elsewhere.
 	[[nodiscard]] auto to_extended_path( const std::filesystem::path& path )
 		-> std::filesystem::path;
 

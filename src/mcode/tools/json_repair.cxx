@@ -37,7 +37,7 @@ namespace mcode::tools {
 			return json::document::parse( text ).has_value( );
 		}
 
-		// `,` with nothing but whitespace before the closing bracket is the commonest break.
+		// `,` before a closing bracket is the commonest break.
 		[[nodiscard]] auto drop_trailing_commas( const std::string_view text ) -> std::string {
 			auto out = std::string{ };
 			out.reserve( text.size( ) );
@@ -240,7 +240,7 @@ namespace mcode::tools {
 			return out;
 		}
 
-		// The end of the first balanced `{...}` or `[...]` starting at `start`, or nothing.
+		// one past the closer of the first balanced `{...}`/`[...]` from `start`, or nothing
 		[[nodiscard]] auto scan_balanced( const std::string_view text, const std::size_t start )
 			-> std::optional< std::size_t > {
 			auto depth = std::size_t{ 0 };
@@ -301,8 +301,8 @@ namespace mcode::tools {
 			return std::string_view::npos;
 		}
 
-		// Strips a markdown fence and any prose around the value. A fence is the single largest
-		// cause of a zero parse rate, so it is removed before anything else is attempted.
+		// A markdown fence is the commonest wrapper; the outermost balanced value is taken
+		// from whatever prose surrounds it.
 		[[nodiscard]] auto extract_value( const std::string_view text ) -> std::string {
 			auto body = std::string{ text };
 

@@ -26,12 +26,6 @@ namespace mcode::cli {
 		// A verification turn that never returns is worse than a failed one.
 		inline constexpr std::int64_t VERIFY_TIMEOUT_MS = 90'000;
 
-		// -------------------------------------------------------------------
-		// The provider catalogue. Endpoints and key names mirror the shipped
-		// provider descriptors, so a config written here is one the extension
-		// already knows how to talk to.
-		// -------------------------------------------------------------------
-
 		struct verification {
 			bool ok = false;
 			std::string detail;
@@ -52,8 +46,7 @@ namespace mcode::cli {
 			options.environment = mcode::minimal_environment( );
 			options.timeout = std::chrono::milliseconds{ VERIFY_TIMEOUT_MS };
 
-			// The key is handed to the child in its environment, so it never
-			// reaches disk and never appears in the process arguments.
+			// In the environment, so the key never reaches disk or the process arguments.
 			if ( !api_key.empty( ) ) {
 				options.environment[ settings.api_key_env ] = api_key;
 			}
@@ -73,8 +66,7 @@ namespace mcode::cli {
 				return { true, { } };
 			}
 
-			// The child's last stderr line names the cause, and it is more
-			// useful than the exit code.
+			// The child's last stderr line names the cause better than the exit code.
 			auto detail = outcome->stderr_text;
 
 			while ( !detail.empty( ) && ( detail.back( ) == '\n' || detail.back( ) == '\r' ) ) {
@@ -94,7 +86,6 @@ namespace mcode::cli {
 			return { false, detail };
 		}
 
-		// -------------------------------------------------------------------
 		auto print_banner( const detail::painter& brush, const std::filesystem::path& path ) -> void {
 			detail::blank( );
 			detail::write_line( "  " + brush.mark( "mcode setup" ) );
@@ -140,8 +131,7 @@ namespace mcode::cli {
 			return 1;
 		}
 
-		// Scripted: every value comes from a flag, and a missing one is a hard
-		// failure rather than a silent default.
+		// Every value comes from a flag; a missing one is a hard failure, not a default.
 		[[nodiscard]] auto run_scripted( const std::vector< std::string >& arguments,
 			const detail::painter& brush ) -> int {
 			auto provider = std::string{ };
@@ -151,9 +141,7 @@ namespace mcode::cli {
 			auto api_key = std::string{ };
 			auto should_verify = true;
 
-			// Returns the flag's value, or nothing when the flag is last. A missing
-			// value used to call `std::exit` from inside this lambda, which skipped
-			// every destructor and made the path impossible to test.
+			// Empty when the flag is last; the caller reports it rather than exiting here.
 			auto missing_value = false;
 			auto index = std::size_t{ 0 };
 
@@ -251,9 +239,7 @@ namespace mcode::cli {
 
 	}
 
-	// The pure core of the config edit, exposed for tests: the section is built
-	// here and spliced by the same code the wizard uses, so a test cannot pass
-	// against a re-implementation that has drifted.
+	// Exposed for tests so a test cannot pass against a drifted re-implementation.
 	auto splice_model_section( const std::string_view existing,
 		const std::string_view provider, const std::string_view model,
 		const std::string_view base_url, const std::string_view api_key_env ) -> std::string {
@@ -263,8 +249,7 @@ namespace mcode::cli {
 		return detail::splice_section( existing, detail::render_section( settings ) );
 	}
 
-	// The flag set `run_setup` accepts. One list, so the interactive and
-	// scripted paths cannot disagree about what is known.
+	// One list, so the interactive and scripted paths cannot disagree.
 	[[nodiscard]] auto is_setup_flag( const std::string_view argument ) -> bool {
 		for ( const auto* known : { "--provider", "--model", "--base-url",
 			"--api-key-env", "--api-key", "--no-verify", "--yes" } ) {
@@ -300,8 +285,7 @@ namespace mcode::cli {
 	auto run_setup( const std::vector< std::string >& arguments ) -> int {
 		auto terminal = tui::tty_session::create( );
 
-		// No terminal is not an error: it is the scripted path, and the flags
-		// carry everything the wizard would have asked for.
+		// No terminal is the scripted path, not an error.
 		if ( !terminal ) {
 			auto plain = tui::capabilities{ };
 			plain.depth = tui::capabilities::color_depth::none;
@@ -313,10 +297,7 @@ namespace mcode::cli {
 
 		const auto brush = detail::painter{ terminal->caps( ) };
 
-		// Every flag is checked before the path is chosen, so an unrecognised one
-		// is refused on a terminal too. It used to be dropped here and reported
-		// only when stdout was redirected, which made `mcode setup --bogus` a
-		// usage error in a script and a silent no-op interactively.
+		// Checked up front, so an unknown flag is refused on a terminal too.
 		for ( auto index = std::size_t{ 0 }; index < arguments.size( ); ++index ) {
 			const auto& argument = arguments[ index ];
 
@@ -328,15 +309,12 @@ namespace mcode::cli {
 				return 2;
 			}
 
-			// The value of a flag that takes one is not itself a flag, so it is
-			// stepped over rather than tested against the set.
 			if ( setup_flag_takes_value( argument ) ) {
 				++index;
 			}
 		}
 
-		// An explicit flag also takes the scripted path, so a setup script never
-		// waits on a prompt it cannot answer.
+		// An explicit flag takes the scripted path, so a script never waits on a prompt.
 		for ( const auto& argument : arguments ) {
 			if ( argument == "--yes" || argument == "--provider" || argument == "--model" ) {
 				return run_scripted( arguments, brush );
@@ -450,8 +428,7 @@ namespace mcode::cli {
 				"or press Enter to skip" ) + "\n  " + brush.accent( ">" ) + " " );
 
 			if ( !entered ) {
-				// Ctrl-C, not Enter. An empty line means "skip"; an interrupt
-				// means stop, and it must not fall through to writing a config.
+				// Ctrl-C, not Enter: an interrupt must not fall through to writing a config.
 				return cancelled( brush );
 			}
 
@@ -463,8 +440,7 @@ namespace mcode::cli {
 		const auto settings = detail::model_settings{ std::string{ entry.descriptor }, model,
 			base_url, key_env };
 
-		// Write before verifying: the check runs a real turn, and a real turn
-		// reads the file. `previous` is kept so a failure can be undone.
+		// Written before verifying, because the check runs a real turn that reads the file.
 		const auto previous = detail::read_text_file( path );
 
 		if ( !detail::write_text_file( path, detail::splice_section( previous.value_or( std::string{ } ),
@@ -499,9 +475,7 @@ namespace mcode::cli {
 					{ "", "" }, 0 );
 
 				if ( !keep || *keep == 1 ) {
-					// Restore exactly what was there, including nothing. A failed
-					// restore is reported rather than swallowed: the file is then
-					// half-configured and the user has to be told.
+					// Restore exactly what was there, including nothing; failure is reported.
 					if ( previous ) {
 						if ( !detail::write_text_file( path, *previous ) ) {
 							detail::write_line( "  " + brush.bad( "could not restore "

@@ -48,10 +48,8 @@ namespace mcode::agent {
 			return std::nullopt;
 		}
 
-		// `keys_at` enumerates an OBJECT's keys, so it returns nothing for an
-		// array. There is no length accessor, so the elements are probed until
-		// one is absent. Arrays here are short (a message's blocks, a history's
-		// messages), so the linear probe costs nothing.
+		// `keys_at` enumerates an object's keys and there is no length accessor, so
+		// the elements are probed until one is absent. Arrays here are short.
 		[[nodiscard]] auto array_length( const json::document& document,
 			const std::string_view path ) -> std::size_t {
 			auto count = std::size_t{ 0 };
@@ -100,8 +98,6 @@ namespace mcode::agent {
 			out += block_name( block.kind );
 			out += '"';
 
-			// Only the fields the kind actually carries are written, so a text
-			// block does not grow four empty strings in the log.
 			switch ( block.kind ) {
 				case model::block_kind::text:
 				case model::block_kind::thinking:
@@ -155,8 +151,7 @@ namespace mcode::agent {
 		auto message = model::message{ };
 		message.speaker = *speaker;
 
-		// RFC 6901 pointers, so the separator is `/` and not `.`: `yyjson` walks
-		// the document by pointer and a dotted path simply never matches.
+		// RFC 6901 pointers, so the separator is `/`: a dotted path never matches.
 		const auto block_count = array_length( *document, "/blocks" );
 
 		for ( auto index = std::size_t{ 0 }; index < block_count; ++index ) {

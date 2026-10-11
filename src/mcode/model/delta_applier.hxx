@@ -38,9 +38,8 @@ namespace mcode::model {
 		// bounds the wire-supplied index, which is otherwise an amplification primitive.
 		inline static constexpr std::int64_t MAX_PARALLEL_CALLS = 256;
 
-		// The wire index is a hint, not an identity. Ollama shipped it absent and later pinned at
-		// zero, so a call is identified by the ordinal this applier assigns; the wire index only
-		// decides whether a fragment continues the call it was last matched to.
+		// The wire index is a hint, not an identity: a call is identified by the ordinal this
+		// applier assigns.
 		struct pending_call {
 			int ordinal = 0;
 			std::int64_t wire_index = -1;
@@ -49,8 +48,6 @@ namespace mcode::model {
 			std::string args_fragments;
 		};
 
-		// Resolves the call a fragment belongs to, starting a new one when the fragment is
-		// inconsistent with the call it would otherwise extend.
 		auto resolve_pending( std::optional< std::int64_t > wire_index,
 			std::string_view id_fragment, std::string_view name_fragment ) -> pending_call&;
 

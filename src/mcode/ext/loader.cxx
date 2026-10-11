@@ -77,7 +77,7 @@ namespace mcode::ext {
 
 	namespace {
 
-		// runs before the VM is destroyed: the closures it registered live in that VM.
+		// runs while the VM is alive: the closures it registered live in that VM.
 		auto discard( lua_host& host, api_surface& surface,
 			model::provider_registry& providers, hook_registry& hooks ) -> void {
 			const auto owner = host.name( );
@@ -174,9 +174,8 @@ namespace mcode::ext {
 				continue;
 			}
 
-			// A candidate under the workspace's own extension root arrived with the
-			// repository, so it runs only against a grant. Everything else was put
-			// there by the user or shipped beside the binary.
+			// a candidate under the project root arrived with the repository, so it needs a
+			// grant; everything else was put there by the user or shipped beside the binary.
 			const auto is_project = !options.project_root.empty( )
 				&& path_is_within( options.project_root, candidate.directory );
 
@@ -207,8 +206,7 @@ namespace mcode::ext {
 				trust = load_trust::granted;
 			}
 
-			// Read every file once. The bytes hashed here are the bytes compiled
-			// below, so there is no second read and no window between the two.
+			// one read: the bytes hashed are the bytes compiled, so no window between them.
 			auto snapshot = snapshot_extension( candidate.directory );
 
 			if ( !snapshot ) {
@@ -246,8 +244,7 @@ namespace mcode::ext {
 			host_options.memory_limit_bytes = options.memory_limit_bytes;
 			host_options.time_limit = options.time_limit;
 
-			// The snapshot outlives the host: the closure that reads it is stored in
-			// the host, and nothing here touches the filesystem again.
+			// shared: the closure that reads it is stored in the host, which outlives this frame.
 			const auto loaded_files = std::make_shared< const extension_snapshot >(
 				std::move( *snapshot ) );
 
@@ -276,15 +273,13 @@ namespace mcode::ext {
 			auto surface = std::make_unique< api_surface >( );
 
 			if ( options.register_api ) {
-				// installed before the extension runs: sealing is a one-way door.
+				// installed while the VM is unsealed: sealing is a one-way door.
 				if ( auto registered = options.register_api(
 						registration{ .host = *host, .surface = *surface,
 							.providers = providers, .hooks = hooks,
 							.details = *manifest_value } ); !registered ) {
-					// Discarded like the sibling failure paths below. Without this,
-					// whatever the registration managed to install before it failed
-					// stayed in the hook and provider registries pointing at a VM
-					// that the `continue` then destroys.
+					// the registration may have installed handlers pointing at a VM that the
+					// `continue` below destroys.
 					discard( *host, *surface, providers, hooks );
 
 					outcome.report.failed.push_back( { candidate.name, candidate.directory,
@@ -337,8 +332,7 @@ namespace mcode::ext {
 		auto effective = options;
 		effective.project_root = project_extension_root( workspace );
 
-		// A missing store is the first-run state and reads as empty, which means
-		// every project extension is inert. That is the correct default.
+		// a missing store is the first-run state: every project extension is inert.
 		auto store = trust_store{ };
 
 		if ( const auto path = trust_store::default_path( ) ) {

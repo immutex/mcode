@@ -30,11 +30,6 @@ namespace mcode::proc {
 		namespace asio = boost::asio;
 		namespace process = boost::process::v2;
 
-		struct chunk {
-			std::string data;
-			std::string detail;
-		};
-
 		auto append_bounded( std::string& ring, const char* data, const std::size_t length )
 			-> void {
 			const auto room = SESSION_STDERR_RING_BYTES - ring.size( );
@@ -47,8 +42,8 @@ namespace mcode::proc {
 			ring.append( data, std::min( length, SESSION_STDERR_RING_BYTES ) );
 		}
 
-		// same contract as process.cxx: the launcher inherits the parent's directory unless
-		// one is passed, and an empty path would make the child's chdir fail
+		// the launcher inherits the parent's directory unless one is passed, and an empty
+		// path fails the child's chdir
 		[[nodiscard]] auto session_directory( const session_options& options )
 			-> std::filesystem::path {
 			if ( !options.working_directory.empty( ) ) {
@@ -73,8 +68,8 @@ namespace mcode::proc {
 
 #if defined( _WIN32 )
 		// kill-on-close on the Job is what guarantees the child does not outlive the session
-		platform::unique_job_windows token;
-		platform::unique_job_windows job;
+		platform::unique_handle_windows token;
+		platform::unique_handle_windows job;
 #endif
 
 		std::thread drainer;
@@ -295,9 +290,8 @@ namespace mcode::proc {
 
 					settled = true;
 
-					// Cancelled here too. Without it the timer stays pending and
-					// `context.run` below blocks until it fires, so a pipe that hit
-					// EOF immediately was still reported a full timeout later.
+					// Without this the timer stays pending and `context.run` blocks until
+					// it fires, so an immediate EOF is reported a full timeout later.
 					state_->timer.cancel( );
 
 					return;

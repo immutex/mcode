@@ -8,7 +8,7 @@
 
 namespace mcode::net::detail {
 
-	// The SSE body comes straight off the socket, so framing must be removed before the parser.
+	// The SSE body comes straight off the socket, so framing must be stripped first.
 	class chunked_decoder {
 	public:
 		auto feed( std::string_view raw ) -> status;

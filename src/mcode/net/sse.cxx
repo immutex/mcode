@@ -73,10 +73,7 @@ namespace mcode::net {
 			buffer_.erase( 0, position );
 		}
 
-		// A line with no terminator yet. Refused rather than discarded: clearing
-		// the buffer left the parser mid-stream, so the rest of that line was
-		// re-read as a fresh field and the event it belonged to was assembled from
-		// the wrong bytes.
+		// Refused rather than discarded: the rest of the line would be re-read as a fresh field.
 		if ( buffer_.size( ) > MAX_LINE_BYTES ) {
 			return std::unexpected( fail( errc::protocol,
 				"SSE line exceeded the " + std::to_string( MAX_LINE_BYTES ) +
@@ -109,10 +106,8 @@ namespace mcode::net {
 			current_.data.append( value );
 			saw_data_ = true;
 
-			// The bound the class declares, enforced where the growth happens. An
-			// event is only dispatched on a blank line, so a server that never
-			// sends one grew this string without limit -- on the model response
-			// path, which is exactly where an unbounded allocation is worst.
+			// An event is only dispatched on a blank line, so a server that never sends
+			// one grows this string without limit.
 			if ( current_.data.size( ) > MAX_EVENT_BYTES ) {
 				return std::unexpected( fail( errc::protocol,
 					"SSE event data exceeded the " + std::to_string( MAX_EVENT_BYTES ) +

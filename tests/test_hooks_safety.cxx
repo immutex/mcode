@@ -55,7 +55,7 @@ end)
 
 	auto veto = bus.publish( blocked );
 
-	// the veto is built after the erase, so it proves the fields were read before the pcall
+	// the veto is built after the erase, so it proves the fields were read ahead of the pcall
 	REQUIRE( static_cast< bool >( veto ) );
 
 	if ( veto ) {

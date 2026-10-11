@@ -168,7 +168,9 @@ namespace mcode::ext {
 
 			record.root = std::filesystem::path{ std::string{ fields[ 6 ] } };
 
-			if ( record.root.empty( ) ) {
+			// A deny names an extension, not a location: it carries no root, and
+			// requiring one would make the store unreadable and lose every grant.
+			if ( is_allow && record.root.empty( ) ) {
 				return std::unexpected( fail( errc::config,
 					"trust store " + path.string( ) + " line " + std::to_string( number )
 						+ " has an empty root" ) );
@@ -279,25 +281,6 @@ namespace mcode::ext {
 			} ), next.end( ) );
 
 		next.push_back( record );
-
-		const auto saved = write_to( path_, next );
-
-		if ( !saved ) {
-			return saved;
-		}
-
-		records_ = std::move( next );
-
-		return { };
-	}
-
-	auto trust_store::revoke( const trust_scope scope, const std::string_view name ) -> status {
-		auto next = records_;
-
-		next.erase( std::remove_if( next.begin( ), next.end( ),
-			[ scope, name ]( const trust_record& existing ) {
-				return existing.scope == scope && existing.name == name;
-			} ), next.end( ) );
 
 		const auto saved = write_to( path_, next );
 

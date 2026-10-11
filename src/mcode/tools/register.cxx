@@ -41,9 +41,8 @@ namespace mcode::tools {
 				}
 			}
 
-			// Flatness is a measured reliability property, not a style preference: nesting
-			// arguments costs every model tens of points of call accuracy, so a nested object
-			// property is refused here rather than shipped to the model.
+			// Flatness is a measured reliability property: nesting arguments costs every
+			// model tens of points of call accuracy, so a nested object is refused here.
 			for ( const auto& name : schema.keys_at( "/properties" ) ) {
 				const auto property = schema.pointer_string( "/properties/" + name + "/type" );
 

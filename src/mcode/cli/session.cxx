@@ -47,18 +47,9 @@
 
 namespace {
 
-	// The load report of the session that was built, so `/extensions` can read it
-	// without the loop carrying a pointer it has no other use for -- the loop
-	// knows four abstractions and extensions are not one of them. The report
-	// lives on the session's own g_parts, which are function-local and outlive the
-	// returned loop; this points at them. Null until a session is built.
+	// Points at the session's own report, which outlives the returned loop.
 	const mcode::ext::load_report* g_session_extensions = nullptr;
 
-	// Everything one interactive session owns, at file scope rather than inside
-	// the builder, because three more entry points need it: `/extensions` reads
-	// the load report and `/resume`, `/continue` and `/new` repoint the log. It
-	// was a function-local static, which meant the only way to reach any of it was
-	// through the function that built it.
 	struct session_parts {
 		mcode::model::provider_registry providers;
 		mcode::events::bus bus;
@@ -73,42 +64,29 @@ namespace {
 		mcode::ext::mcp_server_store extension_servers;
 		mcode::mcp::server_set mcp_servers;
 
-		// The extension surface borrows `skills`, and the surfaces live on in
-		// `extensions` and are invoked on every later turn -- so the report has to
-		// outlive the builder. It was a plain local, and every other field that
-		// must outlive the returned loop was already parked here for that reason.
+		// Must outlive the returned loop: the extension surface borrows it.
 		mcode::skills::session_context skills_context;
 
 		mcode::net::http_client transport;
 		mcode::model::http_model_client client;
 		mcode::event_log log;
 
-		// Undo is what makes the permissive approval default survivable, so the store is
-		// always built: /undo has something to restore rather than reporting a zero.
+		// Always built, so /undo has something to restore.
 		std::optional< mcode::snapshot_store > snapshots;
 		mcode::session_budget budget;
 		mcode::agent_loop::dependencies loop_deps;
 
-		// Held here so it outlives every spawned child; null when no `[egress]`
-		// allowlist was configured, which means no network at all.
+		// Null when no `[egress] allowlist` was configured, which means no network.
 		std::unique_ptr< mcode::net::egress_proxy > egress;
 
-		// Reads `std::cin`, correct in plain mode which never enters raw mode.
 		mcode::perm::terminal_approval_source terminal_source;
 
 		session_parts( ) : hooks( bus ), client( transport ) { }
 	};
 
-	// One session per process: a second build would make an unwired loop over
-	// these shared parts.
 	auto g_parts = std::optional< session_parts >{ };
 
-	// Releases the session slot unless the build reached its success return.
-	//
-	// The parts are emplaced before anything is validated, because the validation
-	// reads them. Every failure after that used to leave them engaged, so the next
-	// call reported "an interactive session is already running in this process" --
-	// the wrong diagnosis for a retry after fixing a config.
+	// Releases the session slot on every failure path; `release` keeps it.
 	class parts_reservation {
 	public:
 		parts_reservation( ) = default;
@@ -121,7 +99,6 @@ namespace {
 			}
 		}
 
-		// The build succeeded; the parts live for the rest of the process.
 		auto release( ) noexcept -> void { held_ = false; }
 
 	private:
@@ -133,7 +110,6 @@ namespace {
 auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 	mcode::perm::approval_source* interactive_approval )
 	-> mcode::result< mcode::agent_loop > {
-	// A second call would build an unwired loop over shared g_parts, so it is refused.
 	if ( g_parts ) {
 		return std::unexpected( mcode::fail( mcode::errc::config,
 			"an interactive session is already running in this process" ) );
@@ -147,9 +123,7 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 		? std::filesystem::current_path( )
 		: std::filesystem::path{ parsed.working_directory };
 
-	// Resolved before any provider or key work, so a mistyped --resume id is reported as
-	// the argument error it is rather than as a provider complaint. The loop opens the
-	// same file again below; this only fails the run early and by name.
+	// Resolved first, so a mistyped --resume id is a named argument error.
 	if ( !parsed.resume_session.empty( ) || parsed.continue_session ) {
 		const auto existing = mcode::cli::resolve_session( workspace_path,
 			parsed.resume_session );
@@ -203,7 +177,7 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 
 	auto& skills_context = g_parts->skills_context;
 
-	// Built before the loader so the extension surface's `fs.*` entries share this context.
+	// Built first, so the extension surface's `fs.*` entries share this context.
 	auto space = mcode::workspace::open( workspace_path );
 
 	if ( !space ) {
@@ -238,9 +212,7 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 			g_parts->providers, g_parts->hooks, options );
 	}
 
-	// Published whether or not extensions were loaded: with `--no-extensions` the
-	// report is empty, and `/extensions` saying "0 loaded" is the true answer
-	// rather than a null it has to explain.
+	// Published even with --no-extensions: an empty report is the true answer, not a null.
 	g_session_extensions = &g_parts->extensions.report;
 
 	const auto* descriptor = g_parts->providers.find( provider_name );
@@ -324,7 +296,6 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 	tools_context.run_id = run_id;
 	tools_context.headless = parsed.json;
 
-	// Only when `[egress] allow` names a host; absent means no network at all.
 	g_parts->egress = mcode::cli::start_egress_if_configured( *config );
 	tools_context.egress = g_parts->egress.get( );
 
@@ -367,14 +338,13 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 	g_parts->loop_deps.instruction_chain = skills_context.chain.text;
 	g_parts->loop_deps.skill_index = skills_context.skill_index;
 
-	// The store lives in the per-user data directory, keyed by nothing else: the index
-	// records the workspace-relative path, so one store serves every project.
+	// Keyed by workspace-relative path, so one per-user store serves every project.
 	if ( auto data = mcode::platform::app_data_path( mcode::platform::data_kind::data ) ) {
 		g_parts->snapshots.emplace( *data / mcode::cli::detail::SNAPSHOT_DIRECTORY );
 		g_parts->loop_deps.snapshots = &*g_parts->snapshots;
 	}
 
-	// the loop drives the timers: one pump per step, on the thread the VM belongs to.
+	// One pump per step, on the thread the VM belongs to.
 	g_parts->loop_deps.pump_timers = [ ]( ) { g_parts->extensions.pump_timers( ); };
 
 	auto loop = mcode::agent_loop{ g_parts->loop_deps };
@@ -384,9 +354,8 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 		loop.set_verification_command( *command );
 	}
 
-	// A pointer, not content, and only when the ledger exists: the prompt must never
-	// reference a file that is not there. The extension that exposes `memory_search`
-	// gates it on the other side, so a disabled extension leaves no dangling mention.
+	// Only when the ledger exists: the prompt must never reference a file that is
+	// not there, and the extension gates `memory_search` on the same condition.
 	if ( const auto ledger = mcode::memory::ledger_path( workspace_path ); ledger ) {
 		if ( const auto existing = mcode::memory::read_ledger( workspace_path );
 			existing && !existing->empty( ) ) {
@@ -397,9 +366,7 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 		}
 	}
 
-	// The session file is opened before the first turn, so an interactive session's
-	// events are on disk the same way an exec run's are. An unknown --resume id is
-	// refused here rather than starting a fresh session under it.
+	// Opened first, so an unknown --resume id is refused, not silently replaced.
 	const auto session = mcode::cli::open_session_for_run( parsed, g_parts->space->root( ) );
 
 	if ( !session ) {
@@ -414,12 +381,7 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 
 	std::fputs( mcode::cli::start_session_log( g_parts->log, *session, resumed ).c_str( ), stderr );
 
-	// A resumed session continues its conversation. The headless path has always
-	// rebuilt the transcript here; the interactive one opened the log, reported
-	// how many messages it held, and then left `history_` empty -- so
-	// `--continue` in the TUI restored the file and forgot the conversation, and
-	// the model started from nothing while the report said it had carried N
-	// messages. Seeded before the first turn, exactly as `run_exec` does it.
+	// Without this the log is opened and the model still starts from nothing.
 	if ( resumed ) {
 		auto restored = mcode::cli::restore_transcript( g_parts->log );
 
@@ -449,7 +411,6 @@ auto build_interactive_loop( const mcode::cli::exec_options& parsed,
 		return std::unexpected( connected.error( ) );
 	}
 
-	// The build succeeded, so the parts stay engaged for the life of the session.
 	reservation.release( );
 
 	return loop;
@@ -466,17 +427,15 @@ auto adopt_session( mcode::agent_loop& loop, const std::string_view id )
 			"no interactive session is running" ) );
 	}
 
-	// An unknown id is a named error from here and never falls back to a fresh
-	// session; an empty one is the workspace's newest, which is `/continue`.
+	// An unknown id is a named error, never a fallback to a fresh session.
 	auto session = mcode::cli::resolve_session( g_parts->space->root( ), id );
 
 	if ( !session ) {
 		return std::unexpected( session.error( ) );
 	}
 
-	// Repoint first: `restore_transcript` reads the log's own events, so it must
-	// see the new file and nothing else. `event_log::open` clears the previous
-	// session's events, which is what stops the two transcripts merging.
+	// Repoint first: `restore_transcript` reads the log's own events, and `open`
+	// clears the previous session's.
 	if ( auto opened = g_parts->log.open( session->path ); !opened ) {
 		return std::unexpected( opened.error( ) );
 	}
@@ -508,7 +467,6 @@ auto start_new_session( mcode::agent_loop& loop ) -> mcode::result< std::string 
 
 	auto report = mcode::cli::start_session_log( g_parts->log, *session, false );
 
-	// An empty history, not the previous session's: this is a new conversation.
 	loop.reset_session( { } );
 
 	return report;

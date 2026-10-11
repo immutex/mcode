@@ -1,13 +1,7 @@
 --!strict
--- Reference providers, registered as data (docs/26 decision 2).
---
--- This file is the dogfood test for the provider descriptor: if a real provider
--- cannot be expressed here, the descriptor is wrong. Three wire formats are
--- covered, one per shape docs/15 identifies.
---
--- An extension never sees a token. HTTP, SSE framing, retry, the error taxonomy,
--- and egress policy stay in C++; this file supplies only the mapping from each
--- provider's JSON to the canonical event model, and C++ applies it natively.
+-- Reference providers, registered as data. This is the dogfood test for the
+-- provider descriptor: if a real provider cannot be expressed here, it is wrong.
+-- An extension never sees a token; this supplies only the JSON-to-event mapping.
 
 mcode.model.register({
 	name = "openai-chat-completions",

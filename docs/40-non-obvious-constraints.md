@@ -575,12 +575,14 @@ Read the number you were sent to, not the whole file. Each entry states the cons
     even when a shell exists; Windows `CreateProcess` does search, which hides
     the difference on one platform. Resolve the executable before spawning.
 
-
-74. **`apply_sandbox` restricts the calling process, irreversibly.** Neither
-    Landlock nor Seatbelt can be undone, so a test that calls it in-process
-    sandboxes its own runner and every later assertion fails on a denied
-    `getcwd`. Enforcement belongs on the spawn path; `test_config_and_platform`
-    asserts only the capability and mechanism.
+74. **Sandbox enforcement lives only on the spawn path, and that is the
+    correct place for it.** Landlock and Seatbelt cannot be undone, so an
+    in-process entry point would sandbox the calling process irreversibly -- a
+    test that called it would confine its own runner and fail every later
+    assertion on a denied `getcwd`. No such entry point exists: the seams expose
+    `sandbox_capability_level`, `sandbox_network_level` and `sandbox_mechanism`
+    for reporting, and `sandbox_launcher.hxx` applies the profile between fork
+    and exec. `test_platform` asserts only the reporting half.
 
 
 75. **A quoted TOML key segment is taken verbatim, so `[models."<id>"]` needs
@@ -1079,5 +1081,44 @@ Read the number you were sent to, not the whole file. Each entry states the cons
     while the toolchain file on disk already said the new one. CI is unaffected --
     a clean runner has no cache to win -- which is exactly why it is invisible
     locally and worth writing down.
+132. **A comment that narrates the code's history is the one kind a reviewer
+    never catches.** Every reader of the diff has the change in working memory,
+    so "this used to be set only on the child path" reads as helpful context and
+    survives review; six months later it describes nothing and contradicts the
+    code beside it. It cannot be fixed by rewording, only by deleting: the
+    commit log already holds what the comment is trying to say. The mechanical
+    part is enforceable (`tools/comment_lint.py`), which matters because "is this
+    comment necessary" always resolves in favour of keeping. The gate's own
+    false positives are the interesting part: `before the` and `is now` match
+    ordinary present-tense sentences about ordering and current state, and a
+    gate that flags an accurate comment pushes the author toward a worse
+    rewording. Only phrases that have no present-tense reading are listed.
+133. **A SOCKS5 reply with `ATYP = 0` is accepted by lenient clients and
+    rejected by strict ones.** RFC 1928 fixes the reply as
+    `VER REP RSV ATYP BND.ADDR BND.PORT`, and the proxy built a
+    `std::array<unsigned char, 10>` setting only `[0]` and `[1]`, leaving the
+    address type zero on every path -- success and refusal alike. A zero-filled
+    array reads as "nothing to see" in review, and the failure only appears
+    against a client that validates. Every reply path now shares one initialised
+    array, so a new path cannot reintroduce the zero.
+134. **A file-scope symbol in a `.cxx` with no header declaration still has
+    external linkage.** `last_error_message`, four `inline constexpr` limits and
+    a `wchar_t[]` sat in `mcode::platform` reachable from every other
+    translation unit; nothing referenced them, so nothing broke, but a second
+    `mcode::platform::last_error_message` anywhere in the tree is a link error
+    and an ODR violation the moment the two definitions differ. An anonymous
+    namespace is not decoration: it is the statement that a helper is internal,
+    and its absence is invisible until the collision happens.
+135. **A writer and its own parser can disagree, and the test that covers it can
+    be written to the writer's assumption rather than to the writer's output.**
+    `mcode ext deny` built a `trust_record` with no root; the store's parser
+    required a non-empty root on every line; so the command's first line failed
+    to load. The loader treats an unreadable store as an empty one, which
+    silently discarded every grant in the file and reported the denied extension
+    as `ungranted` rather than `denied`. The existing test passed because it set
+    a root the command never writes -- a test that constructs the input by hand
+    instead of exercising the code that produces it proves only that the two
+    agree on the test's own assumption. Running `mcode ext deny` and reading the
+    file found it in one command.
 
 

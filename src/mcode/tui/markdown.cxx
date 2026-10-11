@@ -95,8 +95,8 @@ namespace mcode::tui {
 		inline constexpr std::string_view QUOTE_GUTTER = "│ ";
 		inline constexpr std::string_view UNORDERED_BULLET = "• ";
 
-		// The block pass never measures display width, so these cap the
-		// emitted glyphs, not the columns.
+		// The block pass never measures display width, so these cap emitted
+		// glyphs, not columns.
 		inline constexpr std::size_t MAX_RULE_GLYPHS = 80;
 		inline constexpr std::size_t MAX_INDENT_LEVELS = 4;
 		inline constexpr std::size_t MAX_QUOTE_GLYPHS = 1;
@@ -213,8 +213,7 @@ namespace mcode::tui {
 			return { };
 		}
 
-		// Leading spaces indent a block by whole two-space levels, a tab by one;
-		// anything else in the run ends the indent.
+		// Leading spaces indent by whole two-space levels, a tab by one.
 		auto indent_levels( const std::string_view line ) noexcept -> std::size_t {
 			auto index = std::size_t{ 0 };
 			auto levels = std::size_t{ 0 };

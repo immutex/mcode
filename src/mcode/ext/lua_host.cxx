@@ -93,8 +93,6 @@ namespace mcode {
 			const auto projected = counters->bytes - old_size + new_size;
 
 			if ( counters->limit != 0 && projected > counters->limit ) {
-				++counters->refusals;
-
 				return nullptr;
 			}
 
@@ -223,16 +221,8 @@ namespace mcode {
 		return allocator_ != nullptr ? allocator_->peak : 0;
 	}
 
-	auto lua_host::memory_refusals( ) const noexcept -> std::uint64_t {
-		return allocator_ != nullptr ? allocator_->refusals : 0;
-	}
-
 	auto lua_host::time_breaches( ) const noexcept -> std::uint64_t {
 		return watchdog_ != nullptr ? watchdog_->breaches : 0;
-	}
-
-	auto lua_host::time_expired( ) const noexcept -> bool {
-		return watchdog_ != nullptr && watchdog_->expired;
 	}
 
 	auto lua_host::create( lua_host_options options ) -> result< lua_host > {
@@ -449,8 +439,6 @@ namespace mcode {
 		if ( watchdog_ == nullptr ) {
 			return;
 		}
-
-		watchdog_->expired = false;
 
 		if ( time_limit_.count( ) <= 0 ) {
 			watchdog_->armed = false;

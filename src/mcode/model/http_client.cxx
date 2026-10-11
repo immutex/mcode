@@ -25,15 +25,11 @@ namespace mcode::model {
 		inline constexpr unsigned MAX_BACKOFF_SHIFT = 16;
 		inline constexpr std::int64_t MILLISECONDS_PER_SECOND = 1000;
 
-		// The longest wait a `Retry-After` header may impose. Two reasons: the
-		// header is the server's own and unbounded, so `seconds *
-		// MILLISECONDS_PER_SECOND` overflows to a negative delay past ~9.2e15 and
-		// silently falls through to the short backoff; and an hour is already far
-		// past any wait this harness should absorb on the user's behalf.
+		// The cap is the longest wait this loop will honour, and it also keeps
+		// `seconds * MILLISECONDS_PER_SECOND` from overflowing into a negative delay.
 		inline constexpr std::int64_t MAX_RETRY_AFTER_SECONDS = 3'600;
 
-		// Bounds the retries a request-field downgrade may add, so an unhelpful body cannot
-		// loop: three fields can be dropped, so three retries is the most it can produce.
+		// Bounds the retries a downgrade may add: three fields, so three retries.
 		inline constexpr unsigned MAX_FEATURE_DOWNGRADES = 3;
 
 		// 413 is fatal, not context overflow: an oversized request is a client bug to fix.
@@ -251,9 +247,6 @@ namespace mcode::model {
 		return std::nullopt;
 	}
 
-	// A 400 that names a request field means the gateway does not implement that field. The
-	// body is scanned for the field names this build can send, so an unsupported optimisation
-	// costs the optimisation rather than the run.
 	auto detect_feature_downgrade( const std::string_view raw_body ) -> feature_downgrade {
 		static constexpr std::string_view CANDIDATES[] = {
 			"parallel_tool_calls",
@@ -368,8 +361,7 @@ namespace mcode::model {
 
 		auto rng = std::mt19937_64{ options_.random ? options_.random( ) : 0u };
 
-		// A downgrade rewrites the request, so the retry loop works on a copy the caller
-		// never sees. Each field is dropped at most once per stream, which bounds the loop.
+		// The retry loop rewrites a copy, so a downgrade is never visible to the caller.
 		auto active = request;
 		auto downgrades_left = MAX_FEATURE_DOWNGRADES;
 
@@ -390,9 +382,6 @@ namespace mcode::model {
 					break;
 
 				case failure_class::fatal: {
-					// A 400 naming a request field is the gateway refusing an optimisation it
-					// does not implement, not a malformed request. Dropping the field and
-					// retrying immediately is cheaper than failing a run that would work.
 					if ( failure.status != 400 ) {
 						return std::unexpected( fail( result.error( ).code, error_message ) );
 					}
@@ -428,8 +417,7 @@ namespace mcode::model {
 
 					--downgrades_left;
 
-					// The retry does not consume an attempt: the request that failed was never
-					// one the gateway could have served.
+					// The retry does not consume an attempt: that request was never servable.
 					--attempt_index;
 
 					continue;
@@ -448,13 +436,6 @@ namespace mcode::model {
 
 			if ( failure.status != 0 ) {
 				if ( const auto seconds = retry_after_seconds( failure ) ) {
-					// Clamped twice: the server's value is unbounded, and
-					// `seconds * MILLISECONDS_PER_SECOND` overflows to a negative
-					// delay for anything past ~9.2e15 -- which then falls through to
-					// the backoff, so a gateway asking for a long wait would get a
-					// short one. The cap is the longest wait this loop will honour
-					// regardless, so a hostile or misconfigured header cannot stall
-					// the run indefinitely either.
 					const auto bounded = std::min< std::int64_t >( *seconds,
 						MAX_RETRY_AFTER_SECONDS );
 

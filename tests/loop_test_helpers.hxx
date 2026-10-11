@@ -140,7 +140,6 @@ namespace loop_test {
 		tool_registry registry;
 		event_log log;
 
-		// the loop publishes here and owns nothing it is handed.
 		events::bus bus;
 
 		agent_loop::dependencies deps;

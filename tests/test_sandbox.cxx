@@ -140,7 +140,6 @@ TEST_CASE( "no sandboxed child survives the harness", "[sandbox]" ) {
 	profile.write_paths.push_back( root );
 	profile.allow_network = false;
 
-	// the inner cmd is a grandchild the direct child waits on, so only the Job can reach it
 	auto options = process_options{ };
 	options.executable = "cmd.exe";
 	options.args = { "/c", "cmd.exe", "/c",
@@ -159,7 +158,7 @@ TEST_CASE( "no sandboxed child survives the harness", "[sandbox]" ) {
 
 	std::this_thread::sleep_for( std::chrono::seconds{ 3 } );
 
-	// a live grandchild appends every second, so an unchanged size means it was killed
+	// a live grandchild appends every second, so an unchanged size means the Job killed it
 	CHECK( std::filesystem::file_size( root / "beat.txt", error ) == beats );
 
 	std::filesystem::remove_all( root );

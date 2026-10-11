@@ -54,7 +54,7 @@ TEST_CASE( "an erased cell reaches the terminal as a space", "[tui][render]" ) {
 
 	CHECK_FALSE( erased.empty( ) );
 
-	// the removed column must be repainted, or the old glyph stays on screen.
+	// the removed column must be repainted, or the stale glyph stays on screen.
 	auto visible = std::string{ };
 
 	for ( std::size_t index = 0; index < erased.size( ); ++index ) {
@@ -84,7 +84,6 @@ TEST_CASE( "invalidate repaints every column of the region", "[tui][render]" ) {
 	coordinator.set_prompt( "hello", 5 );
 	CHECK_FALSE( coordinator.flush( ).empty( ) );
 
-	// the prompt row is blank now, and the diff alone would skip the columns blank in both
 	const auto blank_row = std::string{ PROMPT_PREFIX } +
 		std::string( tui_test::COLUMNS - 1 - PROMPT_PREFIX_WIDTH, ' ' );
 
@@ -115,7 +114,6 @@ TEST_CASE( "the caret lands on the prompt row, under the typed text",
 
 	const auto bytes = coordinator.flush( );
 
-	// the caret column is 1-based CHA.
 	const auto expected = std::string{ "\x1b[5G" };
 
 	CHECK( bytes.ends_with( expected ) );
@@ -137,9 +135,8 @@ TEST_CASE( "the caret column is measured in display cells, not bytes",
 }
 
 TEST_CASE( "the caret follows the probed ambiguous width", "[tui][render]" ) {
-	// U+2502, the output gutter: one column under the default policy, two
-	// under the East Asian one. The frame builder and the caret read the same
-	// probed value, so a row containing it cannot desynchronise the grid.
+	// U+2502 is one column under the default policy and two under the East Asian one;
+	// the frame builder and the caret read the same probed value.
 	const auto gutter = std::string{ "\xE2\x94\x82" };
 
 	auto caps = capabilities{ };
@@ -158,13 +155,11 @@ TEST_CASE( "the caret follows the probed ambiguous width", "[tui][render]" ) {
 	wide.resize( 24, 40 );
 	wide.set_prompt( gutter, gutter.size( ) );
 
-	// the gutter is one display column under one, two under two.
 	CHECK( narrow.state( ).input_cursor == 1 );
 	CHECK( wide.state( ).input_cursor == 2 );
 
-	// The caret is the prompt prefix plus the measured text, so it sits one
-	// column further right under the two-column policy. A terminal painting
-	// the glyph two cells wide puts the cursor exactly there.
+	// The caret is the prompt prefix plus the measured text, so a terminal painting the
+	// glyph two cells wide puts the cursor exactly there.
 	CHECK( narrow.flush( ).ends_with( "\x1b[4G" ) );
 	CHECK( wide.flush( ).ends_with( "\x1b[5G" ) );
 }
@@ -183,12 +178,10 @@ TEST_CASE( "ghost text is spliced only at the end of the input", "[tui][render]"
 	palette.matches.push_back( slash_command{ "/help", "show help" } );
 	coordinator.set_palette( palette );
 
-	// a caret at the end of the query gets the remainder as ghost text
 	coordinator.set_prompt( "/he", 3 );
 
 	CHECK( tui_test::visible_text( coordinator.flush( ) ).find( "> /help" ) != std::string::npos );
 
-	// a caret inside the line gets none: the remainder would land between the halves
 	coordinator.set_prompt( "/he", 2 );
 	coordinator.invalidate( );
 
@@ -227,7 +220,7 @@ TEST_CASE( "every escape the emitter writes is well formed", "[tui][render]" ) {
 
 		cursor += 2;
 
-		// only digits, ';' and '?' may appear before the final letter byte.
+		// a CSI parameter is digits, ';' and '?'; the final letter byte ends it.
 		while ( cursor < bytes.size( ) && !std::isalpha(
 			static_cast< unsigned char >( bytes[ cursor ] ) ) ) {
 			const auto character = bytes[ cursor ];
@@ -273,7 +266,6 @@ TEST_CASE( "an active tool row names the tool and runs its clock", "[tui][render
 	CHECK( coordinator.state( ).tools.front( ).elapsed_ms == 4'000 + SPINNER_INTERVAL_MS * 3 );
 	CHECK( coordinator.state( ).tools.front( ).spinner_frame != first_frame );
 
-	// a stamp of zero means no start time was supplied, so the row keeps its initial value.
 	auto unstamped = render_coordinator{ };
 	unstamped.set_capabilities( caps );
 	unstamped.resize( 24, 40 );

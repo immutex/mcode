@@ -437,10 +437,9 @@ namespace mcode::mcp {
 		auto all = std::vector< server_tool >{ };
 		auto cursor = std::optional< std::string >{ };
 
-		// Bounded, and it must advance. A server that always returns a non-empty
-		// cursor -- buggy or hostile -- otherwise loops forever, one request per
-		// iteration at DEFAULT_LIST_TIMEOUT each, blocking startup and every
-		// restart. A repeated cursor is the same defect in a slower form.
+		// Bounded, and it must advance: a server that always returns a non-empty or
+		// repeated cursor would otherwise loop forever, one request per page, at
+		// DEFAULT_LIST_TIMEOUT each, blocking startup and every restart.
 		auto pages = std::size_t{ 0 };
 		auto previous = std::string{ };
 

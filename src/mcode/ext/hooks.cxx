@@ -328,7 +328,7 @@ namespace mcode::ext {
 
 	auto hook_registry::call_handler( const hook_subscription& subscription,
 		const delivered_event& delivered ) -> std::optional< events::veto > {
-		// snapshotted before the pcall: a handler that calls mcode.off erases the element below.
+		// snapshotted: a handler that calls mcode.off erases the element below.
 		const auto identifier = subscription.id;
 		const auto owner = subscription.owner;
 		const auto vetoable = subscription.vetoable;

@@ -9,7 +9,6 @@ namespace mcode::perm {
 
 	struct rule;
 
-	// exec rules match the canonical argv exactly, never a prefix; path rules glob it.
 	[[nodiscard]] auto rule_matches( const rule& candidate,
 		const tool_class request_class, const std::string& request_resource,
 		const std::string& request_tool_name ) -> bool;

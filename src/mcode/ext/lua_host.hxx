@@ -24,13 +24,11 @@ namespace mcode {
 			std::uint64_t bytes = 0;
 			std::uint64_t peak = 0;
 			std::uint64_t limit = 0;
-			std::uint64_t refusals = 0;
 		};
 
 		struct watchdog_state {
 			std::chrono::steady_clock::time_point deadline{ };
 			bool armed = false;
-			bool expired = false;
 			std::uint64_t breaches = 0;
 
 			// Open `budget_scope`s. A dispatch can nest -- a hook handler that
@@ -116,9 +114,7 @@ namespace mcode {
 		[[nodiscard]] auto version_string( ) const -> std::string;
 		[[nodiscard]] auto bytes_allocated( ) const noexcept -> std::uint64_t;
 		[[nodiscard]] auto peak_bytes_allocated( ) const noexcept -> std::uint64_t;
-		[[nodiscard]] auto memory_refusals( ) const noexcept -> std::uint64_t;
 		[[nodiscard]] auto time_breaches( ) const noexcept -> std::uint64_t;
-		[[nodiscard]] auto time_expired( ) const noexcept -> bool;
 
 	private:
 		lua_host( ) = default;

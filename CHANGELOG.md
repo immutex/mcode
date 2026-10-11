@@ -8,6 +8,41 @@ Entries are one line per change, under the type of change: **Added**, **Changed*
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-10-11
+
+A quality pass over the whole tree, not a feature batch. The comment rule was
+aspirational and had drifted: a 0.109 comment/code ratio, 59 comments narrating
+the code's history, 244 blocks of four lines or more. It is now a CI gate. Every
+file over 600 lines is split, thirty dead symbols are gone, and two defects
+surfaced on the way. Nothing else changed behaviour.
+
+### Changed
+
+- Every source and test file is under 600 lines. The six test files that were over are split along subject boundaries into 21 files carrying the identical test set — same names, same tags, same assertions.
+- `cli/repl_tui.cxx` extracts the render and turn-running helpers into `repl_turn.{hxx,cxx}` over a `repl_runtime` struct, so the interactive loop is a key dispatch rather than a closure over twenty captured locals.
+- `platform/sandbox_windows.cxx` puts its constants and helpers in one anonymous namespace; `platform/sandbox_linux.cxx` names the ABI levels (`LANDLOCK_ABI_*`) instead of comparing against bare `2`, `3`, `4`, `5`.
+- `unique_job_windows` is renamed `unique_handle_windows`. It types token handles as well as job handles, and the old name asserted the wrong thing at eleven call sites.
+- `cli/commands.cxx` routes six identical failure paths through one `report_failure`, and `commands.cxx` is back under the cap as a result.
+- `tools/comment_lint.py` runs in CI and fails the build on a finding; `tools/dead_code_scan.py` reports header-declared functions nothing references.
+
+### Fixed
+
+- **The egress proxy sent an invalid SOCKS5 reply.** RFC 1928 fixes the reply as `VER REP RSV ATYP BND.ADDR BND.PORT` and `ATYP` must name an address type; the proxy built a ten-byte zero-filled array and set only `VER` and `REP`, leaving `ATYP = 0` on every path, success and refusal alike. A strict client rejects the reply. All three paths now share one initialised array.
+- **Five file-scope symbols in `mcode::platform` had external linkage with no header declaring them.** `last_error_message`, two `inline constexpr` limits and two SDDL literals were reachable from every translation unit; a second definition anywhere in the tree would have been an ODR violation. They are now internal.
+- **`mcode ext deny` corrupted the trust store.** The deny record carries no root, but the parser required one, so the line the command had just written failed to load. `trust_store_for` then degraded a failed load to an empty store, which lost every grant in the file and reported the denied extension as `ungranted` rather than `denied`. Found by running the command, not by a test: the existing deny test set a root the CLI never writes. The root is now required only of an allow record, and a regression test writes exactly what the command writes.
+
+### Removed
+
+- Thirty symbols nothing referenced, each verified with a grep across `src/`, `tests/` and `extensions/` before deletion: `text::is_ascii_space`; `platform::apply_sandbox`, `terminate_process`, `terminate_process_tree`, `TERMINATED_EXIT_CODE`; `api_surface::providers`, `installed_servers`, `empty_providers_`; `timer_registry::active_count`; `lua_host::memory_refusals`, `time_expired`; `watchdog_state::expired`; `allocator_state::refusals`; `manifest::known_permissions`; `trust_store::revoke`; `truncate::needs_truncation`; `session_reads::size`, `clear`; `logging::parse_log_level`; `perm::canonical_path_key`; `permission::DENIED_FLOOR_MESSAGE`, `untrusted_ingested`; `config::loaded_scopes`; `proc::chunk`; `tui::split_lines`; `tty_session::raw_active`, `mouse_reporting`; `cli::session::loop`; and the `LANDLOCK_ABI_MAX`/`LANDLOCK_NETWORK_ABI` constants that duplicated a literal comparison.
+- About 2,150 comment lines a reader does not need. The ratio is 0.048 in `src/` and 0.031 in `tests/`, from 0.109 and 0.058. Rationale paragraphs moved to the doc that owns the decision; a comment restating a name, narrating the next line, or describing what the code used to do was deleted rather than reworded.
+
+### Documentation
+
+- `AGENTS.md` §Comments states the enforceable rule — default none, history narration never, four lines maximum, no `docs/NN` citation — and points at the gate.
+- `docs/40-non-obvious-constraints.md` gains 132–134: why a history-narrating comment survives review, the SOCKS5 reply, and file-scope symbols with no declaration.
+- `docs/36`, `docs/39`, `docs/43` and trap 74 no longer name `apply_sandbox`, which does not exist.
+- `docs/00-index.md` and `README.md` record 0.0.4 as a quality pass.
+
 ## [0.0.3] - 2026-10-11
 
 The fourth batch. Three of the harness's four differentiators were documentation
@@ -215,6 +250,7 @@ commands, or a 20-second spawn.
 - `README.md` corrected: 43 docs, not 41, and the licence badge points at `LICENSE` rather than an in-page anchor.
 - `CONTRIBUTING.md` records the two things CI catches that no local build will: the POSIX branches a Windows workstation never compiles, and the warnings-as-errors set.
 
-[Unreleased]: https://github.com/immutex/mcode/compare/v0.0.3...HEAD
+[Unreleased]: https://github.com/immutex/mcode/compare/v0.0.4...HEAD
+[0.0.4]: https://github.com/immutex/mcode/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/immutex/mcode/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/immutex/mcode/compare/v0.0.1...v0.0.2

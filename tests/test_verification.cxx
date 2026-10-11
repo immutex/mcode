@@ -45,8 +45,7 @@ TEST_CASE( "the verdict vocabulary is distinct and stable", "[verdict]" ) {
 TEST_CASE( "a run defaults to no-tests, never to verified", "[verdict]" ) {
 	const auto outcome = turn_outcome{ };
 
-	// The default is the whole point: a run whose completion was never checked must
-	// not be able to read as verified by omission.
+	// A run whose completion was never checked must not read as verified by omission.
 	REQUIRE( outcome.verdict == verification_verdict::no_tests );
 }
 
@@ -87,8 +86,7 @@ TEST_CASE( "audit_sessions reads the verdict out of real logs", "[eval][audit]" 
 TEST_CASE( "a run.end without a verdict counts as unverified", "[eval][audit]" ) {
 	const auto directory = scratch( "audit-legacy" );
 
-	// The shape a log had before the field existed. Counting it as verified would
-	// be a claim the record does not support.
+	// A record with no verification field cannot support a verified claim.
 	write_log( directory, "old.jsonl",
 		"{\"v\":1,\"seq\":9,\"kind\":\"run.end\",\"payload\":{\"state\":\"done\"}}\n" );
 

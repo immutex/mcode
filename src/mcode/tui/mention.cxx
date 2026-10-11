@@ -52,8 +52,8 @@ namespace mcode::tui {
 			return slash == std::string_view::npos ? path : path.substr( slash + 1 );
 		}
 
-		// The offset of the '@' that opens the mention, or npos. Private, so
-		// the query and the completion can never disagree on the span.
+		// The offset of the '@' that opens the mention, or npos. Shared, so the
+		// query and the completion can never disagree on the span.
 		[[nodiscard]] auto mention_offset( const std::string_view input ) -> std::size_t {
 			const auto at = input.rfind( '@' );
 
@@ -61,9 +61,7 @@ namespace mcode::tui {
 				return std::string_view::npos;
 			}
 
-			// A mention starts a word: a preceding letter, digit, dot or '@'
-			// means an address like name@host, not a mention. Punctuation such
-			// as '(' or '"' still opens one.
+			// A mention starts a word, so name@host is an address, not a mention.
 			if ( at > 0 && is_word_character( input[ at - 1 ] ) ) {
 				return std::string_view::npos;
 			}
@@ -76,8 +74,7 @@ namespace mcode::tui {
 			return at;
 		}
 
-		// The directory names the glob tool always skips. The shared walk is
-		// ignore-blind, so artifacts are dropped by name instead.
+		// The shared walk is ignore-blind, so artifacts are dropped by name.
 		[[nodiscard]] auto skipped_segment( const std::string_view name ) noexcept -> bool {
 			return name == ".git" || name == ".mcode" || name == "build" ||
 				name == "node_modules" || name == ".vs" || name == ".vscode" || name == "out";
@@ -161,8 +158,7 @@ namespace mcode::tui {
 			return out;
 		}
 
-		// Three tiers, best first, so each tier keeps the caller's order. A
-		// path that matches no subsequence is dropped.
+		// Three tiers, best first; a path matching no subsequence is dropped.
 		const auto collect = [ & ]( const auto& accepted ) {
 			for ( const auto& path : paths ) {
 				if ( out.size( ) >= limit ) {
@@ -194,9 +190,8 @@ namespace mcode::tui {
 		-> std::vector< std::string > {
 		auto out = std::vector< std::string >{ };
 
-		// Per-root descent rather than one `**/*` from the root: the shared
-		// walk is ignore-blind, so a single pattern would spend the whole
-		// budget inside .git or node_modules before reaching src/.
+		// Per-root descent rather than one `**/*`: the shared walk is
+		// ignore-blind, so a single pattern would spend the budget inside .git.
 		const auto roots = space.glob( "*", limit );
 
 		if ( !roots ) {
@@ -208,10 +203,7 @@ namespace mcode::tui {
 				return;
 			}
 
-			// The walk yields directory names as well as files, so it gets the
-			// whole scan budget: a share of what is left could be spent on
-			// directories before any file was reached. The rank cap, not this
-			// budget, bounds the result.
+			// The walk yields directories too, so it gets the whole scan budget.
 			const auto found = space.glob( pattern, MENTION_SCAN_LIMIT );
 
 			if ( !found ) {

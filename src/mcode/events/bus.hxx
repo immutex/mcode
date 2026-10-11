@@ -77,7 +77,6 @@ namespace mcode::events {
 		std::uint64_t sequence = 0;
 		std::int64_t timestamp_ms = 0;
 
-		// Owned, not borrowed: producers run on worker threads and the loop consumes later.
 		std::string payload_json;
 	};
 
@@ -99,13 +98,10 @@ namespace mcode::events {
 		auto subscribe( kind type, handler function ) -> subscription_id;
 		auto subscribe_veto( kind type, veto_handler function ) -> subscription_id;
 
-		// Swap-remove plus a tombstone, so unsubscribing mid-dispatch cannot invalidate iteration.
 		auto unsubscribe( subscription_id id ) -> void;
 
-		// Returns the veto when a vetoable kind was blocked; never for other kinds.
 		auto publish( event value ) -> std::optional< veto >;
 
-		// Drained after the current dispatch completes, so nesting stays flat.
 		[[nodiscard]] auto pending_count( ) const noexcept -> std::size_t {
 			return pending_.size( );
 		}

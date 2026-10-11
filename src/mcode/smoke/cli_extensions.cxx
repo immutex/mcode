@@ -22,27 +22,15 @@ using smoke::section;
 
 namespace {
 
-	// Where the extensions that travel with the binary live.
-	//
-	// Resolved from the running executable, NOT from a compiled-in path. The
-	// `MCODE_SMOKE_*` constants name the build machine's source tree, which exists
-	// for a local build and for nobody else -- so a released binary walked into a
-	// missing directory, and `directory_iterator` throws on one. That is what
-	// killed the process part-way through its own smoke test.
-	//
-	// This is the same location the product itself uses
-	// (`cli/commands.cxx`, `cli/session.cxx`), so a smoke run asserts on the
-	// extensions the binary will actually load.
+	// From the running executable, not a compiled-in path: the source tree is not
+	// there for a released binary.
 	[[nodiscard]] auto bundled_extensions_directory( ) -> std::filesystem::path {
 		const auto executable = mcode::platform::executable_directory( );
 
 		return executable ? *executable / "extensions" : std::filesystem::path{ };
 	}
 
-	// A shipped extension is a directory holding an `ext.toml`. Counting them
-	// rather than pinning a literal means adding one does not need this edited --
-	// and a shipped extension that is silently skipped, neither loaded nor
-	// failed, is still caught, which a bare `failed.empty()` would not see.
+	// Counted, not pinned: a shipped extension that is neither loaded nor failed still trips this.
 	[[nodiscard]] auto shipped_extension_count( const std::filesystem::path& directory )
 		-> std::size_t {
 		auto error = std::error_code{ };
@@ -106,8 +94,7 @@ auto smoke_cli_and_extensions( ) -> void {
 		auto missing = mcode::cli::parse_exec_options( { "--model" } );
 		check( !missing, "a flag without a value is refused" );
 
-		// A single-dash typo is as invisible as a double-dash one: it must be collected,
-		// not sent to the model as the prompt.
+		// A single-dash typo is as invisible as a double-dash one: collect it, never send it as the prompt.
 		auto short_flag = mcode::cli::parse_exec_options( { "-x" } );
 
 		check( static_cast< bool >( short_flag ), "parsed with an unknown short flag present" );
@@ -147,10 +134,8 @@ auto smoke_cli_and_extensions( ) -> void {
 		check( stream.run_end_emitted( ), "run.end was emitted" );
 		check( stream.lines_emitted( ) == 3, "run.start, one event, and exactly one run.end" );
 	}
-	// The fixture extensions live in the source tree, so they exist only for a build
-	// running from it. A released binary has no fixture tree, and asserting on files
-	// it cannot reach would fail for a reason that says nothing about the binary.
-	// The shipped extensions below ARE checked either way: they travel with it.
+	// The fixture tree exists only for a source-tree build; the shipped extensions
+	// below are checked either way.
 	const auto fixture_tree_present =
 		std::filesystem::exists( std::filesystem::path{ MCODE_SMOKE_EXTENSIONS } );
 
@@ -181,11 +166,8 @@ auto smoke_cli_and_extensions( ) -> void {
 		check( loaded.report.loaded.size( ) == 1, "the valid fixture extension loaded" );
 		check( loaded.report.failed.size( ) == 1, "the invalid fixture extension failed" );
 
-		// Guarded, not assumed. `MCODE_SMOKE_EXTENSIONS` is an absolute path into the
-		// build machine's source tree, so it is absent for anyone running a released
-		// binary -- and an unguarded `front()` on the empty result was an access
-		// violation, which killed the process and truncated every check after it.
-		// That is what made the shipped 0.0.2 archive fail its own smoke test.
+		// Guarded: an unguarded `front()` on an empty result is an access violation
+		// that truncates every check after it.
 		if ( !loaded.report.loaded.empty( ) ) {
 			check( loaded.report.loaded.front( ).name == "hello-tool",
 				"the loaded extension is the valid one" );
@@ -301,10 +283,7 @@ auto smoke_cli_and_extensions( ) -> void {
 		"every shipped extension directory loaded" );
 	check( shipped.report.failed.empty( ), "every shipped extension loaded" );
 
-	// The providers extension is not decoration: without it the binary has no
-	// provider at all and cannot run a single turn. A released archive shipped
-	// without this directory, and the only symptom was "no provider named
-	// 'openai-chat-completions' is registered" on the user's first command.
+	// Without this extension the binary has no provider and cannot run a single turn.
 	check( shipped_providers.size( ) == 3, "the providers extension declared three providers" );
 	check( shipped_providers.find( "openai-chat-completions" ) != nullptr,
 		"the OpenAI descriptor is registered" );
@@ -313,8 +292,7 @@ auto smoke_cli_and_extensions( ) -> void {
 	check( shipped_registry.find( "memory_search" ) != nullptr,
 		"the memory extension registered memory_search" );
 
-	// The read-only subagent's tool set, checked against the shipped registry: if
-	// `bash` ever appears here the capability boundary is a prompt again.
+	// The subagent is read-only: if `bash` appears in its tool set the capability boundary is a prompt again.
 	check( mcode::subagent_tool_names( ).size( ) == 3,
 		"the read-only subagent has exactly three tools" );
 

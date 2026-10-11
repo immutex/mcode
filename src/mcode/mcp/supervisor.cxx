@@ -48,8 +48,7 @@ namespace mcode::mcp {
 	}
 
 	auto supervisor::connect( ) -> result< std::vector< server_tool > > {
-		// One branch, and everything after it is transport-agnostic: the supervisor,
-		// the client and the JSON-RPC layer never learn which one is in use.
+		// Everything after this branch is transport-agnostic.
 		if ( config_.transport == HTTP_TRANSPORT ) {
 			auto remote = http_transport::create( config_ );
 
@@ -81,10 +80,8 @@ namespace mcode::mcp {
 			return std::unexpected( std::move( caps ).error( ) );
 		}
 
-		// A resources- or prompts-only server is legal and has no obligation to
-		// implement `tools/list`; asking anyway got a -32601, which `call` turns
-		// into a protocol error, so the server was reported as failed to start
-		// and then retried through the restart ladder.
+		// A resources- or prompts-only server is legal: it need not implement
+		// `tools/list`, and a -32601 there is not a start failure.
 		if ( !caps->tools ) {
 			tools_.clear( );
 
@@ -97,7 +94,7 @@ namespace mcode::mcp {
 			return std::unexpected( std::move( listed ).error( ) );
 		}
 
-		// so a server that changes its tools after approval is detected, not silently re-registered
+		// the pin makes a server that changes its tools after approval visible
 		pinned_hash_ = hash_bytes( render_tool_list( *listed ) );
 		tools_ = std::move( *listed );
 
@@ -214,10 +211,7 @@ namespace mcode::mcp {
 			transport_->pump( window );
 
 			// A child that exits while idle produces no read, so its EOF never
-			// arrives through the transport's own path -- and the call path's
-			// zero-length window issues no read at all. The child's own state is
-			// the only signal available, and without it the next call writes into
-			// a dead pipe and the server stays dead for the rest of the session.
+			// arrives through the transport; its own state is the only signal.
 			if ( !transport_->alive( ) ) {
 				on_transport_eof( );
 			}

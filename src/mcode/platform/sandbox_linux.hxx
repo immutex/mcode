@@ -14,7 +14,6 @@ namespace mcode::platform {
 
 #if defined( __linux__ )
 
-	// the ruleset fd from landlock_create_ruleset; restrict_self consumes it.
 	class unique_ruleset_linux {
 	public:
 		unique_ruleset_linux( ) = default;
@@ -55,11 +54,6 @@ namespace mcode::platform {
 		int descriptor_ = -1;
 	};
 
-	// newer ABIs are supersets; an unknown one hard-fails rather than risk a partial ruleset.
-	inline constexpr int LANDLOCK_ABI_MAX = 5;
-
-	// below this ABI the seccomp filter is the network deny.
-	inline constexpr int LANDLOCK_NETWORK_ABI = 4;
 #endif
 
 	// parses on other platforms; never constructed there.
@@ -74,7 +68,6 @@ namespace mcode::platform {
 	[[nodiscard]] auto sandbox_linux_ruleset( const int abi,
 		const sandbox_profile& profile ) -> result< unique_ruleset_linux >;
 
-	// sets no_new_privs before restrict_self, then the seccomp deny when the ABI lacks net rules.
 	[[nodiscard]] auto sandbox_linux_restrict( const int abi,
 		const unique_ruleset_linux& ruleset, const sandbox_profile& profile ) -> status;
 

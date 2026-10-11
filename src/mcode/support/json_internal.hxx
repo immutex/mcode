@@ -15,7 +15,6 @@ namespace mcode::json::detail {
 
 	auto free_mut_doc( yyjson_mut_doc* doc ) noexcept -> void;
 
-	// shared so the reader's re-emit and the writer's dump agree on whitespace.
 	[[nodiscard]] auto write_flags( bool pretty ) -> yyjson_write_flag;
 
 }

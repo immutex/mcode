@@ -22,8 +22,7 @@ namespace mcode::cli {
 		// Bytes per token: the shared estimate, not a fourth copy of it.
 		inline constexpr std::size_t SCHEMA_BYTES_PER_TOKEN = mcode::text::CHARS_PER_TOKEN;
 
-		// One exported block is capped at this, cut on a newline so the file
-		// stays valid UTF-8. A tool result can be megabytes of JSON.
+		// Cut on a newline so the file stays valid UTF-8; a tool result can be megabytes.
 		inline constexpr std::size_t EXPORT_BLOCK_MAX_BYTES = 4096;
 
 		inline constexpr std::string_view EXPORT_FILE_PREFIX = "mcode-session-";
@@ -87,9 +86,7 @@ namespace mcode::cli {
 			auto out = "context: " + std::to_string( used ) + " / " + std::to_string( capacity ) +
 				" tokens (" + std::to_string( used * PERCENT_SCALE / capacity ) + "% full)";
 
-			// A rewrite is a decision with a cost, not a mystery. Showing the epoch
-			// and the cache ratio is what lets a user tell a cheap turn from one that
-			// re-prefilled the whole history.
+			// Epoch and cache ratio are what let a user tell a cheap turn from a full re-prefill.
 			if ( occupancy.epoch > 0 ) {
 				out += "\n  rewrites: " + std::to_string( occupancy.epoch );
 			}
@@ -114,12 +111,7 @@ namespace mcode::cli {
 				"% and folds the history at " + std::to_string( trigger ) + "% full";
 		}
 
-		// See `init_prompt.hxx`: the prompt is data, and it is long.
-
-		// `/init` refuses when the file exists rather than overwriting: AGENTS.md
-		// is the user's, and replacing it would destroy the instructions the agent
-		// is meant to follow. Returns the message when it exists, nothing when the
-		// generation should proceed.
+		// Refuses when AGENTS.md exists rather than overwriting the user's own instructions.
 		[[nodiscard]] auto init_existing_note( const mcode::agent_loop& loop )
 			-> std::optional< std::string > {
 			auto error_code = std::error_code{ };
@@ -142,8 +134,6 @@ namespace mcode::cli {
 			return std::nullopt;
 		}
 
-		// Reports what is loaded and what it costs, which is what a context budget needs and
-		// what a broken config needs. Only the facts this build can actually observe.
 		[[nodiscard]] auto doctor_text( const mcode::agent_loop& loop ) -> std::string {
 			auto out = std::string{ "mcode doctor\n" };
 
@@ -214,11 +204,8 @@ namespace mcode::cli {
 			} else {
 				path = directory / std::filesystem::path{ std::string{ argument } };
 
-				// `operator/` replaces the base when the right side is absolute, and
-				// `..` walks out, so `/export /etc/passwd` or `/export ../../x` wrote
-				// outside the workspace. Every other write in this program goes
-				// through the workspace boundary; this one has to as well. Compared
-				// canonically, so `notes/../out.md` is allowed and `../out.md` is not.
+				// `operator/` drops the base for an absolute right side and `..` walks out,
+				// so the target is canonicalised against the workspace root.
 				auto canonical_error = std::error_code{ };
 				const auto canonical_root = std::filesystem::weakly_canonical(
 					directory, canonical_error );
@@ -251,7 +238,6 @@ namespace mcode::cli {
 				path.string( );
 		}
 
-		// The workspace the session edits in; empty means the process working directory.
 		[[nodiscard]] auto undo_root( const mcode::agent_loop& loop ) -> std::filesystem::path {
 			const auto root = loop.workspace_root( );
 
@@ -300,13 +286,9 @@ namespace mcode::cli {
 			return "restored " + std::to_string( *restored ) + " file(s) from " + scope;
 		}
 
-		// Columns in `/extensions`: the name column is sized to the longest name,
-		// so the version and tool columns line up without a fixed width that a
-		// long extension name would break.
+		// The name column is sized to the longest name, not a fixed width.
 		inline constexpr std::size_t EXTENSION_COLUMN_GAP = 2;
 
-		// A name padded to `width` so columns line up. A name already longer than
-		// the column keeps its own length rather than being cut.
 		[[nodiscard]] auto padded( const std::string_view text, const std::size_t width )
 			-> std::string {
 			auto out = std::string{ text };
@@ -324,8 +306,7 @@ namespace mcode::cli {
 		auto out = std::string{ "extensions: " + std::to_string( report.loaded.size( ) ) +
 			" loaded" };
 
-		// Only mentioned when non-zero: a zero is noise on the common path, and
-		// the failure lines below are what a reader is looking for.
+		// Zero is noise on the common path; the failure lines are what a reader wants.
 		if ( !report.failed.empty( ) ) {
 			out += ", " + std::to_string( report.failed.size( ) ) + " failed";
 		}
@@ -376,9 +357,7 @@ namespace mcode::cli {
 			}
 		}
 
-		// A failure is the reason someone runs this command, so it is printed in
-		// full rather than summarised: the loader's reason names the key or the
-		// permission that was refused.
+		// Printed in full: the loader's reason names the key or permission that was refused.
 		for ( const auto& failure : report.failed ) {
 			out += "\n  " + failure.name + " FAILED: " + failure.reason + '\n';
 		}
@@ -474,9 +453,7 @@ auto run_command( const command_match& match, const agent_loop& loop,
 					match.arguments, "user" ); !appended ) {
 				result.output = appended.error( ).msg;
 			} else {
-				// Echoed so the user sees exactly what was recorded. The text goes
-				// in verbatim: no model is in this path, which is what keeps the
-				// ledger free of the form degradation an extraction pass introduces.
+				// Verbatim: no model is in this path, so the ledger keeps the user's words.
 				result.output = "recorded:\n" + std::string{ match.arguments };
 			}
 		} else if ( match.name == "compact" ) {
@@ -493,9 +470,7 @@ auto run_command( const command_match& match, const agent_loop& loop,
 			if ( existing ) {
 				result.output = *existing;
 			} else {
-				// The command itself writes nothing: the model explores the
-				// workspace and writes the file, because the point of this over a
-				// scaffold is that the content comes from what is actually there.
+				// The model writes the file; the content must come from what is actually there.
 				result.submit_prompt = std::string{ detail::INIT_PROMPT };
 			}
 		} else if ( match.name == "extensions" ) {
@@ -504,16 +479,13 @@ auto run_command( const command_match& match, const agent_loop& loop,
 				: extensions_text( *extensions );
 		} else if ( match.name == "resume" ) {
 			if ( match.arguments.empty( ) ) {
-				// No id names the picker rather than the newest session: choosing
-				// which one to reopen is the whole point, and guessing would
-				// silently discard the session the user is in.
+				// No id opens the picker: guessing would silently discard the current session.
 				result.open_session_picker = true;
 			} else {
 				result.adopt_session_id = std::string{ match.arguments };
 			}
 		} else if ( match.name == "continue" ) {
-			// An empty id means "the newest for this workspace", which is what the
-			// REPL resolves -- it has the workspace root, this does not.
+			// Empty means the workspace's newest; the REPL resolves it, since it has the root.
 			result.adopt_session_id = std::string{ };
 		} else if ( match.name == "new" ) {
 			result.start_new_session = true;

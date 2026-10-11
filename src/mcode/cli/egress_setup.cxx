@@ -10,11 +10,7 @@ namespace mcode::cli {
 
 	namespace {
 
-		// `[egress] allow = ["github.com", "*.githubusercontent.com"]`.
-		//
-		// Deliberately not `enabled = true` plus a list: an empty allowlist is no
-		// network, so the presence of the list IS the switch and there is no state
-		// where the proxy runs and grants nothing.
+		// Not `enabled` plus a list: an empty allowlist is no network, so the list is the switch.
 		auto rules_from( const config::merged_config& values )
 			-> std::vector< net::egress_rule > {
 			const auto entries = values.get_string_array( "egress.allow" );
@@ -31,7 +27,6 @@ namespace mcode::cli {
 				rule.allow = true;
 				rule.port = 443;
 
-				// A host may name its port: `example.com:8443`.
 				const auto colon = entry.rfind( ':' );
 
 				if ( colon != std::string::npos && colon > 0 ) {

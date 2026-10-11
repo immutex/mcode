@@ -301,7 +301,7 @@ namespace mcode::json {
 				return out;
 			}
 
-			// the iterator yields the KEY; the value is looked up from it.
+			// yyjson_obj_iter_next yields the key.
 			while ( auto* name = yyjson_obj_iter_next( &iterator ) ) {
 				if ( yyjson_is_str( name ) ) {
 					out.emplace_back( yyjson_get_str( name ), yyjson_get_len( name ) );
@@ -315,7 +315,7 @@ namespace mcode::json {
 
 	namespace {
 
-		// the byte length a well-formed UTF-8 sequence would have, or 0 for an invalid lead byte
+		// 0 for an invalid lead byte.
 		auto utf8_sequence_length( const std::string_view text, const std::size_t index )
 			-> std::size_t {
 			const auto lead = static_cast< unsigned char >( text[ index ] );

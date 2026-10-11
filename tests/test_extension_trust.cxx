@@ -132,7 +132,7 @@ TEST_CASE( "a changed extension is inert and the grant is not rewritten", "[trus
 	auto fixture = repo_fixture{ "trust-changed" };
 	const auto store = fixture.grant( fixture.store( ) );
 
-	// one byte appended: the grant no longer describes the tree.
+	// one byte appended, so the grant stops describing the tree.
 	write( fixture.extension / "init.luau", std::string{ ENTRY } + "-- appended\n" );
 
 	auto loaded = ext::load_result{ };
@@ -174,9 +174,8 @@ TEST_CASE( "an api_version change invalidates the grant", "[trust]" ) {
 	auto fixture = repo_fixture{ "trust-api-version" };
 	const auto store = fixture.grant( fixture.store( ) );
 
-	// Through the store rather than the loader: raising the manifest's api_version
-	// above what this build supports is a load failure, not an invalidated grant,
-	// so the loader cannot express this case until API_VERSION moves.
+	// the loader cannot express this case: a too-high api_version is a load failure,
+	// not an invalidated grant.
 	REQUIRE( store.decide( ext::trust_scope::project, "backdoor", 1 )
 		== ext::trust_decision::granted );
 
@@ -281,6 +280,45 @@ TEST_CASE( "the trust store round-trips through a file", "[trust]" ) {
 	REQUIRE( record != nullptr );
 	REQUIRE( record->tree_sha256 == fixture.digest( ) );
 	REQUIRE( record->api_version == 1 );
+}
+
+TEST_CASE( "a deny survives a reload and does not lose the grants beside it", "[trust]" ) {
+	auto fixture = repo_fixture{ "trust-deny-roundtrip" };
+	const auto path = fixture.workspace / "trust";
+
+	// Exactly what `mcode ext deny` writes: a deny names an extension, not a
+	// location, so it carries no root.
+	auto store = fixture.grant( fixture.store( ) );
+
+	auto deny = ext::trust_record{ };
+	deny.scope = ext::trust_scope::project;
+	deny.name = "backdoor";
+	deny.tree_sha256 = "-";
+
+	REQUIRE( store.grant( deny ).has_value( ) );
+
+	auto reloaded = ext::trust_store::load( path );
+	REQUIRE( reloaded.has_value( ) );
+
+	REQUIRE( reloaded->decide( ext::trust_scope::project, "backdoor", 1 )
+		== ext::trust_decision::denied );
+
+	// A second extension's grant is unaffected by the deny written next to it.
+	auto other = ext::trust_record{ };
+	other.scope = ext::trust_scope::project;
+	other.name = "neighbour";
+	other.api_version = 1;
+	other.tree_sha256 = fixture.digest( );
+	other.root = fixture.extension;
+
+	REQUIRE( store.grant( other ).has_value( ) );
+
+	auto after = ext::trust_store::load( path );
+	REQUIRE( after.has_value( ) );
+	REQUIRE( after->decide( ext::trust_scope::project, "neighbour", 1 )
+		== ext::trust_decision::granted );
+	REQUIRE( after->decide( ext::trust_scope::project, "backdoor", 1 )
+		== ext::trust_decision::denied );
 }
 
 TEST_CASE( "one corrupt line fails the whole trust store", "[trust]" ) {

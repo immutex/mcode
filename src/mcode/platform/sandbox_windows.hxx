@@ -28,19 +28,13 @@ namespace mcode::platform {
 		}
 	};
 
-	// Any owned Win32 handle, not only a Job. Named for the general case because a
-	// hand-held raw handle has no owner and leaks on the first throw past it.
 	using unique_handle_windows = std::unique_ptr< void, handle_closer >;
 
-	// kill-on-close: closing the last handle terminates every process in the job.
-	using unique_job_windows = unique_handle_windows;
+#else
 
-#endif
+	struct unique_handle_windows_placeholder { };
+	using unique_handle_windows = unique_handle_windows_placeholder;
 
-	// parses on other platforms; never constructed there.
-#if !defined( _WIN32 )
-	struct unique_job_windows_placeholder { };
-	using unique_job_windows = unique_job_windows_placeholder;
 #endif
 
 #if defined( _WIN32 )
@@ -108,13 +102,12 @@ namespace mcode::platform {
 
 #endif
 
-	// all privileges stripped, integrity Low: writes to Medium IL objects fail, reads work.
 	[[nodiscard]] auto sandbox_windows_child_token( )
-		-> result< unique_job_windows >;
+		-> result< unique_handle_windows >;
 
-	[[nodiscard]] auto sandbox_windows_job_create( ) -> result< unique_job_windows >;
+	[[nodiscard]] auto sandbox_windows_job_create( ) -> result< unique_handle_windows >;
 
-	// write paths Low IL, deny paths Medium IL; the label is the write boundary.
+	// a Low IL label propagates, so the deny paths are restored to Medium IL.
 	[[nodiscard]] auto sandbox_windows_mark_write_paths(
 		const std::vector< std::filesystem::path >& write_paths,
 		const std::vector< std::filesystem::path >& deny_paths ) -> status;
@@ -129,7 +122,6 @@ namespace mcode::platform {
 		void* parent_stderr = nullptr;
 	};
 
-	// closes every handle still set and nulls it, so a second call cannot double-close.
 	auto sandbox_windows_close_pipes( sandbox_raw_pipes& pipes ) -> void;
 
 	[[nodiscard]] auto sandbox_windows_make_pipes( ) -> result< sandbox_raw_pipes >;
@@ -139,11 +131,6 @@ namespace mcode::platform {
 		void* process_handle = nullptr;
 	};
 
-	// The three stream handles and the two owned handles the launcher needs. A
-	// struct rather than five more positional parameters: `stdin_read`,
-	// `stdout_write` and `stderr_write` were three consecutive `const void*`, so
-	// passing them in the wrong order compiled silently and produced a child whose
-	// stdin was its own stdout.
 	struct sandbox_spawn_windows_handles {
 		const void* stdin_read = nullptr;
 		const void* stdout_write = nullptr;

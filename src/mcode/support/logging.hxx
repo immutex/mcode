@@ -13,8 +13,6 @@ namespace mcode {
 
 	enum class log_level { trace, debug, info, warn, error, critical, off };
 
-	// absent on an unknown name, so a caller can fail closed on a typo.
-	[[nodiscard]] auto parse_log_level( std::string_view name ) -> std::optional< log_level >;
 	[[nodiscard]] auto to_string( const log_level level ) noexcept -> std::string_view;
 
 	// fails when the log directory could not be created; the stdout sink stays installed.

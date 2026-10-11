@@ -28,11 +28,9 @@ namespace mcode::tools {
 		inline constexpr std::int64_t DEFAULT_BASH_TIMEOUT_MS = 60'000;
 		inline constexpr std::int64_t MAX_BASH_TIMEOUT_MS = 600'000;
 
-		// A negative exit code is never a program's own return value: it is how
-		// the platform reports that the process did not exit normally. Naming the
-		// common ones turns "exit code -1073741502" into something a caller can
-		// act on, which matters because the natural response to a crash is to
-		// retry the same command rather than to stop using that binary.
+		// A negative exit code is never a program's own return value: it is how the
+		// platform reports a process that did not exit normally, and the common ones
+		// mean it could not START. Naming them stops a model retrying a broken binary.
 		[[nodiscard]] auto decode_crash_code( const int exit_code ) -> std::string {
 			if ( exit_code >= 0 ) {
 				return { };
@@ -233,17 +231,16 @@ namespace mcode::tools {
 			profile.read_paths.push_back( *temp );
 			profile.write_paths.push_back( *temp );
 
-			// The child must be told, or a tool that asks for a temp path writes
-			// somewhere it was never granted and fails for no visible reason.
+			// The child must be told: a tool that asks for a temp path would otherwise use
+			// the default location, which the profile does not grant, and fail silently.
 			const auto text = temp->string( );
 			options.environment[ "TMP" ] = text;
 			options.environment[ "TEMP" ] = text;
 		}
 
-		// Network is off unless a proxy was started for this run. When one was, the
-		// OS rule permits only its port and the child is told where it is: the env
-		// var is how a compliant tool finds the proxy, and the rule is what makes it
-		// a boundary rather than a suggestion.
+		// Network is off unless a proxy was started for this run. The env vars are how a
+		// compliant tool finds the proxy; the OS rule permitting only its port is what makes
+		// that a boundary rather than a suggestion.
 		if ( context.egress != nullptr ) {
 			profile.allow_network = true;
 			profile.egress.http_port = context.egress->http_port( );
@@ -287,9 +284,8 @@ namespace mcode::tools {
 		auto out = std::string{ "{\"ok\":true,\"exit_code\":" };
 		out += std::to_string( outcome->exit_code );
 
-		// `ok` means the tool ran, which is not what the caller wants to know: a
-		// crashed command reported `ok:true` and the model read it as success.
-		// This states the outcome in the field the reader is actually looking for.
+		// `ok` means the tool ran, which is not what the caller wants to know: this states
+		// the outcome in the field the reader is actually looking for.
 		out += ",\"succeeded\":";
 		out += ( outcome->exit_code == 0 && !outcome->timed_out ) ? "true" : "false";
 
@@ -311,12 +307,9 @@ namespace mcode::tools {
 		} else if ( outcome->exit_code != 0 ) {
 			out += ",\"hint\":\"";
 
-			// A negative code is not a program's own return value. On Windows it
-			// is an NTSTATUS, and the common ones mean the process could not
-			// START -- which is a different problem from a command that ran and
-			// failed, and the one a model most often misreads. Measured: an MSYS
-			// `grep`/`rm` under the sandbox died with 0xC0000142, and the model
-			// retried the same shape of command rather than switching tools.
+			// A negative code is not a program's own return value: on Windows it is
+			// an NTSTATUS, and the common ones mean the process could not START --
+			// the case a model misreads as a failed command and retries.
 			if ( const auto decoded = decode_crash_code( outcome->exit_code );
 				!decoded.empty( ) ) {
 				out += decoded;

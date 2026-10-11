@@ -49,7 +49,6 @@ namespace mcode::tools {
 			return out;
 		}
 
-		// the body of a line, with its ending removed
 		[[nodiscard]] auto line_body( const std::string_view line ) -> std::string_view {
 			if ( line.size( ) >= 2 && line.substr( line.size( ) - 2 ) == "\r\n" ) {
 				return line.substr( 0, line.size( ) - 2 );
@@ -74,18 +73,10 @@ namespace mcode::tools {
 			return { };
 		}
 
-		// The endings are preserved around the edited region: the unchanged lines
-		// before and after it are emitted byte for byte, and a replaced line takes
-		// the ending of the line it replaced, so a CRLF file stays CRLF and an
-		// unterminated final line stays unterminated.
-		//
-		// The region is found by common prefix and suffix, NOT by walking the two
-		// line lists in lockstep by index. A replacement that changes the line
-		// count breaks the index correspondence: with `a\nb\nc\nd`, replacing `b`
-		// with `B1\nB2` left `c` and `d` merged into `cd`, because `c` was spliced
-		// against `d`'s (empty, unterminated) ending. The edit still reported
-		// success, and the read-back hash compares the written bytes against
-		// themselves, so nothing downstream caught it.
+		// Endings are preserved around the edited region: a replaced line takes the ending of
+		// the line it replaced, so a CRLF file stays CRLF and an unterminated final line stays
+		// unterminated. The region is found by common prefix and suffix, not by walking the two
+		// line lists in lockstep, which splices lines together once the count changes.
 		[[nodiscard]] auto splice_with_original_endings( const std::string_view original,
 			const std::string_view normalised_after )
 			-> std::string {
@@ -123,8 +114,7 @@ namespace mcode::tools {
 			}
 
 			if ( new_middle > 0 ) {
-				// The ending the replacement region used, so inserted lines match
-				// the file rather than whatever the edit's own text carried.
+				// the ending the replaced region used, so inserted lines match the file
 				auto style_ending = std::string_view{ };
 
 				if ( old_middle > 0 ) {
@@ -135,8 +125,7 @@ namespace mcode::tools {
 					}
 				}
 
-				// The last inserted line adopts the region's own final ending, so a
-				// replaced unterminated last line stays unterminated.
+				// the region's own final ending, so a replaced unterminated line stays so
 				auto tail_ending = std::string_view{ };
 
 				if ( old_middle > 0 ) {
@@ -153,8 +142,7 @@ namespace mcode::tools {
 					} else if ( old_middle > 0 ) {
 						out.append( tail_ending );
 					} else {
-						// A pure insertion has no replaced line to take an ending
-						// from, so the text's own ending is the only source.
+						// a pure insertion has no replaced line to take an ending from
 						out.append( line_ending( line ) );
 					}
 				}
@@ -316,8 +304,8 @@ namespace mcode::tools {
 		auto positions = std::vector< std::size_t >{ };
 		auto search = std::size_t{ 0 };
 
-		// advancing by the anchor keeps the matches disjoint, so a
-		// self-overlapping anchor counts once
+		// advancing by the anchor keeps the matches disjoint, so a self-overlapping
+		// anchor counts once
 		while ( ( search = normalised.find( anchor, search ) ) != std::string::npos ) {
 			positions.push_back( search );
 			search += anchor.size( );
@@ -367,7 +355,6 @@ namespace mcode::tools {
 		}
 
 		// read the file back: the hash must describe the disk bytes, not the buffer
-		// handed to the writer
 		const auto persisted = raw_content_hash( *resolved );
 
 		if ( !persisted || *persisted != written->content_hash ) {

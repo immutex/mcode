@@ -20,12 +20,10 @@ namespace mcode::ext {
 		std::vector< std::string > permissions;
 	};
 
-	// The install-time record. The trust store is the load-time authority; this
-	// file is what a team commits so two machines resolve the same commit.
-	//
-	// `commit` and `tree_sha256` are both recorded because they can disagree: a
-	// `.gitattributes` EOL filter or `core.autocrlf` makes the working tree differ
-	// from the committed blob while the commit id stays valid.
+	// The install-time record: the trust store is the load-time authority, this file is what
+	// a team commits so two machines resolve the same commit. `commit` and `tree_sha256`
+	// are both recorded because they can disagree: an EOL filter makes the working tree
+	// differ from the committed blob while the commit id stays valid.
 	class lockfile {
 	public:
 		[[nodiscard]] static auto project_path( const std::filesystem::path& workspace )

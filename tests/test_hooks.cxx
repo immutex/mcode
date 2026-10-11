@@ -457,9 +457,8 @@ end)
 
 TEST_CASE( "the deepseek guard reports leaked tool-call markup and stays quiet otherwise",
 	"[loader][deepseek-guard]" ) {
-	// Loads the SHIPPED extension, not a fixture: the guard's value is that it is
-	// wired to a real event, and a fixture copy would keep passing after the
-	// shipped one stopped loading.
+	// Loads the SHIPPED extension, not a fixture: a fixture copy would keep passing
+	// after the shipped one stopped loading.
 	auto registry = tool_registry{ };
 	g_registry = &registry;
 	g_notifications.clear( );
@@ -500,7 +499,6 @@ TEST_CASE( "the deepseek guard reports leaked tool-call markup and stays quiet o
 
 	REQUIRE( g_notifications.empty( ) );
 
-	// The ASCII wrapper form.
 	auto leak = events::event{ };
 	leak.type = events::kind::assistant_delta;
 	leak.payload_json = R"({"text":"Sure. <|DSML|tool_calls> {\"name\":\"write\"}"})";
@@ -510,8 +508,7 @@ TEST_CASE( "the deepseek guard reports leaked tool-call markup and stays quiet o
 	REQUIRE( g_notifications.front( ).find( "deepseek-guard" ) != std::string::npos );
 	REQUIRE( g_notifications.front( ).find( "warn" ) != std::string::npos );
 
-	// Once per turn: a leaked wrapper arrives across many deltas and a
-	// notification per delta would be the failure rather than the report.
+	// once per turn: a leaked wrapper arrives across many deltas.
 	bus.publish( leak );
 	REQUIRE( g_notifications.size( ) == 1 );
 
@@ -520,12 +517,8 @@ TEST_CASE( "the deepseek guard reports leaked tool-call markup and stays quiet o
 	bus.publish( leak );
 	REQUIRE( g_notifications.size( ) == 2 );
 
-	// The full-width `｜` (U+FF5C) form is the one the DeepSeek serving path
-	// actually emits, and the extension writes it as a Lua `\u{FF5C}` escape.
-	// Built here from raw UTF-8 bytes (EF BD 9C) rather than a JSON `\u` escape,
-	// because the payload decoder does not interpret those. If the Lua escape did
-	// not produce this character the marker would never match, and this is the
-	// only thing that would say so.
+	// the full-width `｜` (U+FF5C) is what the DeepSeek serving path emits; built from
+	// raw UTF-8 bytes because the payload decoder does not interpret JSON `\u` escapes.
 	auto full_width = events::event{ };
 	full_width.type = events::kind::assistant_delta;
 	full_width.payload_json = std::string{ "{\"text\":\"Sure. " } + "\xEF\xBD\x9C" +

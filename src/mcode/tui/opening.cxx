@@ -35,12 +35,8 @@ namespace mcode::tui {
 
 		coordinator.queue_block( std::move( banner ) );
 
-		// One flush, and no separate scroll. `flush` commits the banner and
-		// paints the region, and `commit` already scrolls what it wrote clear of
-		// the region -- so anything that scrolls after this pushes the banner
-		// back off the top of the screen. Measured: a `reserve()` that emitted
-		// `screen_rows - 1` newlines here did exactly that, because a flush
-		// leaves the cursor on the last row and every newline then scrolled.
+		// One flush, no separate scroll: flush paints the region below the
+		// banner, so a later scroll pushes the banner off the top of the screen.
 		return coordinator.flush( );
 	}
 

@@ -10,12 +10,8 @@
 namespace mcode::mcp {
 
 	// MCP over Streamable HTTP (2025-06-18): one endpoint, POST per message, the
-	// response either `application/json` or a `text/event-stream`.
-	//
-	// The minimal profile, deliberately: no GET listening stream. That stream exists
-	// for server-initiated requests, and a client that does not advertise sampling
-	// or elicitation will not receive any. Skipping it removes a long-lived
-	// connection and its failure modes for no loss of capability.
+	// response either `application/json` or `text/event-stream`. No GET listening
+	// stream: a client advertising no sampling or elicitation receives none.
 	class http_transport final : public transport {
 	public:
 		explicit http_transport( server_config config );
@@ -33,8 +29,7 @@ namespace mcode::mcp {
 
 		auto pump( std::chrono::milliseconds window ) -> void override;
 
-		// Nothing to close: the transport is request/response, so this ends the
-		// session by marking it dead and letting the supervisor's ladder take over.
+		// Nothing to close: there is no child input; the supervisor stops the transport.
 		auto close_input( ) -> status override;
 
 		auto wait_exit( std::chrono::milliseconds timeout ) -> void override;
@@ -43,14 +38,11 @@ namespace mcode::mcp {
 
 		auto alive( ) -> bool override;
 
-		// Streamable HTTP has no stderr channel; the last transport error is what a
-		// reader needs instead, so it is reported here.
+		// Streamable HTTP has no stderr channel; the last transport error stands in.
 		[[nodiscard]] auto stderr_text( ) const -> std::string override;
 
 		auto finalize( ) -> void override;
 
-		// Sends `notifications/initialized` on the first successful POST, which the
-		// streamable profile expects immediately after the handshake.
 		[[nodiscard]] auto session_id( ) const -> std::string_view;
 
 	private:

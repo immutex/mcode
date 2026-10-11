@@ -10,10 +10,7 @@
 
 namespace mcode::cli {
 
-	// `active` is set while the question owns the console, so the repaint pump
-	// holds off. `gate` serializes every `render_coordinator` access: the
-	// presenter draws on the worker thread while the pump repaints on the main
-	// one, and both mutate the same live region.
+	// `active` keeps the pump off the console; `gate` serializes every `render_coordinator` access.
 	[[nodiscard]] auto make_approval_source( mcode::tui::tty_session& session,
 		std::atomic< bool >& active, std::mutex& gate,
 		mcode::tui::render_coordinator& coordinator )

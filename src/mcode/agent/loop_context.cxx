@@ -98,12 +98,8 @@ namespace mcode {
 		return out;
 	}
 
-	// compaction keeps the first events and the newest tail, dropping everything between them.
+	// Rung 1 runs first: clearing costs no model call and carries most of the saving.
 	auto agent_loop::maybe_compact( ) -> status {
-		// Rung 1 before rung 2: clearing tool results keeps the call records and the
-		// reasoning, drops only the payloads, and costs no model call. Masking
-		// observations matches summarization's solve rate at about half the cost, so
-		// it is the cheaper lever and it runs first.
 		const auto plan = plan_context( history_, occupancy_, COMPACTION_KEEP_LAST_TOKENS );
 
 		if ( plan.action == context_action::clear ) {
@@ -123,16 +119,14 @@ namespace mcode {
 				log_->append( "context.compaction", payload );
 				publish( events::kind::compaction, std::move( payload ) );
 
-				// The clear may have brought the window back under the fold trigger;
-				// if it has, summarizing now would pay a model call for nothing.
+				// Summarizing now would pay a model call for nothing.
 				if ( occupancy_.fill_fraction( ) < COMPACTION_TRIGGER_FRACTION ) {
 					return status{ };
 				}
 			}
 		}
 
-		// Nothing to drop in a conversation this short, and `newest` below would
-		// underflow on an empty one.
+		// `newest` below would underflow on an empty history.
 		if ( history_.size( ) <= COMPACTION_KEEP_FIRST_EVENTS ) {
 			return status{ };
 		}
@@ -140,11 +134,7 @@ namespace mcode {
 		const auto window_tokens = caps_.effective_context_window( );
 		const auto reserved = static_cast< double >( RESERVED_OUTPUT_TOKENS );
 
-		// Clamped. A model whose declared window is at or below the output reserve
-		// -- which a config can name, since the capability table is data -- made
-		// this negative, so the trigger below was never true and the function ran
-		// on every single step. It then rebuilt `kept` from identical ranges,
-		// dropped nothing, and appended a `context.compaction` record saying it had.
+		// Clamped: a declared window at or below the output reserve would never trigger.
 		const auto usable = std::max< double >( static_cast< double >( window_tokens ) - reserved,
 			static_cast< double >( window_tokens ) * MIN_USABLE_WINDOW_FRACTION );
 		const auto window = usable * ( 1.0 - SAFETY_MARGIN_FRACTION );
@@ -216,11 +206,7 @@ namespace mcode {
 			kept.push_back( history_[ index ] );
 		}
 
-		// The pinned prefix and the tail can meet, covering the whole history --
-		// a few messages with one enormous newest one, which is exactly the case
-		// that triggers compaction. Rebuilding the identical vector and recording
-		// that a compaction happened would report a drop that did not occur, and
-		// `kept_tokens` would describe a result that is not smaller.
+		// Prefix and tail can meet, which would report a drop that did not occur.
 		if ( kept.size( ) >= history_.size( ) ) {
 			return status{ };
 		}
@@ -313,10 +299,8 @@ namespace mcode {
 			}
 		}
 
-		// A pointer, not content. Injecting the ledger itself would spend session-start
-		// budget the instruction chain needs more, and an always-injected block is the
-		// design that measured worst for poisoning. The line says what is there and
-		// when to look, because a bare path is a reference the model ignores.
+		// A pointer, not content: an always-injected ledger block is the design that
+		// measured worst for poisoning.
 		if ( !notes_pointer.empty( ) && has_tool( "memory_search" ) ) {
 			out += "\n# Notes\n";
 			out += notes_pointer;

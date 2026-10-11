@@ -48,7 +48,6 @@ namespace mcode::perm {
 			return false;
 		}
 
-		// plan mode is read-only: only the read class passes.
 		[[nodiscard]] constexpr auto denied_by_plan_mode( const tool_class klass ) noexcept
 			-> bool {
 			switch ( klass ) {
@@ -159,7 +158,7 @@ namespace mcode::perm {
 
 	auto permission_engine::evaluate_rules( const permission_request& request ) const
 		-> std::optional< rule_match > {
-		// deny -> ask -> allow, first match wins; each pass scans the merged list in scope order.
+		// deny -> ask -> allow, first match wins.
 		for ( const auto decision : { permission_decision::deny,
 			permission_decision::ask, permission_decision::allow } ) {
 			for ( const auto& [ scope, candidate ] : config_rules_ ) {
@@ -319,7 +318,7 @@ namespace mcode::perm {
 		ask_request.rule = matched.scope + ": " + matched.pattern;
 		ask_request.working_directory = space_->root( ).string( );
 
-		// the detail view renders from the verdict, so it is set before the source asks.
+		// the detail view renders from the verdict, so it is set ahead of the ask.
 		last_verdict_ = { permission_decision::ask, matched,
 			"the rule matched and the user is being asked" };
 
@@ -437,15 +436,8 @@ namespace mcode::perm {
 			return permission_decision::deny;
 		}
 
-		// Plan-then-execute, as one bit. Once untrusted content has entered the
-		// context, an action that reaches outside the workspace or communicates
-		// externally must not be taken on the model's word: the injected instruction
-		// cannot choose the plan, so it cannot trigger the consequence. This is the
-		// class of defence the adaptive-attack literature did not break, and the
-		// reason it was not broken is that control flow is data-independent.
-		//
-		// It sits ahead of yolo for the same reason the floor does: a flag that skips
-		// questions must not skip this one, or the defence is opt-out by accident.
+		// Once untrusted content is in the context, an action that reaches outside the
+		// workspace must not be taken on the model's word; this sits ahead of yolo too.
 		if ( untrusted_ingested_ && reaches_outside( request.klass ) ) {
 			const rule_match tainted{ "taint", request.resource, permission_decision::ask };
 

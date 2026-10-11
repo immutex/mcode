@@ -9,8 +9,8 @@ namespace mcode::net {
 
 	namespace {
 
-		// RFC 9110 §9.3.6: a tunnel to a well-known or reserved port is a risk the
-		// proxy should not accept just because a host was allowlisted.
+		// RFC 9110 §9.3.6: a tunnel to a well-known or reserved port is a risk the proxy
+		// should not accept just because a host was allowlisted.
 		constexpr std::array< std::uint16_t, 6 > CONNECT_PORTS = {
 			443, 8443, 4443, 9443, 22, 9418,
 		};
@@ -26,8 +26,8 @@ namespace mcode::net {
 
 			const auto suffix = pattern.substr( 1 );
 
-			// `*.example.com` must not match `example.com` itself, and must not match
-			// `notexample.com`: the dot in the suffix is what enforces both.
+			// The dot in the suffix is what stops `*.example.com` matching `example.com`
+			// itself or `notexample.com`.
 			if ( host.size( ) <= suffix.size( ) ) {
 				return false;
 			}
@@ -135,8 +135,8 @@ namespace mcode::net {
 				return true;
 			}
 
-			// The metadata service used by the major clouds. Reaching it from a
-			// sandboxed child is credential theft with extra steps.
+			// The metadata service used by the major clouds: reaching it from a sandboxed
+			// child is credential theft with extra steps.
 			if ( octets[ 0 ] == 100 && octets[ 1 ] == 100 && octets[ 2 ] == 100
 				&& octets[ 3 ] == 200 ) {
 				return true;

@@ -73,7 +73,6 @@ namespace mcode::support {
 			return false;
 		}
 
-		// iterative over (pattern index, path index) with `**` fan-out.
 		auto states = std::vector< std::pair< std::size_t, std::size_t > >{ { 0, 0 } };
 
 		while ( !states.empty( ) ) {

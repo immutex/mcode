@@ -8,11 +8,8 @@ namespace mcode::agent {
 
 	namespace {
 
-		// Length of the shortest period that repeats at the END of `text`, or 0.
-		//
-		// Only exact contiguity counts. A near-repeat is not a loop: prose
-		// legitimately echoes itself, and every fuzzy signal tried in the prior
-		// art false-triggered on long structured thinking.
+		// Length of the shortest period that repeats at the end of `text`, or 0. Only
+		// exact contiguity counts: fuzzy signals false-trigger on structured thinking.
 		[[nodiscard]] auto exact_period( const std::string_view text,
 			const std::size_t minimum_unit, const std::size_t minimum_copies )
 			-> std::size_t {
@@ -22,9 +19,7 @@ namespace mcode::agent {
 				return 0;
 			}
 
-			// The longest a unit can be is half the text; the shortest is the
-			// declared floor. Smallest period first, so the tightest unit wins
-			// and `repeated_characters` is not overstated.
+			// Smallest period first, so the tightest unit wins.
 			const auto longest = text.size( ) / minimum_copies;
 
 			for ( auto unit = minimum_unit; unit <= longest; ++unit ) {
@@ -86,8 +81,7 @@ namespace mcode::agent {
 	}
 
 	auto shingle_overlap( const std::string_view a, const std::string_view b ) -> double {
-		// 5 characters is short enough to catch a reworded sentence and long
-		// enough that common English does not dominate the set.
+		// Short enough to catch a reworded sentence, long enough to skip common English.
 		constexpr auto SHINGLE = std::size_t{ 5 };
 
 		if ( a.size( ) < SHINGLE || b.size( ) < SHINGLE ) {
@@ -136,9 +130,8 @@ namespace mcode::agent {
 			return verdict;
 		}
 
-		// The cross-turn form. Only the most recent turn is compared: a loop
-		// re-states the last thing it said, and reaching further back would
-		// match legitimately recurring phrasing.
+		// The cross-turn form, against the most recent turn only: a loop re-states the
+		// last thing it said.
 		if ( previous_turns.empty( ) ) {
 			return verdict;
 		}
@@ -149,9 +142,7 @@ namespace mcode::agent {
 			return verdict;
 		}
 
-		// Both sides normalized. Comparing a normalized string against a RAW one
-		// made the signal dead: a verbatim repeat measured 0.885 against a 0.90
-		// threshold, because the two sides differed by whitespace and case alone.
+		// Both sides normalized: a raw comparison measured a verbatim repeat at 0.885.
 		const auto previous = normalize_for_comparison( previous_turns.back( ) );
 
 		if ( previous.size( ) < REPETITION_MIN_COMPARABLE ) {

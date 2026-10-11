@@ -80,8 +80,8 @@ namespace mcode {
 				"path is outside the workspace: " + absolute.string( ) ) );
 		}
 
-		// `path_is_within` proved the root is a component prefix, so the remainder
-		// starts exactly `root`'s component count in.
+		// `path_is_within` proved the root is a component prefix, so advancing by its
+		// component count lands on the first component below it.
 		auto path_entry = absolute.begin( );
 
 		std::advance( path_entry,
@@ -119,7 +119,6 @@ namespace mcode {
 					"cannot stat the snapshot index: " + error_code.message( ) ) );
 			}
 
-			// An absent index is an empty store, which is the state before the first capture.
 			return std::vector< index_entry >{ };
 		}
 
@@ -258,8 +257,8 @@ namespace mcode {
 			return std::unexpected( bytes.error( ) );
 		}
 
-		// The check that makes a weak name-only hash safe: bytes that no longer hash to their
-		// own name are corruption, and restoring them would silently write the wrong file.
+		// bytes that do not hash to their own name are corruption, and restoring them would
+		// silently write the wrong file.
 		if ( snapshot_detail::content_address( *bytes ) != blob ) {
 			return std::unexpected( fail( errc::io,
 				"snapshot blob does not match its content address: " + path.string( ) ) );

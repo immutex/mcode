@@ -20,7 +20,6 @@ namespace mcode {
 
 	namespace {
 
-		// The class comes from the registry, not the tool name: same-class tools are identical.
 		[[nodiscard]] auto permission_resource( const tool_call& call,
 			const tool_class klass ) -> std::string {
 			if ( klass != tool_class::exec && klass != tool_class::read &&
@@ -80,7 +79,6 @@ namespace mcode {
 		const auto path = parsed->pointer_string( "/path" );
 
 		if ( !path ) {
-			// A write-class tool with no `path` argument has no single target to capture.
 			log_->append( "snapshot.capture", tools::loop_failure( call.name, "no path argument" ) );
 
 			return;
@@ -98,7 +96,6 @@ namespace mcode {
 			return;
 		}
 
-		// Never silent, and never fatal: an unusable store must not block a working edit.
 		auto payload = std::string{ "{\"ok\":false,\"tool\":\"" };
 		json::append_escaped( payload, call.name );
 		payload += "\",\"path\":\"";
@@ -200,18 +197,15 @@ namespace mcode {
 			return finish( );
 		}
 
-		// One checkpoint for the arguments of every tool - built-in, extension and MCP alike:
-		// repair the payload the model produced, then check it against the schema it was shown.
-		// Ahead of the veto and the permission check, so both see the arguments that will
-		// actually run, and a call that cannot proceed never prompts the user.
+		// One checkpoint for every tool, built-in, extension and MCP alike: repair the
+		// payload the model produced, then check it against the schema the model was shown.
+		// Ahead of the veto and the permission check, so both see what will actually run.
 		auto prepared = tools::prepare_arguments( definition->schema_json, call.args_json );
 
 		if ( !prepared.ok( ) ) {
 			outcome.ok = false;
 			outcome.code = errc::tool_failed;
-			// A cut-off response is a different failure with a different fix: the arguments were
-			// never finished, so the model must re-issue a smaller call rather than correct a
-			// parameter it got wrong.
+			// A cut-off response needs a smaller call re-issued, not a corrected parameter.
 			outcome.error_message = call.truncated
 				? tools::truncation_error( call.name )
 				: prepared.failure;
@@ -219,8 +213,6 @@ namespace mcode {
 			auto payload = tools::loop_failure( call.name,
 				call.truncated ? "truncated_arguments" : "invalid_arguments" );
 
-			// The same envelope on both, so a subscriber sees the tool name the log
-			// does. It published a second, tool-less string built by hand.
 			log_->append( "tool.result", payload );
 			publish( events::kind::tool_result, std::move( payload ) );
 
@@ -230,7 +222,7 @@ namespace mcode {
 		const auto effective_call =
 			tool_call{ call.id, call.name, prepared.json, call.truncated };
 
-		// A veto denies even under --yolo, so it is published before the handler runs.
+		// A veto denies even under --yolo, so it is published ahead of the handler.
 		{
 			auto pre_payload = std::string{ "{\"tool\":\"" };
 			json::append_escaped( pre_payload, effective_call.name );
@@ -243,7 +235,6 @@ namespace mcode {
 			pre_event.timestamp_ms = support::epoch_milliseconds( );
 			pre_event.payload_json = std::move( pre_payload );
 
-			// The returned veto is the decision, not a notification.
 			const auto veto = bus_ != nullptr ? bus_->publish( std::move( pre_event ) )
 				: std::optional< events::veto >{ };
 
@@ -265,12 +256,9 @@ namespace mcode {
 			}
 		}
 
-		// One check point: built-in, extension and MCP tools all pass through here.
-		//
-		// Skipped for a harness-owned call. The verification command comes from
-		// configuration, not from the model, so gating it on the agent's approval
-		// policy made every headless run report `failed` -- the gate denied its own
-		// check. The flag is set for exactly one call and cleared immediately.
+		// One check point for built-in, extension and MCP tools alike, skipped for a
+		// harness-owned call: the verification command comes from configuration, not
+		// from the model, so the agent's approval policy does not apply to it.
 		if ( permissions_ != nullptr && !harness_call_ ) {
 			auto request = perm::permission_request{ };
 			request.tool_name = effective_call.name;
@@ -302,14 +290,11 @@ namespace mcode {
 			}
 		}
 
-		// After the permission check, so a refused call never fills the store, and before the
-		// handler, so the bytes recorded are the ones the edit is about to replace.
+		// After the permission check, so a refused call never fills the store, and ahead
+		// of the handler, so the bytes recorded are the ones about to be replaced.
 		capture_before_write( effective_call, definition->klass );
 
-		// The audit trail has to name the command that actually runs, not just its output: a
-		// permission incident is otherwise uninverifiable, because the expanded text is the
-		// only record of what was executed and the log held the raw model output alone. Logged
-		// after the permission check, so it reflects what was approved.
+		// The audit trail names the expanded command that runs, not just its output.
 		if ( definition->klass == tool_class::exec ) {
 			auto command = json::document::parse( effective_call.args_json );
 
@@ -346,10 +331,8 @@ namespace mcode {
 			outcome.code = produced.error( ).code;
 			outcome.error_message = produced.error( ).msg;
 
-			// Logged under the same kind as a success, and with the call id: the
-			// reader looks for TOOL_RESULT_EVENT, so a failure written under any
-			// other name simply vanished from a restored transcript -- and the
-			// model then believed a call it had made was never answered.
+			// Logged under the same kind as a success, and with the call id, which is what
+			// ties a result to its call.
 			auto recorded = std::string{ "{\"ok\":false,\"tool\":\"" };
 			json::append_escaped( recorded, call.name );
 			recorded += "\",\"call_id\":\"";
@@ -373,15 +356,7 @@ namespace mcode {
 		permission_denied_ = false;
 
 		{
-			// One session record, carrying the output: a resumed session needs what
-			// the tool returned, not only that it succeeded. The stream payload is
-			// built separately and without it, because `exec --json` consumers and
-			// the eval suite parse that shape, and a tool output is unbounded -- a
-			// large read would otherwise put megabytes on one JSONL line.
-			//
-			// The call id is recorded too: one assistant message can carry several
-			// calls, and without the id a reader cannot tell which result answers
-			// which call, so every result was attached to the first one.
+			// The stream payload omits the output, which is unbounded.
 			auto recorded = std::string{ "{\"ok\":true,\"tool\":\"" };
 			json::append_escaped( recorded, call.name );
 			recorded += "\",\"call_id\":\"";

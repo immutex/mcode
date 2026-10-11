@@ -281,7 +281,7 @@ namespace mcode {
 			candidate = canonical_root_ / candidate;
 		}
 
-		// Through the seam: it owns the long-path form, and the stored path drops the prefix.
+		// the platform seam owns the long-path form; the stored path drops the prefix.
 		auto canonical = platform::canonicalize( candidate );
 
 		if ( !canonical ) {
@@ -365,17 +365,14 @@ namespace mcode {
 			return std::unexpected( fail( errc::io, "cannot open " + resolved->string( ) ) );
 		}
 
-		// Sized to the file, not to the cap. This used to allocate the full 8 MiB and
-		// zero-fill it for every read, which is most of a session's reads of a few
-		// kilobyte source file.
+		// sized to the file, not to the cap: most reads are a few kilobytes.
 		auto content = std::string{ };
 		content.resize( static_cast< std::size_t >( size ) + 1 );
 
 		input.read( content.data( ), static_cast< std::streamsize >( content.size( ) ) );
 
-		// Filling the buffer means the file is larger than the stat reported. Only
-		// then is the whole-cap buffer worth allocating, and re-reading keeps the
-		// growth handling the single-pass version had.
+		// filling the buffer means the file grew past the stat; only then is the cap-sized
+		// buffer worth allocating.
 		if ( input.gcount( ) == static_cast< std::streamsize >( content.size( ) ) ) {
 			content.resize( MAX_TEXT_FILE_BYTES + 1 );
 

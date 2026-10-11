@@ -16,22 +16,17 @@ namespace mcode::tui {
 
 	namespace {
 
-		// Raw mode disables echo, so erasing a character is the session's job:
-		// backspace, blank over the cell, backspace again.
 		inline constexpr std::string_view ERASE_SEQUENCE = "\b \b";
 
 		// No line editing, no echo, and window records so a resize is visible.
 		inline constexpr unsigned long RAW_INPUT_MODE =
 			ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT;
 
-		// Wheel and button records. NOT `ENABLE_VIRTUAL_TERMINAL_INPUT`: with
-		// it set, conhost translates key input into VT bytes and
-		// `ReadConsoleInputA` returns one character per record with a zero
-		// virtual key, which erases every `VK_*` mapping. The wheel arrives as
-		// a MOUSE_EVENT either way.
+		// Not `ENABLE_VIRTUAL_TERMINAL_INPUT`: with it set, conhost reports one
+		// character per record with a zero virtual key, erasing every `VK_*`
+		// mapping.
 		inline constexpr unsigned long MOUSE_INPUT_MODE = ENABLE_MOUSE_INPUT;
 
-		// How long `poll_resize` sleeps between checks of the record stream.
 		inline constexpr unsigned long POLL_SLICE_MS = 10;
 
 	}
@@ -58,8 +53,7 @@ namespace mcode::tui {
 			return std::unexpected( fail( errc::io, "GetConsoleMode failed" ) );
 		}
 
-		// `saved_` is set before the first mode change, so every exit path
-		// restores through the destructor.
+		// Set before the first mode change, so every exit path restores through the destructor.
 		session.saved_ = true;
 
 		const auto raw_input = RAW_INPUT_MODE;
@@ -70,32 +64,23 @@ namespace mcode::tui {
 			return std::unexpected( fail( errc::io, "SetConsoleMode failed" ) );
 		}
 
-		// Every glyph a frame carries is UTF-8 -- the separators, the spinner,
-		// the box drawing -- and the session writes them as raw bytes. The
-		// console decodes those bytes with its own output codepage, so under
-		// the default OEM page one separator arrives as three CP437 glyphs.
-		//
-		// Not fatal on failure: the codepage is an output cosmetic and a
-		// redirected or hosted console can refuse it. A session with mojibake
-		// beats no session.
+		// The console decodes the raw UTF-8 frame bytes with its own codepage,
+		// so under the default OEM page a separator arrives as three CP437
+		// glyphs. Not fatal on failure: a redirected console can refuse it.
 		session.saved_output_cp_ = GetConsoleOutputCP( );
 
 		if ( session.saved_output_cp_ != 0 ) {
 			SetConsoleOutputCP( CP_UTF8 );
 		}
 
-		// The input side has the mirror problem: keystrokes and pastes are
-		// decoded by the console with the INPUT codepage before the session
-		// ever sees them, so under the legacy default a non-ASCII character
-		// arrives as a byte sequence that is not valid UTF-8 and the renderer
-		// paints the gap. Same tolerance as the output page.
+		// The mirror problem: the console decodes keystrokes and pastes with
+		// the INPUT codepage before the session sees them.
 		session.saved_input_cp_ = GetConsoleCP( );
 
 		if ( session.saved_input_cp_ != 0 ) {
 			SetConsoleCP( CP_UTF8 );
 		}
 
-		session.raw_active_ = true;
 		session.attached_ = true;
 
 		const auto has_tty = true;
@@ -103,10 +88,6 @@ namespace mcode::tui {
 			tty_environment( "TERM" ), tty_environment( "NO_COLOR" ) == "1", has_tty,
 			tty_environment( "MCODE_AMBIGUOUS_WIDTH" ) );
 
-		// Wrapped here and unwrapped in `restore`, the same place the mouse
-		// mode is handled, so the pair cannot drift apart. Windows Terminal
-		// wraps a paste in the markers and reports them as key records, which
-		// the record decoder turns back into one paste event.
 		if ( session.caps_.bracketed_paste ) {
 			session.write( BRACKETED_PASTE_ENABLE );
 		}
@@ -115,7 +96,7 @@ namespace mcode::tui {
 	}
 
 	tty_session::tty_session( tty_session&& other ) noexcept
-		: caps_( other.caps_ ), raw_active_( other.raw_active_ ),
+		: caps_( other.caps_ ),
 		attached_( other.attached_ ), mouse_reporting_( other.mouse_reporting_ ),
 		resize_pending_( other.resize_pending_ ), input_handle_( other.input_handle_ ),
 		output_handle_( other.output_handle_ ), in_mode_( other.in_mode_ ),
@@ -125,7 +106,6 @@ namespace mcode::tui {
 		other.saved_ = false;
 		other.saved_output_cp_ = 0;
 		other.saved_input_cp_ = 0;
-		other.raw_active_ = false;
 		other.mouse_reporting_ = false;
 		other.resize_pending_ = false;
 	}
@@ -135,7 +115,6 @@ namespace mcode::tui {
 			restore( );
 
 			caps_ = other.caps_;
-			raw_active_ = other.raw_active_;
 			attached_ = other.attached_;
 			mouse_reporting_ = other.mouse_reporting_;
 			resize_pending_ = other.resize_pending_;
@@ -151,7 +130,6 @@ namespace mcode::tui {
 			other.saved_ = false;
 			other.saved_output_cp_ = 0;
 			other.saved_input_cp_ = 0;
-			other.raw_active_ = false;
 			other.mouse_reporting_ = false;
 			other.resize_pending_ = false;
 		}
@@ -165,12 +143,10 @@ namespace mcode::tui {
 		}
 
 		saved_ = false;
-		raw_active_ = false;
 		mouse_reporting_ = false;
 		resize_pending_ = false;
 
-		// The enable is written in `create`, so the disable belongs here: leaving the
-		// terminal wrapped would leak the paste mode into whatever runs next.
+		// Leaving the terminal wrapped would leak the paste mode into whatever runs next.
 		if ( caps_.bracketed_paste ) {
 			write( BRACKETED_PASTE_DISABLE );
 		}
@@ -241,30 +217,21 @@ namespace mcode::tui {
 				return std::nullopt;
 			}
 
-			// The same decoder the prompt uses, so a bracketed paste is
-			// content here too and its markers never land in the answer.
 			if ( absorb_records( records.data( ), count, state, events, false ) ) {
 				resize_pending_ = true;
 			}
 
-			// Raw mode disabled echo, so nothing the user types reaches the
-			// screen unless the session writes it back. Only accepted keys are
-			// echoed, so a read that times out leaves the display untouched.
+			// Raw mode disabled echo, so only accepted keys are written back.
 			for ( const auto& event : events ) {
 				if ( event.type == key_event::kind::interrupt
 					|| event.type == key_event::kind::exit ) {
-					// Ctrl-C abandons the read. Returning the partial line would
-					// hand the caller an empty answer, which a prompt that treats
-					// empty as "skip" would act on -- so an interrupt must be
-					// distinguishable from an empty line, and `nullopt` is that.
+					// An interrupt must be distinguishable from an empty line.
 					write( "\r\n" );
 
 					return std::nullopt;
 				}
 
 				if ( event.type == key_event::kind::enter ) {
-					// The caller advances its own row, so the key itself only
-					// returns the cursor to column zero.
 					write( "\r\n" );
 
 					got_enter = true;
@@ -283,8 +250,6 @@ namespace mcode::tui {
 				}
 
 				if ( event.type == key_event::kind::paste ) {
-					// A pasted answer: its first line is the whole answer, the
-					// way typing that line would have been.
 					const auto stop = event.text.find( '\n' );
 					const auto text = stop == std::string::npos ? event.text
 						: event.text.substr( 0, stop );
@@ -333,8 +298,6 @@ namespace mcode::tui {
 			return;
 		}
 
-		// Toggling the wheel off restores the exact raw mode, so the keyboard
-		// path is byte-for-byte what it was before.
 		SetConsoleMode( input_handle_,
 			enabled ? RAW_INPUT_MODE | MOUSE_INPUT_MODE : RAW_INPUT_MODE );
 	}
@@ -349,7 +312,6 @@ namespace mcode::tui {
 				return true;
 			}
 
-			// A platform that missed the record still notices the size diff.
 			if ( platform::terminal_size_changed( ) ) {
 				return true;
 			}
@@ -378,9 +340,6 @@ namespace mcode::tui {
 	}
 
 	auto tty_session::read_key( const std::uint32_t wait_ms ) -> key_event {
-		// Keys decoded from an earlier read that the caller has not asked for
-		// yet. One console read returns several records, and this returns one
-		// key, so the surplus waits here instead of being dropped.
 		if ( !pending_.empty( ) ) {
 			auto event = pending_.front( );
 			pending_.erase( pending_.begin( ) );
@@ -408,14 +367,10 @@ namespace mcode::tui {
 			}
 
 			if ( available == 0 ) {
-				// An idle prompt polls; it does not end the session. Returning
-				// `exit` here made a quiet terminal quit after the wait, which
-				// the caller cannot distinguish from Ctrl+D.
+				// An idle prompt polls; it does not end the session.
 				if ( GetTickCount64( ) >= deadline ) {
-					// A marker prefix that never completed is ordinary input,
-					// so a lone Escape is still the escape key. The bytes go
-					// back through the keystroke decoder, which holds an
-					// incomplete escape sequence in its own carry.
+					// A marker prefix that never completed is ordinary input, so a
+					// lone Escape is still the escape key.
 					if ( decode_.paste.holding( ) ) {
 						decode_plain_key_bytes( decode_.paste.flush( ), decode_, pending_,
 							mouse_reporting_ );
@@ -453,10 +408,8 @@ namespace mcode::tui {
 				return event;
 			}
 
-			// `ReadConsoleInputA` REMOVES every record it reports, so anything
-			// decoded here and not returned is lost. The whole batch is decoded
-			// into `pending_` and the first key is returned, which is what
-			// stopped fast typing from dropping characters.
+			// `ReadConsoleInputA` removes every record it reports, so anything
+			// decoded here and not returned is lost.
 			if ( absorb_records( records.data( ), count, decode_, pending_,
 				mouse_reporting_ ) ) {
 				resize_pending_ = true;

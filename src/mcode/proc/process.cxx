@@ -75,12 +75,11 @@ namespace mcode {
 
 #if defined( _WIN32 )
 		struct sandbox_spawn_state {
-			platform::unique_job_windows token;
-			platform::unique_job_windows job;
+			platform::unique_handle_windows token;
+			platform::unique_handle_windows job;
 
-			// Owned: the parent keeps it open because IOCP breaks console init, and
-			// the destructor closes it. It used to be a raw `void*` closed by hand on
-			// the success path only, so a throw in between leaked it.
+			// the parent keeps stdin open because IOCP breaks console init; the owned
+			// handle is what closes it on every path out of here.
 			platform::unique_handle_windows parent_stdin;
 		};
 
@@ -117,9 +116,8 @@ namespace mcode {
 		}
 #endif
 
-		// boost's launcher inherits the parent's directory unless one is passed as an
-		// initializer, and an empty path would make the child's chdir fail. "No working
-		// directory given" means "where the harness is", so that is what it becomes.
+		// the launcher inherits the parent's directory unless one is passed, and an empty
+		// path fails the child's chdir, so no working directory given means the harness's.
 		[[nodiscard]] auto child_directory( const process_options& options )
 			-> std::filesystem::path {
 			if ( !options.working_directory.empty( ) ) {
@@ -285,7 +283,7 @@ namespace mcode {
 				raw_pipes->parent_stdout = nullptr;
 				raw_pipes->parent_stderr = nullptr;
 
-				// the child owns its ends now; the parent's copies would hide EOF forever
+				// the child owns its ends; the parent's copies would hide EOF forever
 				platform::sandbox_windows_close_pipes( *raw_pipes );
 			} else {
 				child.emplace( context, options.executable, options.args,

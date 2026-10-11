@@ -145,8 +145,7 @@ namespace mcode::cli::detail {
 			out.push_back( std::move( session ) );
 		}
 
-		// Newest first: the id carries the start time, so the ordering is deterministic
-		// even when two runs land in the same millisecond.
+		// Newest first: the id carries the start time, so ties break deterministically.
 		std::sort( out.begin( ), out.end( ),
 			[]( const session_ref& left, const session_ref& right ) {
 				if ( left.started_ms != right.started_ms ) {
@@ -184,16 +183,14 @@ namespace mcode::cli::detail {
 		resolved.headless = !interactive;
 		resolved.plan_mode = options.plan;
 
-		// The permissive default is for a human who can see the disclaimer and use
-		// /undo. A headless run has neither, so it keeps the engine's conservative
-		// default and fails closed on anything the rules do not already allow.
+		// A headless run has neither a visible disclaimer nor /undo, so it keeps the
+		// conservative default and fails closed on anything the rules do not allow.
 		resolved.approval = options.approval.empty( )
 			? config.get_string( "sandbox.approval" ).value_or(
 				std::string{ interactive ? "never" : "on-request" } )
 			: options.approval;
 
-		// --yolo forces the permissive mode; --ask is applied after it so the
-		// explicit request to be prompted wins over every permissive flag.
+		// `--ask` is applied after `--yolo`, so the explicit request to be prompted wins.
 		if ( options.yolo ) {
 			resolved.approval = "never";
 		}

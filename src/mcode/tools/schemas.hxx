@@ -4,7 +4,6 @@
 
 namespace mcode::tools {
 
-	// flat parameter schemas only: validate_schema accepts top-level properties, no nesting
 	inline constexpr std::string_view READ_SCHEMA = R"JSON({
   "type": "object",
   "properties": {

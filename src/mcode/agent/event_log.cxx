@@ -74,14 +74,9 @@ namespace mcode {
 			return std::unexpected( fail( errc::io, "could not open session log: " + path.string( ) ) );
 		}
 
-		// The object represents ONE log, so opening a different file replaces what
-		// it holds. This mattered the moment a session could be switched from
-		// inside a running REPL: the loop holds a pointer to the log, so a swap
-		// repoints this same object, and the replay below appends. Without the
-		// clear, the first session's events stayed in memory and
-		// `restore_transcript` rebuilt a conversation from two sessions at once.
-		// After the open, so a path that cannot be opened leaves the object as it
-		// was rather than half-cleared.
+		// One object, one log: a session swap repoints this same object, so stale
+		// events would rebuild a transcript from two sessions at once. After the
+		// open, so an unopenable path leaves the object untouched.
 		events_.clear( );
 		next_sequence_ = 0;
 		write_failures_ = 0;
@@ -116,8 +111,7 @@ namespace mcode {
 		next_sequence_ = replayed->log.next_sequence_;
 
 		// Accounted but not evicted: `restore_transcript` reads this immediately
-		// after the replay, and dropping the oldest events here would silently
-		// truncate the conversation it rebuilds.
+		// after the replay.
 		for ( const auto& restored : events_ ) {
 			retained_bytes_ += restored.payload_json.size( );
 		}
@@ -137,12 +131,9 @@ namespace mcode {
 	}
 
 	auto event_log::append( std::string kind, std::string payload_json ) -> event {
-		// A payload that does not parse makes the line unreadable to every
-		// consumer, and it fails silently: the run looks healthy and the record
-		// is garbage. The harness builds these strings by hand, so a malformed
-		// one is a programming error, and this is the single choke point every
-		// payload passes through. The original bytes are preserved inside a
-		// valid envelope so a forensic reader still sees them.
+		// Every payload passes through here, and one that does not parse is unreadable
+		// to every consumer while failing silently. The raw bytes are preserved inside
+		// a valid envelope.
 		if ( !payload_json.empty( ) && !json::document::parse( payload_json ) ) {
 			auto wrapped = std::string{ "{\"malformed_payload\":true,\"kind\":\"" };
 			json::append_escaped( wrapped, kind );
@@ -164,11 +155,6 @@ namespace mcode {
 		recorded.step = step_;
 		recorded.payload_json = std::move( payload_json );
 
-		// Written to disk first, then retained only as far as the cap allows.
-		// The record is the file; this vector is a cache, and a session that runs
-		// for hours would otherwise hold every file it ever read. Nothing reads
-		// the vector while a run is in flight, so an evicted event costs nothing
-		// -- and it is still on disk for the next `open` to replay.
 		retained_bytes_ += recorded.payload_json.size( );
 
 		while ( retained_bytes_ > MAX_RETAINED_LOG_BYTES && events_.size( ) > 1 ) {

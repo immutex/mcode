@@ -286,7 +286,7 @@ namespace mcode::json {
 
 	namespace {
 
-		// insert_or_assign would overwrite before the type check, so the entry is checked first.
+		// checked before insertion: insert_or_assign would overwrite an entry of another type.
 		auto container_at( node& root, const bool mutable_document, const std::string_view key,
 			const node::kind wanted ) -> node* {
 			if ( !mutable_document || key.empty( ) ) {
