@@ -36,16 +36,17 @@ TEST_CASE( "the read-only registry drops every mutating tool", "[subagent]" ) {
 
 	const auto child = read_only_registry( parent );
 
-	REQUIRE( child.size( ) == 3 );
-	REQUIRE( child.find( "read" ) != nullptr );
-	REQUIRE( child.find( "glob" ) != nullptr );
-	REQUIRE( child.find( "grep" ) != nullptr );
+	REQUIRE( child.has_value( ) );
+	REQUIRE( child->size( ) == 3 );
+	REQUIRE( child->find( "read" ) != nullptr );
+	REQUIRE( child->find( "glob" ) != nullptr );
+	REQUIRE( child->find( "grep" ) != nullptr );
 
 	// Absent from the child's registry entirely, not merely refused at dispatch:
 	// the model never sees a schema for a tool it must not call.
-	REQUIRE( child.find( "write" ) == nullptr );
-	REQUIRE( child.find( "edit" ) == nullptr );
-	REQUIRE( child.find( "bash" ) == nullptr );
+	REQUIRE( child->find( "write" ) == nullptr );
+	REQUIRE( child->find( "edit" ) == nullptr );
+	REQUIRE( child->find( "bash" ) == nullptr );
 }
 
 TEST_CASE( "no shell reaches a read-only subagent", "[subagent]" ) {

@@ -50,8 +50,9 @@ namespace mcode {
 	[[nodiscard]] auto subagent_tool_names( ) -> const std::vector< std::string_view >&;
 
 	// Builds the read-only registry from the parent's, dropping everything the
-	// child must not reach.
-	[[nodiscard]] auto read_only_registry( const tool_registry& parent ) -> tool_registry;
+	// child must not reach. Fails rather than skipping a tool it could not copy.
+	[[nodiscard]] auto read_only_registry( const tool_registry& parent )
+		-> result< tool_registry >;
 
 	// Runs the child to completion and harvests its final answer. On cancellation
 	// the partial output is returned with `truncated` set rather than discarded: a

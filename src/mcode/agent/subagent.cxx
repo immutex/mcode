@@ -52,7 +52,7 @@ namespace mcode {
 		return READ_ONLY_TOOLS;
 	}
 
-	auto read_only_registry( const tool_registry& parent ) -> tool_registry {
+	auto read_only_registry( const tool_registry& parent ) -> result< tool_registry > {
 		auto child = tool_registry{ };
 
 		for ( const auto* definition : parent.all( ) ) {
@@ -60,7 +60,13 @@ namespace mcode {
 				continue;
 			}
 
-			child.add( *definition );
+			// Fail closed rather than skip. A tool that failed to copy would be
+			// missing from the child, which reads as a capability the subagent
+			// simply does not have -- and the caller has no way to tell that from
+			// the parent never having registered it.
+			if ( const auto added = child.add( *definition ); !added ) {
+				return std::unexpected( added.error( ) );
+			}
 		}
 
 		return child;
@@ -84,8 +90,12 @@ namespace mcode {
 
 		auto registry = read_only_registry( *request.parent->registry );
 
+		if ( !registry ) {
+			return std::unexpected( registry.error( ) );
+		}
+
 		auto deps = *request.parent;
-		deps.registry = &registry;
+		deps.registry = &*registry;
 
 		auto budget = session_budget{ };
 		budget.max_steps = static_cast< std::uint32_t >( request.max_steps );
