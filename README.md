@@ -266,10 +266,10 @@ Nine extensions ship with the binary: `task`, `fs-extra`, `skills`, `memory`,
 The Lua surface is fixed at api version 1: a name is added in a later version
 and never removed or renamed, so an extension written today keeps loading. CI
 type-checks the shipped stub against the same Luau commit the package pins, so a
-VM bump cannot silently invalidate it. Two names added in 0.1.0 carry the
-extensions that need them: `mcode.bash` for a command and `mcode.fetch` for a URL
-the model chose, both routed through the core handlers so the sandbox and the
-permission gate cannot be bypassed from Lua.
+VM bump cannot silently invalidate it. The extension-facing names added in 0.1.0
+are `mcode.bash` for a command and `mcode.fetch` for a URL the model chose, both
+routed through the core handlers so the sandbox and the permission gate cannot be
+bypassed from Lua.
 
 ## Commands
 
@@ -297,7 +297,8 @@ the same list.
 --add-dir <path>       add an extra workspace root for this run
 --no-extensions        disable every extension
 --yolo                 skip approval prompts; the hard-deny floor and
-                       permissions.deny still apply
+                       permissions.deny still apply; spawned commands run
+                       under the OS sandbox where the platform supports it
 -v, --verbose          more diagnostics on stderr
 ```
 
@@ -342,7 +343,7 @@ gated by string matching.
 The design is the authoritative specification. Where code and docs disagree, the
 docs win. Start at the index.
 
-- [Design index](docs/00-index.md): reading order for all 43 docs
+- [Design index](docs/00-index.md): reading order for every design doc
 - [North Star](docs/01-north-star.md): thesis, hard budgets, principles, non-goals
 - [Prior art](docs/02-prior-art.md): 16 harnesses compared, plus the Lua-extension precedent
 - [Architecture](docs/03-architecture.md): process model, layers, core types, extension seams
@@ -477,7 +478,7 @@ Report vulnerabilities privately through
 [GitHub Security Advisories](https://github.com/immutex/mcode/security/advisories/new),
 never in a public issue. [`SECURITY.md`](SECURITY.md) has the threat model, what
 is in scope, and a table of which controls actually ship, since the design docs
-describe the target and the tree is at `0.0.1`.
+describe the target and the tree is at `0.1.0`.
 
 ## License
 

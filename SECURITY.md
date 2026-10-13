@@ -125,7 +125,7 @@ welcome as a **public issue** rather than an advisory.
 
 ## What ships today
 
-Accurate as of `0.0.1`. Read this before assuming a documented control is
+Accurate as of `0.1.0`. Read this before assuming a documented control is
 enforced — the design docs describe the target, and this section describes the
 tree.
 
@@ -138,26 +138,27 @@ tree.
 | OS sandbox, all three platforms | **Shipped** (`src/mcode/platform/sandbox_*.cxx`) |
 | Extension VM capability boundary, manifest permissions | **Shipped** (`src/mcode/ext/api_gate.cxx`) |
 | Run-scoped temp directory, narrowly granted | **Shipped** (`src/mcode/platform/seams.cxx`) |
-| **Hash-pinned trust grant for repo-shipped extensions** | **Not shipped** — see below |
+| Hash-pinned trust grant for repo-shipped extensions | **Shipped** (`src/mcode/ext/trust_store.cxx`) |
+| Network egress proxy with a domain allowlist | **Shipped**, with limits — see below |
 | Untrusted out-of-process extension tier | **Not shipped** (documented non-goal) |
-| Network egress proxy with a domain allowlist | **Not shipped** |
 
 > [!WARNING]
-> **Repository-local extensions are loaded without a trust prompt.**
-> `default_roots` in `src/mcode/ext/loader.cxx` includes
-> `<workspace>/.mcode/extensions`, and every extension found there runs its
-> `init.luau` at session start. `docs/12` specifies a hash-pinned grant gate for
-> exactly this case (threat T3, the Neovim `exrc` problem), and that gate is
-> **not implemented**.
+> **A repository-local extension is inert until you grant it.** A candidate under
+> the project root is hashed and left unloaded; it runs only against a grant from
+> `mcode ext trust <name>`, and the bytes hashed are the bytes executed, so there
+> is no window between the check and the load. A grant that no longer matches the
+> tree is reported as changed rather than honoured.
 >
-> The practical consequence: **cloning an untrusted repository and running mcode
-> in it executes that repository's extension code.** Treat a `.mcode/extensions`
-> directory in a repository you have not read as you would a build script.
-> `docs/12` §Repo-shipped extensions is corrected to record this.
+> That still leaves the grant itself as the boundary. **Read a repository's
+> `.mcode/extensions` directory before you trust it**, the same way you would a
+> build script, because the grant is one command and it is yours to give.
+>
+> The egress proxy raises the cost of exfiltration and does not stop it through a
+> destination you have allowlisted. On Windows it reports `best-effort`, because
+> network enforcement there needs WFP and therefore administrator rights.
 
-If you are reporting against a control in the "Not shipped" rows, it is a
-feature request rather than a vulnerability, and a public issue is the right
-place for it.
+If you are reporting against the "Not shipped" row, it is a feature request
+rather than a vulnerability, and a public issue is the right place for it.
 
 ## Hardening
 
