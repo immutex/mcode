@@ -1,4 +1,4 @@
 # The ConPTY TUI gate (tools/tui_check/tui_screen.py). Both are needed: pywinpty
 # supplies the pty, pyte renders the screen from the bytes.
-pywinpty>=2.0
-pyte>=0.8
+pywinpty>=3.0.5
+pyte>=0.8.2
