@@ -374,7 +374,8 @@ namespace mcode::tui {
 		auto rows = LIVE_REGION_MIN_ROWS;
 
 		if ( state.palette.open && !state.palette.matches.empty( ) ) {
-			rows += state.palette.matches.size( );
+			rows += palette_window_for( state.palette.matches.size( ), state.palette.selected,
+				PALETTE_MAX_ROWS ).count;
 		}
 
 		rows += std::min( state.thinking_rows.size( ), LIVE_THOUGHT_MAX_ROWS );
@@ -442,15 +443,32 @@ namespace mcode::tui {
 		}
 
 		if ( state.palette.open && !state.palette.matches.empty( ) ) {
+			const auto window = palette_window_for( state.palette.matches.size( ),
+				state.palette.selected, PALETTE_MAX_ROWS );
+
 			const auto widest = widest_command_name( state.palette.matches, ambiguous_width );
 
-			for ( auto index = state.palette.matches.size( ); index > 0; --index ) {
-				const auto& entry = state.palette.matches[ index - 1 ];
-				const auto selected = index - 1 == state.palette.selected;
+			// Bottom-up, so the window is walked from its last row back to its first.
+			for ( auto index = window.first + window.count; index > window.first; --index ) {
+				const auto position = index - 1;
+				const auto& entry = state.palette.matches[ position ];
+				const auto selected = position == state.palette.selected;
+
+				// The marker column doubles as the scroll indicator, which costs no
+				// row. The selection wins a collision: it has to stay visible.
+				auto marker = std::string{ selected ? "▸ " : "  " };
+
+				if ( !selected ) {
+					if ( position == window.first && window.hidden_above( ) ) {
+						marker = "▲ ";
+					} else if ( position == window.first + window.count - 1
+						&& window.hidden_below( state.palette.matches.size( ) ) ) {
+						marker = "▼ ";
+					}
+				}
 
 				auto line = styled_line{ };
-				line.push_back( { selected ? "▸ " : "  ",
-					selected ? token::accent : token::muted } );
+				line.push_back( { marker, selected ? token::accent : token::muted } );
 				line.push_back( { state.palette.prefix + entry.name, selected ? token::accent
 					: token::text, token::none, selected, false, false } );
 

@@ -232,7 +232,8 @@ TEST_CASE( "the init command asks for a turn instead of writing the file itself"
 	std::filesystem::remove_all( directory );
 }
 
-TEST_CASE( "the init command refuses to regenerate over an existing AGENTS.md", "[cli][slash]" ) {
+TEST_CASE( "the init command asks to update an existing AGENTS.md rather than refusing",
+	"[cli][slash]" ) {
 	const auto directory = test::scratch_directory( "mcode-init-existing" );
 
 	std::filesystem::create_directories( directory );
@@ -252,9 +253,10 @@ TEST_CASE( "the init command refuses to regenerate over an existing AGENTS.md", 
 
 	const auto result = cli::run_command( match, loop, cli::builtin_commands( ) );
 
-	// no turn is submitted, so no model call is spent on a file that will not be written.
-	CHECK_FALSE( result.submit_prompt.has_value( ) );
-	CHECK( result.output.find( "already exists" ) != std::string::npos );
+	// The turn is submitted so the model can read the file; the command itself
+	// never touches it, which is what keeps the hand-written lines intact.
+	REQUIRE( result.submit_prompt.has_value( ) );
+	CHECK( result.output.empty( ) );
 
 	{
 		auto kept = std::ifstream{ directory / "AGENTS.md" };
@@ -263,6 +265,41 @@ TEST_CASE( "the init command refuses to regenerate over an existing AGENTS.md", 
 
 		CHECK( line == "# the user's own instructions" );
 	}
+
+	std::filesystem::remove_all( directory );
+}
+
+TEST_CASE( "the init command submits a different prompt when AGENTS.md is already there",
+	"[cli][slash]" ) {
+	const auto directory = test::scratch_directory( "mcode-init-prompt" );
+
+	std::filesystem::create_directories( directory );
+
+	auto deps = agent_loop::dependencies{ };
+	deps.workspace_root = directory.string( );
+
+	auto loop = agent_loop{ deps };
+	const auto match = cli::match_command( "/init", cli::builtin_commands( ) );
+
+	REQUIRE( match.entry != nullptr );
+
+	const auto generated = cli::run_command( match, loop, cli::builtin_commands( ) );
+
+	REQUIRE( generated.submit_prompt.has_value( ) );
+
+	{
+		auto existing = std::ofstream{ directory / "AGENTS.md", std::ios::trunc };
+		existing << "# the user's own instructions\n";
+	}
+
+	const auto updated = cli::run_command( match, loop, cli::builtin_commands( ) );
+
+	REQUIRE( updated.submit_prompt.has_value( ) );
+	CHECK( *updated.submit_prompt != *generated.submit_prompt );
+
+	// Only the revise prompt tells the model the file is already on disk.
+	CHECK( updated.submit_prompt->find( "already there" ) != std::string::npos );
+	CHECK( generated.submit_prompt->find( "already there" ) == std::string::npos );
 
 	std::filesystem::remove_all( directory );
 }

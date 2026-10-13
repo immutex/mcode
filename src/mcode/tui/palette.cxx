@@ -5,6 +5,26 @@
 
 namespace mcode::tui {
 
+	auto palette_window_for( const std::size_t total, const std::size_t selected,
+		const std::size_t max_rows ) -> palette_window {
+		if ( total == 0 || max_rows == 0 ) {
+			return { };
+		}
+
+		const auto count = std::min( total, max_rows );
+
+		// While the selection is inside the first window, the window does not move.
+		auto first = selected < count ? std::size_t{ 0 } : selected - count + 1;
+
+		// The tail is the one case the selection cannot pin: the last row of the
+		// list is the last row of the window.
+		if ( first + count > total ) {
+			first = total - count;
+		}
+
+		return { first, count };
+	}
+
 	auto filter_commands( const std::vector< slash_command >& commands,
 		const std::string_view query ) -> std::vector< slash_command > {
 		if ( query.empty( ) ) {

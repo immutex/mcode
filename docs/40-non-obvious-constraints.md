@@ -1164,3 +1164,16 @@ Read the number you were sent to, not the whole file. Each entry states the cons
     `-Wshadow-all` catches the lambda case, and GCC's `-Wshadow` does too.
 
 
+
+142. **The live region is painted bottom-up, so a list that outgrows it loses its
+    first rows.** `build_frame` starts at `row = row_count` and `write_up`
+    decrements, so the last match is written first (nearest the bottom) and the
+    first match is written last, where a `row == 0` guard drops it. The palette
+    asked the region for one row per match, the region clamped to its ceiling,
+    and the entries that fell off were the top of the list — the visible symptom
+    was "the first slash commands are missing", not an overflow at the end. Any
+    list that can exceed the ceiling needs a window computed before the paint and
+    used by both `region_rows_for` and the painter, or the two disagree about
+    which rows exist. `PALETTE_MAX_ROWS` is fixed at 10 rather than derived from
+    the terminal height, because the status line, the prompt, the tool rows and
+    the thought block all compete for the same 16-row ceiling.

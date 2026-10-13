@@ -71,7 +71,8 @@ namespace mcode::cli {
 				"or generated" },
 			{ "undo", "Restore the files the current run changed and report the count" },
 			{ "rewind", "Restore every captured file and report the count" },
-			{ "init", "Generate an AGENTS.md for this repository, from what is actually in it" },
+			{ "init", "Write an AGENTS.md for this repository, or update the one already "
+				"there, from what is actually in it" },
 			{ "extensions", "Show the loaded extensions, their tools and their memory" },
 			{ "new", "Start a fresh session, keeping the current one on disk" },
 			{ "continue", "Reopen the newest session for this workspace" },

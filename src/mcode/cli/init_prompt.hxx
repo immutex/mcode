@@ -116,4 +116,66 @@ say, write the smallest useful file -- the commands and the done definition are
 still worth having -- and do not pad it. In your reply, say what you could not
 determine rather than guessing, and tell me which lines you were least sure of,
 because I have to review this file before it is worth anything.)AGENTS";
+
+	// The prompt `/init` submits when AGENTS.md is already there. A rewrite is
+	// asked for rather than refused: the file may have been hand-edited, and
+	// deleting it first would throw away the parts a person wrote on purpose.
+	inline constexpr std::string_view INIT_UPDATE_PROMPT = R"AGENTS(Update the AGENTS.md at the repository root.
+
+It is already there, so this is an audit rather than a blank page. Someone wrote
+or generated the current file, and some of it may be hand-written knowledge that
+exists nowhere else. Treat every line as a claim to check, not as text to
+replace.
+
+STEP 1 -- Read the existing AGENTS.md in full, then read the repository.
+
+Read the build manifest, the CI workflow, any scripts or tools directory, and
+the README and docs. The point is to know what the file says, and what the
+repository actually does.
+
+STEP 2 -- Classify every line. Four outcomes, and only two of them change
+anything:
+
+KEEP. The line is still true and still non-obvious. Leave it exactly as it is.
+This is the default for anything you cannot disprove, and it is the right
+answer for most of the file.
+
+FIX. The line is now wrong. A command that no longer exists, a path that moved,
+a flag that was removed, a rule the code no longer follows. Correct it against
+the evidence, and say in your reply which lines these were.
+
+CUT. The line is stale, or it was never worth having. This includes: anything a
+formatter, linter or type checker already enforces; anything derivable from
+reading one file; generic advice that is true of every repository; an
+architecture essay or a file-by-file inventory; a section that is empty or
+marked TODO. A line that fails this test goes: "if this line were deleted, would
+the agent make a mistake?"
+
+ADD. Something a competent engineer would get wrong here, and the file does not
+say. Same bar as a fresh file: you must be able to point at the evidence. A trap
+you cannot point at is not a trap. Add as few lines as you can.
+
+STEP 3 -- Write the file back with the write tool, at the same path.
+
+Keep the sections that are working. There is no requirement to restructure a
+file that is already clear, and a wholesale rewrite is the failure mode here: it
+replaces specific local knowledge with a generic template, and it is the outcome
+that makes the file worse than what it replaced.
+
+Structure, if you do need to reorganize: one sentence on what the project is;
+the exact commands with their flags; what "done" means; constraints phrased as
+things not to do, since negative constraints measurably help and positive
+directives measurably hurt; boundaries as always, ask first, never; what to do
+when blocked; pointers to deeper docs with the reason to read each one.
+
+SIZE: 100 lines or fewer, hard ceiling 150. If the existing file is over that,
+cutting it down is the main work.
+
+MECHANICS: Markdown headings, at most two levels. No placeholders, no TODO, no
+empty headings. No emoji.
+
+In your reply, give me three lists: what you changed and why, what you cut, and
+what you could not verify. I have to review this before it is worth anything, so
+name the lines you were least sure of rather than presenting the whole file as
+settled.)AGENTS";
 }

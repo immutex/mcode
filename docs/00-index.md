@@ -93,7 +93,7 @@ three places the plan was wrong.
 
 **Reference.** Read by number, never end to end.
 
-41. `40-non-obvious-constraints.md` — the 141 traps that cost real time to find, numbered and stable. Docs and `AGENTS.md` cite them by number.
+41. `40-non-obvious-constraints.md` — the 142 traps that cost real time to find, numbered and stable. Docs and `AGENTS.md` cite them by number.
 42. `41-session-analysis.md` — two live runs of one long task, dissected. Seven harness defects found by running, the model's measured behaviour, and the cache findings.
 43. `42-agents-md-research.md` — what makes an AGENTS.md good and bad, from 8 primary papers and the vendor guidance. The research `/init` generates from.
 44. `43-fourth-batch.md` — **the batch record, shipped in 0.0.3**: the extension trust gate, network egress, `ext install`, the verification gate and the measurement spine, the context controller, MCP over HTTP, memory, and read-only subagents. Read before starting any of them.

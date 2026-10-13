@@ -115,9 +115,11 @@ namespace mcode::cli {
 				"% and folds the history at " + std::to_string( trigger ) + "% full";
 		}
 
-		// Refuses when AGENTS.md exists rather than overwriting the user's own instructions.
-		[[nodiscard]] auto init_existing_note( const mcode::agent_loop& loop )
-			-> std::optional< std::string > {
+		// Picks the prompt `/init` submits. An existing file is updated rather than
+		// refused: the user asked for this file, and making them delete it first
+		// throws away whatever they wrote by hand before the agent may read it.
+		[[nodiscard]] auto init_prompt( const mcode::agent_loop& loop )
+			-> mcode::result< std::string > {
 			auto error_code = std::error_code{ };
 			const auto root = loop.workspace_root( );
 			const auto directory = root.empty( )
@@ -125,17 +127,17 @@ namespace mcode::cli {
 				: std::filesystem::path{ std::string{ root } };
 
 			if ( error_code ) {
-				return "cannot write AGENTS.md: the working directory is unreadable";
+				return std::unexpected( mcode::fail( mcode::errc::io,
+					"cannot write AGENTS.md: the working directory is unreadable" ) );
 			}
 
 			const auto target = directory / "AGENTS.md";
 
 			if ( std::filesystem::exists( target, error_code ) && !error_code ) {
-				return "AGENTS.md already exists at " + target.string( ) +
-					"; delete it first if you want it regenerated";
+				return std::string{ detail::INIT_UPDATE_PROMPT };
 			}
 
-			return std::nullopt;
+			return std::string{ detail::INIT_PROMPT };
 		}
 
 		[[nodiscard]] auto doctor_text( const mcode::agent_loop& loop ) -> std::string {
@@ -490,13 +492,13 @@ namespace mcode::cli {
 		} else if ( match.name == "rewind" ) {
 			result.output = restore_report( loop, true );
 		} else if ( match.name == "init" ) {
-			const auto existing = init_existing_note( loop );
+			const auto prompt = init_prompt( loop );
 
-			if ( existing ) {
-				result.output = *existing;
+			if ( !prompt ) {
+				result.output = prompt.error( ).msg;
 			} else {
 				// The model writes the file; the content must come from what is actually there.
-				result.submit_prompt = std::string{ detail::INIT_PROMPT };
+				result.submit_prompt = *prompt;
 			}
 		} else if ( match.name == "extensions" ) {
 			result.output = extensions == nullptr

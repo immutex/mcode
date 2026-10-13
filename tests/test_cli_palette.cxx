@@ -237,3 +237,69 @@ TEST_CASE( "the command source is what a bare prompt implies",
 	CHECK_FALSE( palette.open );
 	CHECK( controller.source( ) == cli::palette_source::commands );
 }
+
+TEST_CASE( "a list shorter than the window shows all of it and hides nothing",
+	"[tui][palette]" ) {
+	const auto window = tui::palette_window_for( 4, 2, 10 );
+
+	CHECK( window.first == 0 );
+	CHECK( window.count == 4 );
+	CHECK_FALSE( window.hidden_above( ) );
+	CHECK_FALSE( window.hidden_below( 4 ) );
+}
+
+TEST_CASE( "a list exactly the window's length shows all of it",
+	"[tui][palette]" ) {
+	const auto window = tui::palette_window_for( 10, 9, 10 );
+
+	CHECK( window.first == 0 );
+	CHECK( window.count == 10 );
+	CHECK_FALSE( window.hidden_above( ) );
+	CHECK_FALSE( window.hidden_below( 10 ) );
+}
+
+TEST_CASE( "the window pins to the top until the selection reaches its last row",
+	"[tui][palette]" ) {
+	for ( auto selected = std::size_t{ 0 }; selected < 10; ++selected ) {
+		const auto window = tui::palette_window_for( 30, selected, 10 );
+
+		CHECK( window.first == 0 );
+		CHECK( window.count == 10 );
+		CHECK( window.hidden_below( 30 ) );
+	}
+
+	// the row after the last visible one is the first that scrolls.
+	const auto scrolled = tui::palette_window_for( 30, 10, 10 );
+
+	CHECK( scrolled.first == 1 );
+	CHECK( scrolled.count == 10 );
+	CHECK( scrolled.hidden_above( ) );
+	CHECK( scrolled.hidden_below( 30 ) );
+}
+
+TEST_CASE( "the window keeps the last row of the list at its last row",
+	"[tui][palette]" ) {
+	const auto window = tui::palette_window_for( 30, 29, 10 );
+
+	CHECK( window.first == 20 );
+	CHECK( window.count == 10 );
+	CHECK( window.hidden_above( ) );
+	CHECK_FALSE( window.hidden_below( 30 ) );
+}
+
+TEST_CASE( "an empty list yields an empty window rather than a negative span",
+	"[tui][palette]" ) {
+	const auto window = tui::palette_window_for( 0, 0, 10 );
+
+	CHECK( window.first == 0 );
+	CHECK( window.count == 0 );
+	CHECK_FALSE( window.hidden_above( ) );
+	CHECK_FALSE( window.hidden_below( 0 ) );
+}
+
+TEST_CASE( "a window of no rows shows nothing", "[tui][palette]" ) {
+	const auto window = tui::palette_window_for( 30, 5, 0 );
+
+	CHECK( window.first == 0 );
+	CHECK( window.count == 0 );
+}

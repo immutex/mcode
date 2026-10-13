@@ -302,3 +302,90 @@ TEST_CASE( "a finished tool call is written to scrollback", "[tui][render]" ) {
 	CHECK( bytes.find( "read src/main.cxx" ) != std::string::npos );
 	CHECK( bytes.find( '\n' ) != std::string::npos );
 }
+
+TEST_CASE( "a palette longer than the window scrolls instead of losing its first rows",
+	"[tui][render]" ) {
+	auto caps = capabilities{ };
+	caps.depth = capabilities::color_depth::none;
+
+	auto coordinator = render_coordinator{ };
+	coordinator.set_capabilities( caps );
+	coordinator.resize( 40, 60 );
+
+	auto palette = slash_palette{ };
+	palette.open = true;
+	palette.query = "/";
+
+	// Names carry no slash: the palette's prefix supplies it.
+	for ( auto index = 1; index <= 30; ++index ) {
+		auto name = std::string{ "cmd" };
+
+		if ( index < 10 ) {
+			name += '0';
+		}
+
+		name += std::to_string( index );
+
+		palette.matches.push_back( slash_command{ name, "description" } );
+	}
+
+	// The command rows carry a two-column marker, so the prompt row is excluded by
+	// its own prefix rather than by position.
+	const auto listed = []( const std::vector< std::string >& rows ) {
+		auto out = std::vector< std::string >{ };
+
+		for ( const auto& row : rows ) {
+			if ( row.starts_with( "> " ) ) {
+				continue;
+			}
+
+			const auto at = row.find( "/cmd" );
+
+			if ( at == std::string::npos ) {
+				continue;
+			}
+
+			out.push_back( row.substr( at, 6 ) );
+		}
+
+		return out;
+	};
+
+	coordinator.set_palette( palette );
+	coordinator.set_prompt( "/", 1 );
+
+	auto screen = tui_test::screen_model{ 40, 60 };
+	screen.feed( coordinator.flush( ) );
+
+	const auto top = listed( screen.rows( ) );
+
+	REQUIRE( top.size( ) == PALETTE_MAX_ROWS );
+	CHECK( top.front( ) == "/cmd01" );
+	CHECK( top.back( ) == "/cmd10" );
+
+	// Rows hidden below are announced on the last visible row, and the selected row
+	// keeps its own marker.
+	CHECK( screen.find_row( "▼ /cmd10" ) < 40 );
+	CHECK( screen.find_row( "▸ /cmd01" ) < 40 );
+	CHECK( screen.find_row( "▲" ) == 40 );
+
+	// Scrolled to the end: the last command is visible and the first is not.
+	palette.selected = palette.matches.size( ) - 1;
+	coordinator.set_palette( palette );
+	coordinator.invalidate( );
+
+	auto scrolled = tui_test::screen_model{ 40, 60 };
+	scrolled.feed( coordinator.flush( ) );
+
+	const auto bottom = listed( scrolled.rows( ) );
+
+	REQUIRE( bottom.size( ) == PALETTE_MAX_ROWS );
+	CHECK( bottom.front( ) == "/cmd21" );
+	CHECK( bottom.back( ) == "/cmd30" );
+
+	CHECK( scrolled.find_row( "▲ /cmd21" ) < 40 );
+	CHECK( scrolled.find_row( "▸ /cmd30" ) < 40 );
+
+	// Nothing is hidden below the tail, so that marker is absent.
+	CHECK( scrolled.find_row( "▼" ) == 40 );
+}

@@ -8,6 +8,15 @@ Entries are one line per change, under the type of change: **Added**, **Changed*
 
 ## [Unreleased]
 
+### Fixed
+
+- **The slash palette lost its first entries once the command list outgrew the live region.** The region is painted from the bottom up, so the rows a clamp dropped were the top of the list, and the symptom read as missing commands rather than as an overflow. The palette now contributes a fixed `PALETTE_MAX_ROWS` (10) to the region and paints a window over the matches: pinned to the top until the selection reaches its last visible row, then following it, with `▲`/`▼` in the marker column when rows are hidden.
+- **`/init` refused to run when `AGENTS.md` already existed.** It now submits a second prompt that asks the agent to read the existing file and audit it — keep what is still true, fix what has gone stale, add only what it can point at evidence for — instead of telling the user to delete the file first.
+
+### Changed
+
+- `README.md` rewritten: the tool set, the extension surface and the command list are now stated as tables, the `0.0.3`/`0.0.4`/`0.1.0` release stack collapses into one current-state section, and the "not built yet" list is refreshed.
+
 ## [0.1.0] - 2026-10-11
 
 The batch that wires what 0.0.x built. Eleven interfaces existed with either no
