@@ -98,6 +98,7 @@ three places the plan was wrong.
 43. `42-agents-md-research.md` — what makes an AGENTS.md good and bad, from 8 primary papers and the vendor guidance. The research `/init` generates from.
 44. `43-fourth-batch.md` — **the batch record, shipped in 0.0.3**: the extension trust gate, network egress, `ext install`, the verification gate and the measurement spine, the context controller, MCP over HTTP, memory, and read-only subagents. Read before starting any of them.
 45. `44-0.1.0-batch.md` — **the batch record, shipped in 0.1.0**: the eleven built-but-unwired interfaces, the wave breakdown and the acceptance criteria. Read first; it is why 0.1.0 is a wiring release rather than a feature release.
+46. `45-viability-gaps.md` — what other harnesses prove that mcode lacks, ranked by evidence grade. The input to the next batch; it argues against five popular ideas as well as for twenty-two.
 
 **If you only read three:** `01`, `03`, `21`.
 

@@ -17,6 +17,11 @@ Entries are one line per change, under the type of change: **Added**, **Changed*
 
 - `README.md` rewritten: the tool set, the extension surface and the command list are now stated as tables, the `0.0.3`/`0.0.4`/`0.1.0` release stack collapses into one current-state section, and the "not built yet" list is refreshed.
 
+### Documentation
+
+- **`docs/45-viability-gaps.md`**: what other harnesses prove that mcode lacks, ranked by evidence grade, with a URL per claim. The input to the next batch.
+- `docs/18-lua-api.md` named a `tool.post_call` hook that does not exist; the event is `tool.result`. A documented hook name that cannot fire is the failure mode the reserved-prefix rule exists to prevent.
+
 ## [0.1.0] - 2026-10-11
 
 The batch that wires what 0.0.x built. Eleven interfaces existed with either no

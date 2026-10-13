@@ -224,7 +224,7 @@ Handler receives **one plain-data event table** (Neovim's autocmd `ev` shape). R
 | First veto wins, and short-circuits | Later handlers for that event are skipped for this dispatch (`wezterm` `return false` short-circuit). Non-veto handlers are never skipped by a peer's error |
 | Veto reason is surfaced | Shown to the user and fed back to the model, attributed to the vetoing extension |
 | Veto handlers are synchronous | Run on the loop thread under a **50 ms wall-clock budget**, enforced by the **VM interrupt plus a host watchdog** — not by an instruction count hook, which Luau does not have. Breach ⇒ handler detached + logged (Neovim `ui_attach` forced-detachment precedent) |
-| Notification events never veto | `tool.post_call`, `turn.end` — may be coalesced (mpv `observe_property` coalescing) |
+| Notification events never veto | `tool.result`, `turn.end` — may be coalesced (mpv `observe_property` coalescing) |
 | Ordering | **Registration order only.** No priority integers in v1: with three vetoable events and first-veto-wins, order is the whole semantics. mpv and Kong added priority only once composition got genuinely adversarial |
 | Reentrancy | Dispatch iterates a **snapshot** of the handler list; register/deregister of the same event during dispatch is deferred; dispatch-depth cap |
 | Slow handlers | Notifications may be queued and drained between loop iterations; veto hooks cannot (they gate an action) |
