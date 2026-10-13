@@ -360,6 +360,34 @@ namespace mcode::tui {
 		return out;
 	}
 
+	// Everything the region paints that is not the palette. Both the height
+	// calculation and the painter need this, and they must agree on it: the region
+	// is painted from the bottom up, so a row that does not fit is dropped from the
+	// top of the list rather than the end of it.
+	[[nodiscard]] auto fixed_region_rows( const render_state& state ) -> std::size_t {
+		auto rows = LIVE_REGION_MIN_ROWS;
+
+		rows += std::min( state.thinking_rows.size( ), LIVE_THOUGHT_MAX_ROWS );
+		rows += state.streaming_rows.size( );
+		rows += state.tools.size( );
+
+		return rows;
+	}
+
+	// The palette's share of the ceiling, which is its cap whenever the rest of the
+	// region leaves room for it and the remainder when it does not.
+	[[nodiscard]] auto palette_rows_for( const render_state& state,
+		const std::size_t ceiling ) -> std::size_t {
+		if ( !state.palette.open || state.palette.matches.empty( ) ) {
+			return 0;
+		}
+
+		const auto fixed = fixed_region_rows( state );
+		const auto available = ceiling > fixed ? ceiling - fixed : std::size_t{ 0 };
+
+		return std::min( PALETTE_MAX_ROWS, available );
+	}
+
 	auto region_rows_for( const render_state& state, const std::size_t screen_rows )
 		-> std::size_t {
 		refresh_streamed_rows( state );
@@ -371,17 +399,7 @@ namespace mcode::tui {
 			return history_region_rows( screen_rows );
 		}
 
-		auto rows = LIVE_REGION_MIN_ROWS;
-
-		if ( state.palette.open && !state.palette.matches.empty( ) ) {
-			rows += palette_window_for( state.palette.matches.size( ), state.palette.selected,
-				PALETTE_MAX_ROWS ).count;
-		}
-
-		rows += std::min( state.thinking_rows.size( ), LIVE_THOUGHT_MAX_ROWS );
-		rows += state.streaming_rows.size( );
-
-		rows += state.tools.size( );
+		const auto rows = fixed_region_rows( state ) + palette_rows_for( state, ceiling );
 
 		return std::clamp( rows, LIVE_REGION_MIN_ROWS, ceiling );
 	}
@@ -443,8 +461,14 @@ namespace mcode::tui {
 		}
 
 		if ( state.palette.open && !state.palette.matches.empty( ) ) {
+			// The cap comes from the height passed in, not from the constant, so a
+			// clamped region shows a shorter window rather than the wrong rows.
+			const auto fixed = fixed_region_rows( state );
+			const auto available = row_count > fixed ? row_count - fixed : std::size_t{ 0 };
+			const auto max_rows = std::min( PALETTE_MAX_ROWS, available );
+
 			const auto window = palette_window_for( state.palette.matches.size( ),
-				state.palette.selected, PALETTE_MAX_ROWS );
+				state.palette.selected, max_rows );
 
 			const auto widest = widest_command_name( state.palette.matches, ambiguous_width );
 

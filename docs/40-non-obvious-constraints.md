@@ -1177,3 +1177,9 @@ Read the number you were sent to, not the whole file. Each entry states the cons
     which rows exist. `PALETTE_MAX_ROWS` is fixed at 10 rather than derived from
     the terminal height, because the status line, the prompt, the tool rows and
     the thought block all compete for the same 16-row ceiling.
+    The painter must also take its cap from the `row_count` it was handed, not
+    from `PALETTE_MAX_ROWS`. On a short terminal the clamp leaves the palette
+    less than its constant, and a painter that asked for the full height would
+    shift the window to the tail instead of shortening it: the same defect at a
+    smaller size, which is why the fix has to be verified at a 6-row screen and
+    not only at 40.

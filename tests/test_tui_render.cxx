@@ -389,3 +389,56 @@ TEST_CASE( "a palette longer than the window scrolls instead of losing its first
 	// Nothing is hidden below the tail, so that marker is absent.
 	CHECK( scrolled.find_row( "▼" ) == 40 );
 }
+
+TEST_CASE( "a short terminal shrinks the palette window instead of shifting it",
+	"[tui][render]" ) {
+	auto caps = capabilities{ };
+	caps.depth = capabilities::color_depth::none;
+
+	auto coordinator = render_coordinator{ };
+	coordinator.set_capabilities( caps );
+
+	// A 6-row screen leaves a 5-row region, so the palette gets 3 rows after the
+	// prompt and the status line. The window has to start at the first command
+	// regardless: the region is painted from the bottom up, and a window that kept
+	// its full height here would show the tail of the list.
+	coordinator.resize( 6, 40 );
+
+	auto palette = slash_palette{ };
+	palette.open = true;
+	palette.query = "/";
+
+	for ( auto index = 1; index <= 30; ++index ) {
+		auto name = std::string{ "cmd" };
+
+		if ( index < 10 ) {
+			name += '0';
+		}
+
+		name += std::to_string( index );
+
+		palette.matches.push_back( slash_command{ name, "" } );
+	}
+
+	coordinator.set_palette( palette );
+	coordinator.set_prompt( "/", 1 );
+
+	auto screen = tui_test::screen_model{ 6, 40 };
+	screen.feed( coordinator.flush( ) );
+
+	const auto rows = screen.rows( );
+
+	// The region is the bottom five rows, so row 0 is untouched and the region runs
+	// from the status line down to the prompt.
+	REQUIRE( rows.size( ) == 6 );
+	CHECK( rows[ 0 ].empty( ) );
+	CHECK( rows[ 5 ].find( "> /" ) != std::string::npos );
+
+	CHECK( rows[ 2 ].find( "/cmd01" ) != std::string::npos );
+	CHECK( rows[ 3 ].find( "/cmd02" ) != std::string::npos );
+	CHECK( rows[ 4 ].find( "/cmd03" ) != std::string::npos );
+
+	// The tail is what a full-height window would have shown here.
+	CHECK( rows[ 2 ].find( "cmd04" ) == std::string::npos );
+	CHECK( rows[ 4 ].find( "cmd28" ) == std::string::npos );
+}
