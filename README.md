@@ -34,19 +34,15 @@ field leaves alone.
 | Dependencies | 9 runtime, size is the binding constraint | Whatever the ecosystem drags in |
 | Extension ABI | A scripting language: versionable, writable without a compiler | A C ABI, `dlopen`, or nothing |
 
-Every comparable harness ships a runtime: Node, Python, Go, or Rust. A
-statically linked C++23 binary cold-starts in single-digit milliseconds with a
-small resident set, which is what makes an agent composable. Scriptable,
-pipeable, spawnable in parallel, embeddable in CI. A native Rust harness has been
-measured at 14.0 ms to first frame and 27.8 MB resident; a TypeScript one at
-590.7 ms and 144.4 MB (`[THIRD-PARTY]`,
-[`docs/02`](docs/02-prior-art.md)). Nobody in this space currently optimizes for
-it.
+A statically linked C++23 binary cold-starts in single-digit milliseconds with a
+small resident set, which is what makes an agent composable: scriptable, pipeable,
+spawnable in parallel, embeddable in CI. A native Rust harness has been measured
+at 14.0 ms to first frame and 27.8 MB resident; a TypeScript one at 590.7 ms and
+144.4 MB (`[THIRD-PARTY]`, [`docs/02`](docs/02-prior-art.md)). Nobody in this
+space currently optimizes for it.
 
-No mainstream harness embeds a scripting language, because their extension
-language *is* their runtime. mcode embeds Luau, so the extension ecosystem costs
-under 1 MB, costs nothing when unused, and extensions are written without a
-compiler.
+Embedding Luau rather than adopting a runtime keeps the extension ecosystem under
+1 MB, free when unused, and writable without a compiler.
 
 Models degrade before their context window fills, and prefix instability destroys
 prompt-cache economics. mcode treats context as a budget with explicit numbers
