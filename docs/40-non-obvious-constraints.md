@@ -1183,3 +1183,15 @@ Read the number you were sent to, not the whole file. Each entry states the cons
     shift the window to the tail instead of shortening it: the same defect at a
     smaller size, which is why the fix has to be verified at a 6-row screen and
     not only at 40.
+
+143. **A scripted model client makes any assertion on model-visible text
+    self-satisfying.** `tests/test_subagent.cxx` claimed to prove the child can
+    call the parent's read tools. It added its `read` definition to a **local**
+    `tool_registry` that the loop never sees, while `run_subagent` builds the
+    child's registry from the parent loop's own. The child therefore had no
+    `read` tool, the scripted call failed at dispatch, and the assertion still
+    passed, because the second queued response's *text* happened to contain the
+    string it searched for. The test was green against a child with no working
+    tool, which is the exact condition its name rules out. Only a counter inside
+    the handler proves a call happened; the summary is whatever the script said.
+    Found by probing the opposite claim, not by reading the test.

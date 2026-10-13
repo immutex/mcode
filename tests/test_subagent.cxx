@@ -79,33 +79,80 @@ TEST_CASE( "the child can actually call the parent's read tools", "[subagent]" )
 	auto fx = loop_test::fixture{ };
 	fx.connect( );
 
-	// The parent registers `echo` as its read handler under a name the child is
-	// allowed to hold, so a spawn that carries the handlers through gives the child
-	// a working tool. Without the carry the registry still lists `read`, and every
-	// call fails at dispatch -- the boundary holds, but the capability is gone.
-	auto fx_registry = tool_registry{ };
-
+	// Into the loop's own registry: the child's read-only copy is built from it. A
+	// definition added elsewhere leaves the child without the tool, every call fails
+	// at dispatch, and the run still ends with a summary, so only an assertion on the
+	// handler can tell the two apart.
 	auto definition = tool_def{ };
 	definition.name = "read";
 	definition.description = "reads a file";
 	definition.klass = tool_class::read;
 	definition.schema_json = R"({"type":"object"})";
-	REQUIRE( fx_registry.add( definition ).has_value( ) );
+	REQUIRE( fx.registry.add( definition ).has_value( ) );
 
+	auto handler_calls = 0;
 	fx.loop->register_handler( "read",
-		[]( std::string_view ) -> result< std::string > {
+		[ & ]( std::string_view ) -> result< std::string > {
+			++handler_calls;
+
 			return std::string{ "{\"ok\":true,\"content\":\"found it\"}" };
 		} );
 
-	auto scripted = loop_test::call_response( "read", R"({"path":"a.cxx"})" );
-	fx.client.queue( scripted );
+	fx.client.queue( loop_test::call_response( "read", R"({"path":"a.cxx"})" ) );
 	fx.client.queue( loop_test::text_response( "the file says: found it" ) );
 
 	const auto report = fx.loop->spawn_subagent(
 		{ .objective = "read a.cxx", .context = "", .max_steps = 8 } );
 
 	REQUIRE( report.has_value( ) );
+
+	// The carry is the claim under test: without it the boundary holds and the
+	// capability is gone.
+	CHECK( handler_calls == 1 );
 	CHECK( report->summary.find( "found it" ) != std::string::npos );
+}
+
+TEST_CASE( "a veto on the parent bus reaches a child's tool call", "[subagent]" ) {
+	auto fx = loop_test::fixture{ };
+	fx.connect( );
+
+	auto definition = tool_def{ };
+	definition.name = "read";
+	definition.description = "reads a file";
+	definition.klass = tool_class::read;
+	definition.schema_json = R"({"type":"object"})";
+	REQUIRE( fx.registry.add( definition ).has_value( ) );
+
+	auto handler_calls = 0;
+	fx.loop->register_handler( "read",
+		[ & ]( std::string_view ) -> result< std::string > {
+			++handler_calls;
+
+			return std::string{ "{\"ok\":true,\"content\":\"found it\"}" };
+		} );
+
+	// The child borrows the parent's bus, so one policy hook covers a spawn. A guard
+	// that stops at the parent's own dispatches is the shape that let a background
+	// subagent run a destructive command with the reporter's hook installed.
+	auto vetoes = 0;
+	fx.bus.subscribe_veto( events::kind::tool_pre_call,
+		[ & ]( const events::event& ) -> std::optional< events::veto > {
+			++vetoes;
+
+			return events::veto{ .reason = "policy", .source = "test" };
+		} );
+
+	fx.client.queue( loop_test::call_response( "read", R"({"path":"a.cxx"})" ) );
+	fx.client.queue( loop_test::text_response( "blocked" ) );
+
+	const auto report = fx.loop->spawn_subagent(
+		{ .objective = "read a.cxx", .context = "", .max_steps = 8 } );
+
+	REQUIRE( report.has_value( ) );
+	CHECK( vetoes == 1 );
+
+	// The veto is enforced, not merely observed: the handler never ran.
+	CHECK( handler_calls == 0 );
 }
 
 TEST_CASE( "the parent is charged for what the child spent", "[subagent][budget]" ) {

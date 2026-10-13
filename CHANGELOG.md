@@ -11,6 +11,8 @@ Entries are one line per change, under the type of change: **Added**, **Changed*
 ### Fixed
 
 - **The slash palette lost its first entries once the command list outgrew the live region.** The region is painted from the bottom up, so the rows a clamp dropped were the top of the list, and the symptom read as missing commands rather than as an overflow. The palette now contributes a fixed `PALETTE_MAX_ROWS` (10) to the region and paints a window over the matches: pinned to the top until the selection reaches its last visible row, then following it, with `▲`/`▼` in the marker column when rows are hidden.
+- **A subagent test asserted on scripted text, so it passed against a child with no working tool.** `tests/test_subagent.cxx` added its `read` definition to a local registry the loop never sees, while the child's registry is built from the loop's own; the call failed at dispatch and the assertion passed on the text of the second queued response. The definition now goes into the loop's registry and the assertion counts handler invocations.
+- A second test pins the veto path a probe was written to check: a child's tool call publishes `tool_pre_call` to the parent's bus and a veto there is enforced, which the code already did and nothing covered.
 - **`/init` refused to run when `AGENTS.md` already existed.** It now submits a second prompt that asks the agent to read the existing file and audit it — keep what is still true, fix what has gone stale, add only what it can point at evidence for — instead of telling the user to delete the file first.
 
 ### Changed
